@@ -625,7 +625,7 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v13_mcp_and_presets"
+	const flag = "tool_schema_refresh_v14_mcp_and_model_identity"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -671,10 +671,16 @@ func (s *Server) refreshBuiltinToolSchemas() {
 			}
 		}
 	}
-	// Enable built-in MCP servers (e.g. browser Playwright MCP) for operational agents by default
+	// Disable unconfigured HTTP MCP placeholders (e.g. ScopeSentry with empty URL) so they don't log connection errors on every turn
+	_, _ = s.m.pg.Exec(`UPDATE mcp_servers SET enabled=false WHERE transport IN ('http','sse') AND COALESCE(TRIM(url),'')=''`)
+	_, _ = s.m.pg.Exec(`DELETE FROM agent_visibility WHERE resource_kind='mcp' AND resource_id IN (SELECT id FROM mcp_servers WHERE transport IN ('http','sse') AND COALESCE(TRIM(url),'')='')`)
+
+	// Enable built-in MCP servers that have a valid command or URL (e.g. browser Playwright MCP) for operational agents by default
 	if mcpServers, err := s.m.pg.ListMCP(); err == nil {
 		for _, srv := range mcpServers {
-			if srv.Name == "browser" || srv.Enabled {
+			hasEndpoint := (srv.Transport == "stdio" && strings.TrimSpace(srv.Command) != "") ||
+				(srv.Transport != "stdio" && strings.TrimSpace(srv.URL) != "")
+			if hasEndpoint && (srv.Name == "browser" || srv.Enabled) {
 				for _, agKey := range []string{"auto", "pentest", "worker", "mainagent", "reporter"} {
 					if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 						_, _ = s.m.pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, a.ID, srv.ID)

@@ -79,6 +79,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !m.Enabled {
 					continue
 				}
+				if m.Transport != "stdio" && strings.TrimSpace(m.URL) == "" {
+					continue
+				}
 				directVisible := want[m.ID]
 				skillGated := gated[m.Name]
 				if !directVisible && !skillGated {
@@ -86,13 +89,13 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				}
 				cl, err := connectMCP(ctx, m)
 				if err != nil {
-					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
+					log.Printf("[mcp] %s connection failed: %v", m.Name, err)
 					continue
 				}
 				closers = append(closers, cl)
 				ts, err := cl.Tools(ctx)
 				if err != nil {
-					log.Printf("[mcp] %s tools/list 失败: %v", m.Name, err)
+					log.Printf("[mcp] %s tools/list failed: %v", m.Name, err)
 					continue
 				}
 				for _, t := range ts {

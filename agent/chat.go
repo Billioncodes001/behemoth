@@ -77,16 +77,20 @@ func (c *ChatAgent) SetWebSearch(o WebSearchOpts) { c.webSearch = o }
 func (c *ChatAgent) SetGuard(g *guard.Guard) { c.guard = g }
 
 // chatWorkDirSpec returns a working-directory notice appended to every chat
-// agent's system prompt. Mirrors artifactSpec but without pentest-specific
-// wording ("payload", "抓响应体") that would be odd in a general assistant.
-func chatWorkDirSpec(workDir string) string {
-	return "\n\n**文件输出规约**：需要写文件时，一律写到工作目录 " + workDir + "（这是默认 CWD，相对路径即落在这里，也可用该绝对路径）——不要写 /tmp 或其他绝对路径。"
+// agent's system prompt, plus the active runtime model identity so the model
+// never hallucinates or guesses a different model name from its training data.
+func chatWorkDirSpec(workDir, model string) string {
+	out := "\n\n**File Output Specification**: When writing files, always write to the session working directory " + workDir + " (this is the default CWD; relative paths resolve here, or you may use this absolute path) — do not write to /tmp or other external paths."
+	if model != "" {
+		out += "\n\n**Runtime Model Identity**: You are currently powered by and running on the LLM model `" + model + "`. If the user asks which LLM or model you are currently using, always state `" + model + "` accurately (never guess or claim a different model name from pretraining)."
+	}
+	return out
 }
 
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
-func chatSystem(agentKey, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
+func chatSystem(agentKey, model, dataDir, workDir string) string {
+	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model)
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.
@@ -125,7 +129,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
-	system, boundary := deferredSystem(chatSystem(agentKey, c.workDir, sessionWorkDir), def)
+	system, boundary := deferredSystem(chatSystem(agentKey, c.model, c.workDir, sessionWorkDir), def)
 	proxyAddr := c.proxyAddr
 	if c.proxyAddrFn != nil {
 		proxyAddr = c.proxyAddrFn()
