@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/db"
 	actool "github.com/Autumn-27/norma/tool"
@@ -116,7 +118,13 @@ func (s *Server) toolCreateSkill() actool.CoreTool {
 				_ = os.RemoveAll(path)
 				return actool.Errorf(err.Error()), nil
 			}
-			return actool.Text("skill created: " + a.Name), nil
+			for _, agKey := range []string{"auto", "pentest", "worker"} {
+				if ag, err := s.m.pg.GetAgentByKey(agKey); err == nil && ag != nil {
+					_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, ag.ID, a.Name)
+				}
+			}
+			log.Printf("[skills] Created and enabled skill %q for auto, pentest, and worker", a.Name)
+			return actool.Text("skill created and enabled for operational agents: " + a.Name), nil
 		})
 }
 
@@ -188,8 +196,12 @@ func toDBTool(a customToolToolInput) *db.Tool {
 	if a.Enabled != nil {
 		enabled = *a.Enabled
 	}
+	agents := a.Agents
+	if len(agents) == 0 {
+		agents = []string{"auto", "pentest", "worker"}
+	}
 	return &db.Tool{
-		Key: a.Key, Description: a.Description, Schema: a.Schema, Agents: a.Agents,
+		Key: a.Key, Description: a.Description, Schema: a.Schema, Agents: agents,
 		Enabled: enabled, Kind: a.Kind, Exec: a.Exec, Deferred: a.Deferred,
 	}
 }
@@ -292,7 +304,7 @@ func (a mcpToolInput) toDB() *db.MCPServer {
 }
 
 func (s *Server) toolCreateMCP() actool.CoreTool {
-	return wrTool("create_mcp", "Create an MCP server (stdio/http/sse). After creation, its tools need agent visibility authorization.",
+	return wrTool("create_mcp", "Create and install an MCP server (stdio/http/sse), automatically discover its tools, and authorize visibility for operational agents (auto, pentest, worker, mainagent, reporter).",
 		mcpSchema(false),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a mcpToolInput
@@ -301,11 +313,27 @@ func (s *Server) toolCreateMCP() actool.CoreTool {
 			if strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.Transport) == "" {
 				return actool.Errorf("name / transport are required"), nil
 			}
-			id, err := s.m.pg.SaveMCP(a.toDB())
+			srv := a.toDB()
+			id, err := s.m.pg.SaveMCP(srv)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
 			}
-			return actool.Text(fmt.Sprintf("mcp created: id=%d name=%s", id, a.Name)), nil
+			srv.ID = id
+			for _, agKey := range []string{"auto", "pentest", "worker", "mainagent", "reporter"} {
+				if ag, err := s.m.pg.GetAgentByKey(agKey); err == nil && ag != nil {
+					_, _ = s.m.pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, ag.ID, id)
+				}
+			}
+			go func(mcpSrv *db.MCPServer) {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				defer cancel()
+				if err := s.discoverAndCacheMCP(ctx, mcpSrv); err == nil {
+					log.Printf("[mcp] Auto-discovered tools for newly created MCP server %q (id=%d)", mcpSrv.Name, mcpSrv.ID)
+				} else {
+					log.Printf("[mcp] Tool discovery warning for MCP server %q (id=%d): %v", mcpSrv.Name, mcpSrv.ID, err)
+				}
+			}(srv)
+			return actool.Text(fmt.Sprintf("mcp created, authorized for agents, and discovering tools: id=%d name=%s", id, a.Name)), nil
 		})
 }
 

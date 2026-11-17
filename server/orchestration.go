@@ -625,7 +625,7 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v12_all_defaults_and_skills"
+	const flag = "tool_schema_refresh_v13_mcp_and_presets"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -668,6 +668,18 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			for _, sk := range allSkills {
 				_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, a.ID, sk)
+			}
+		}
+	}
+	// Enable built-in MCP servers (e.g. browser Playwright MCP) for operational agents by default
+	if mcpServers, err := s.m.pg.ListMCP(); err == nil {
+		for _, srv := range mcpServers {
+			if srv.Name == "browser" || srv.Enabled {
+				for _, agKey := range []string{"auto", "pentest", "worker", "mainagent", "reporter"} {
+					if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
+						_, _ = s.m.pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, a.ID, srv.ID)
+					}
+				}
 			}
 		}
 	}

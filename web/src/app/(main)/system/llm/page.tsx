@@ -32,38 +32,9 @@ import type { LLMPoolMember, LLMPoolStatus, LLMProfile, LLMRetryOverride } from 
 import { cn } from "@/lib/utils";
 
 import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_components/retry";
+import { LLM_PRESETS, type LLMModelOption, type LLMProviderPreset } from "./_components/presets";
 
-// 思考开关(thinking.type)与思考强度(reasoning_effort)是两个【互相独立】的字段，
-// 各自单独设置——有些接口没有 thinking 字段、只靠强度参数就能激活思考，故需解耦。
-// 存库空字符串 = 该字段【不发送】；Radix Select 不接受空 value，故 UI 用 "none"
-// 哨兵表示不发送，存取时与 "" 互转（NONE / fromStore / toStore）。
 const NONE = "none";
-
-// LLMProviderPreset pre-fills the new-profile form for a known provider.
-// Local runtimes (Ollama / LM Studio / vLLM) speak the OpenAI Chat Completions
-// wire format on a localhost port, so they map to format "openai" with a
-// loopback base URL and no real API key.
-type LLMProviderPreset = {
-  name: string;
-  hint: string;
-  format: "anthropic" | "openai" | "openai-responses";
-  baseUrl: string;
-  model: string;
-};
-
-const LLM_PRESETS: LLMProviderPreset[] = [
-  { name: "Cline", hint: "api.cline.bot/api/v1 — Cline Official Gateway (Claude / GPT / Gemini / Kimi)", format: "openai", baseUrl: "https://api.cline.bot/api/v1", model: "anthropic/claude-opus-4.5" },
-  { name: "Cline (Kimi)", hint: "api.moonshot.ai/v1 — Cline Moonshot Kimi preset", format: "openai", baseUrl: "https://api.moonshot.ai/v1", model: "kimi-latest" },
-  { name: "Anthropic", hint: "api.anthropic.com — Claude models", format: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
-  { name: "OpenAI", hint: "api.openai.com/v1 — GPT models", format: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5" },
-  { name: "DeepSeek", hint: "api.deepseek.com — V3 / R1 models", format: "openai", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-  { name: "Google Gemini", hint: "OpenAI-compatible Gemini endpoint", format: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-pro" },
-  { name: "OpenRouter", hint: "openrouter.ai — gateway to 300+ models", format: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5" },
-  { name: "Ollama (local)", hint: "Local Ollama at localhost:11434 — run: ollama serve, then ollama pull qwen2.5:14b", format: "openai", baseUrl: "http://localhost:11434/v1", model: "qwen2.5:14b" },
-  { name: "LM Studio (local)", hint: "Local LM Studio server at localhost:1234 — start the server tab in LM Studio", format: "openai", baseUrl: "http://localhost:1234/v1", model: "qwen3-30b-a3b-abliterated" },
-  { name: "vLLM (local)", hint: "Self-hosted vLLM OpenAI server at localhost:8000", format: "openai", baseUrl: "http://localhost:8000/v1", model: "meta-llama/Llama-3.1-8B-Instruct" },
-  { name: "Ollama (remote)", hint: "Ollama on another machine — edit the host after preset", format: "openai", baseUrl: "http://ollama-host:11434/v1", model: "qwen2.5:14b" },
-];
 
 const fromStore = (v?: string) => (v ? v : NONE);
 const toStore = (v: string) => (v === NONE ? "" : v);
@@ -398,26 +369,52 @@ function ProfileSheet({
   );
   const isConnectionVerified = verifiedSig !== null && verifiedSig === connectionSig && model.trim().length > 0;
 
-  // 每次打开时从传入的 profile 灌一遍表单（新建则重置为默认值）。抽屉关掉再打开
-  // 就是一次干净的开始，不会留下上一个配置的残影。
+  const applyPresetOption = React.useCallback(
+    (p: LLMProviderPreset, opt?: LLMModelOption, forceName?: boolean) => {
+      const m = opt ?? p.models[0];
+      setFormat(m?.format ?? p.format);
+      setModel(m?.id ?? p.model);
+      setBaseUrl(m?.baseUrl ?? p.baseUrl);
+      setCw(String(m?.contextWindowK ?? 0));
+      setThinkingType(m?.thinkingType ?? NONE);
+      setEffort(m?.effort ?? NONE);
+      setMaxTokens(String(m?.maxTokens ?? 0));
+      setMaxTokensField(m?.maxTokensField ?? NONE);
+      if (forceName || (isNew && !name.trim())) {
+        setName(p.name);
+      }
+      if (p.name.startsWith("Ollama") || p.name.includes("(local)")) {
+        setApiKey("ollama");
+        setKeyHint("local (not required locally)");
+      }
+    },
+    [isNew, name],
+  );
+
+  const activePreset = React.useMemo(
+    () => LLM_PRESETS.find((p) => p.baseUrl === baseUrl && p.format === format) ?? null,
+    [baseUrl, format],
+  );
+
   React.useEffect(() => {
     if (!open) return;
     if (!profile && initialPreset) {
+      const defaultOpt = initialPreset.models[0];
       setName(initialPreset.name);
-      setFormat(initialPreset.format);
-      setModel(initialPreset.model);
-      setBaseUrl(initialPreset.baseUrl);
+      setFormat(defaultOpt?.format ?? initialPreset.format);
+      setModel(defaultOpt?.id ?? initialPreset.model);
+      setBaseUrl(defaultOpt?.baseUrl ?? initialPreset.baseUrl);
       setProxy("");
       setRps("0");
       setRpm("0");
-      setCw("0");
-      setThinkingType(NONE);
-      setEffort(NONE);
+      setCw(String(defaultOpt?.contextWindowK ?? 0));
+      setThinkingType(defaultOpt?.thinkingType ?? NONE);
+      setEffort(defaultOpt?.effort ?? NONE);
       setPriority("0");
       setPoolExclude(false);
       setStreaming(true);
-      setMaxTokens("0");
-      setMaxTokensField(NONE);
+      setMaxTokens(String(defaultOpt?.maxTokens ?? 0));
+      setMaxTokensField(defaultOpt?.maxTokensField ?? NONE);
       setSessionHeaderKey("");
       setRetry(ZERO_OVERRIDE);
       if (initialPreset.name.startsWith("Ollama") || initialPreset.name.includes("(local)")) {
@@ -641,33 +638,62 @@ function ProfileSheet({
               Ollama & friends run locally via their OpenAI-compatible endpoint,
               so no API key is needed (a dummy key is stored to enter the pool). */}
           <div className="grid gap-2">
-            <Label>Quick preset</Label>
+            <Label>Quick preset (Provider)</Label>
             <div className="flex flex-wrap gap-1.5">
               {LLM_PRESETS.map((p) => (
                 <button
                   key={p.name}
                   type="button"
                   title={p.hint}
-                  onClick={() => {
-                    setFormat(p.format);
-                    setModel(p.model);
-                    setBaseUrl(p.baseUrl);
-                    if (isNew && !name.trim()) setName(p.name);
-                    if (p.name.startsWith("Ollama") || p.name.includes("(local)")) {
-                      setApiKey("ollama");
-                      setKeyHint("local (not required locally)");
-                    }
-                  }}
-                  className={`rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
-                    format === p.format && baseUrl === p.baseUrl ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
+                  onClick={() => applyPresetOption(p, p.models[0], isNew)}
+                  className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground ${
+                    activePreset?.name === p.name ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
                   }`}
                 >
                   {p.name}
                 </button>
               ))}
             </div>
+            {activePreset && activePreset.models.length > 0 && (
+              <div className="mt-1.5 grid gap-1.5 rounded-lg border bg-muted/20 p-2.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-foreground">
+                    {activePreset.name} — Select Preset Model (auto-configures reasoning, context window &amp; max tokens)
+                  </Label>
+                  <Badge variant="outline" className="text-[10px]">
+                    {activePreset.models.length} models
+                  </Badge>
+                </div>
+                <Select
+                  value={activePreset.models.some((m) => m.id === model) ? model : activePreset.models[0].id}
+                  onValueChange={(selectedId) => {
+                    const chosen = activePreset.models.find((m) => m.id === selectedId);
+                    if (chosen) applyPresetOption(activePreset, chosen, false);
+                  }}
+                >
+                  <SelectTrigger className="font-mono text-xs">
+                    <SelectValue placeholder="Choose a model preset..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-80">
+                    {activePreset.models.map((m) => (
+                      <SelectItem key={m.id} value={m.id} className="font-mono text-xs">
+                        <span className="flex items-center gap-2">
+                          <span>{m.label}</span>
+                          {m.badge && (
+                            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                              {m.badge}
+                            </span>
+                          )}
+                          <span className="text-muted-foreground text-[11px]">({m.id})</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-muted-foreground text-xs">
-              Local models: start Ollama (<code>ollama serve</code>) and pull a model (<code>ollama pull qwen2.5:14b</code>), then click the Ollama preset. LM Studio / vLLM work the same way via their OpenAI-compatible servers.
+              Select a provider above, then pick a model from the dropdown to automatically configure Base URL, Format, Thinking/Reasoning effort, and Context Window. You only need to enter your API Key below.
             </p>
           </div>
 
