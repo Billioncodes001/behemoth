@@ -22,6 +22,15 @@ export function SecurityConfigCard() {
   const [tlsProfile, setTlsProfile] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
+  // Cloudflare Turnstile & Git Auto-Sync settings (single source of truth via /api/settings)
+  const [turnstileEnabled, setTurnstileEnabled] = React.useState(true);
+  const [turnstileSiteKey, setTurnstileSiteKey] = React.useState("");
+  const [turnstileSecretKey, setTurnstileSecretKey] = React.useState("");
+  const [turnstileSecretSet, setTurnstileSecretSet] = React.useState(false);
+  const [savingTurnstile, setSavingTurnstile] = React.useState(false);
+  const [gitAutoSync, setGitAutoSync] = React.useState(true);
+  const [syncingGit, setSyncingGit] = React.useState(false);
+
   const load = React.useCallback(() => {
     api.security
       .getStealthConfig()
@@ -42,6 +51,16 @@ export function SecurityConfigCard() {
       .current()
       .then((spec: any) => {
         if (spec?.name) setTlsProfile(spec.name);
+      })
+      .catch(() => {});
+    api
+      .settings()
+      .then((s: any) => {
+        if (!s) return;
+        setTurnstileEnabled(s.turnstile_enabled ?? true);
+        setTurnstileSiteKey(s.turnstile_site_key ?? "");
+        setTurnstileSecretSet(Boolean(s.turnstile_secret_key_set));
+        setGitAutoSync(s.git_autosync_enabled ?? true);
       })
       .catch(() => {});
   }, []);
@@ -98,6 +117,54 @@ export function SecurityConfigCard() {
       toast.success(`Unblocked IP ${ip}`);
     } catch (e) {
       toast.error("Failed to unblock IP: " + e);
+    }
+  };
+
+  const saveTurnstileSettings = async (nextEnabled?: boolean, clearSecret?: boolean) => {
+    setSavingTurnstile(true);
+    try {
+      const payload: Record<string, unknown> = {
+        turnstile_enabled: nextEnabled ?? turnstileEnabled,
+        turnstile_site_key: turnstileSiteKey.trim(),
+      };
+      if (clearSecret) {
+        payload.turnstile_secret_key = "";
+      } else if (turnstileSecretKey.trim() !== "") {
+        payload.turnstile_secret_key = turnstileSecretKey.trim();
+      }
+      const updated: any = await api.setSettings(payload as any);
+      setTurnstileEnabled(updated.turnstile_enabled ?? (nextEnabled ?? turnstileEnabled));
+      setTurnstileSiteKey(updated.turnstile_site_key ?? turnstileSiteKey.trim());
+      setTurnstileSecretSet(Boolean(updated.turnstile_secret_key_set));
+      setTurnstileSecretKey("");
+      toast.success("Cloudflare Turnstile settings saved");
+    } catch (e) {
+      toast.error("Failed to save Turnstile settings: " + (e as Error).message);
+    } finally {
+      setSavingTurnstile(false);
+    }
+  };
+
+  const toggleGitAutoSync = async (next: boolean) => {
+    setGitAutoSync(next);
+    try {
+      await api.setSettings({ git_autosync_enabled: next } as any);
+      toast.success(next ? "Automatic Git Live-Sync enabled" : "Automatic Git Live-Sync paused");
+    } catch (e) {
+      setGitAutoSync(!next);
+      toast.error("Failed to update Git Auto-Sync: " + (e as Error).message);
+    }
+  };
+
+  const triggerManualGitSync = async () => {
+    setSyncingGit(true);
+    try {
+      await api.triggerGitSync();
+      toast.success("Triggered repository update check against origin/main");
+    } catch (e) {
+      toast.error("Failed to trigger Git sync: " + (e as Error).message);
+    } finally {
+      setSyncingGit(false);
     }
   };
 
@@ -227,6 +294,92 @@ export function SecurityConfigCard() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Cloudflare Turnstile Pre-Login Protection (Single Source of Truth) */}
+        <div className="space-y-3 rounded-lg border p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Label className="text-sm font-medium">Cloudflare Turnstile Pre-Login Gate</Label>
+                <Badge variant={turnstileSecretSet && turnstileSiteKey ? "default" : "outline"} className="text-[10px]">
+                  {turnstileSecretSet && turnstileSiteKey ? "Cloudflare Siteverify Active" : "Built-in Auto Gate Active"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Requires visitors to pass the Cloudflare Turnstile verification gate before accessing the login screen. Leave keys blank to use the built-in automatic Turnstile challenge, or enter your Cloudflare Site Key &amp; Secret Key to enforce server-side Cloudflare <code>siteverify</code> validation.
+              </p>
+            </div>
+            <Switch
+              checked={turnstileEnabled}
+              onCheckedChange={(v) => {
+                setTurnstileEnabled(v);
+                void saveTurnstileSettings(v);
+              }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Turnstile Site Key (optional)</Label>
+              <Input
+                placeholder="0x4AAAAAA... (blank = built-in auto gate)"
+                value={turnstileSiteKey}
+                disabled={!turnstileEnabled}
+                onChange={(e) => setTurnstileSiteKey(e.target.value)}
+                className="font-mono text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">
+                Turnstile Secret Key (optional) {turnstileSecretSet ? "· Configured ✓" : ""}
+              </Label>
+              <Input
+                type="password"
+                placeholder={
+                  turnstileSecretSet
+                    ? "•••••••• (configured — leave blank to keep)"
+                    : "0x4AAAAAA... (server-side siteverify secret)"
+                }
+                value={turnstileSecretKey}
+                disabled={!turnstileEnabled}
+                onChange={(e) => setTurnstileSecretKey(e.target.value)}
+                className="font-mono text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={() => void saveTurnstileSettings()} disabled={savingTurnstile}>
+              {savingTurnstile ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Turnstile Settings"}
+            </Button>
+            {turnstileSecretSet && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void saveTurnstileSettings(undefined, true)}
+                disabled={savingTurnstile}
+              >
+                Clear Secret Key
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Automatic Git Repository Live-Sync */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+          <div className="space-y-0.5">
+            <Label className="text-sm font-medium">Automatic Git Repository Live-Sync</Label>
+            <p className="text-xs text-muted-foreground">
+              Automatically polls <code>origin/main</code> (<code>Billioncodes001/myartex</code>) every 60s, displays a live maintenance notice when new commits are pushed, rebuilds, and restarts the server.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void triggerManualGitSync()} disabled={syncingGit}>
+              {syncingGit ? <Loader2 className="h-4 w-4 animate-spin" /> : "Check & Sync Now"}
+            </Button>
+            <Switch checked={gitAutoSync} onCheckedChange={(v) => void toggleGitAutoSync(v)} />
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -138,6 +138,29 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 	})
 }
 
+// turnstileConfig is the single source of truth for Cloudflare Turnstile settings.
+// If environment variables are set and the database has no stored value yet, it
+// seeds them into PostgreSQL so the Settings UI, /api/auth/status, and
+// /api/auth/turnstile-verify always see the exact same state.
+func (s *Server) turnstileConfig() (enabled bool, siteKey string, secretKey string) {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return true, strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY")), strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
+	}
+	pg := s.m.pg
+	enabled = pg.GetBool("turnstile_enabled", true)
+	siteVal, siteOk, _ := pg.GetSetting("turnstile_site_key")
+	if !siteOk && strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY")) != "" {
+		siteVal = strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY"))
+		_ = pg.SetSetting("turnstile_site_key", siteVal)
+	}
+	secVal, secOk, _ := pg.GetSetting("turnstile_secret_key")
+	if !secOk && strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY")) != "" {
+		secVal = strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
+		_ = pg.SetSetting("turnstile_secret_key", secVal)
+	}
+	return enabled, strings.TrimSpace(siteVal), strings.TrimSpace(secVal)
+}
+
 // GET /api/auth/status — reports whether the admin password has been initialised
 // and returns optional Cloudflare Turnstile configuration.
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
@@ -150,23 +173,17 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 503, "data_unavailable", errDataSourceUnavailable, nil)
 		return
 	}
-	siteKey := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY"))
-	if siteKey == "" {
-		if v, ok, _ := pg.GetSetting("turnstile_site_key"); ok {
-			siteKey = strings.TrimSpace(v)
-		}
-	}
-	turnstileEnabled := pg.GetBool("turnstile_enabled", true)
+	turnstileEnabled, siteKey, secretKey := s.turnstileConfig()
 	writeJSON(w, 200, map[string]any{
-		"initialized":        hash != "",
-		"turnstile_enabled":  turnstileEnabled,
-		"turnstile_site_key": siteKey,
+		"initialized":              hash != "",
+		"turnstile_enabled":        turnstileEnabled,
+		"turnstile_site_key":       siteKey,
+		"turnstile_secret_key_set": secretKey != "",
 	})
 }
 
 // POST /api/auth/turnstile-verify — verifies a Cloudflare Turnstile token (when
-// CLOUDFLARE_TURNSTILE_SECRET_KEY / turnstile_secret_key is set) or validates the
-// built-in automatic browser security check.
+// turnstile_secret_key is set) or validates the built-in automatic browser security check.
 func (s *Server) authTurnstileVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token     string `json:"token"`
@@ -174,13 +191,7 @@ func (s *Server) authTurnstileVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	secretKey := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
-	if secretKey == "" && s.m != nil && s.m.pg != nil {
-		if v, ok, _ := s.m.pg.GetSetting("turnstile_secret_key"); ok {
-			secretKey = strings.TrimSpace(v)
-		}
-	}
-
+	_, _, secretKey := s.turnstileConfig()
 	if secretKey != "" && req.Token != "" && req.Token != "auto-verified" {
 		form := strings.NewReader(fmt.Sprintf("secret=%s&response=%s&remoteip=%s",
 			secretKey, req.Token, getClientIP(r)))

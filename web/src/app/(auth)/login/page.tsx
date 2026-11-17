@@ -28,8 +28,10 @@ export default function LoginPage() {
   const termsBodyRef = useRef<HTMLDivElement>(null);
 
   const [turnstileState, setTurnstileState] = useState<"verifying" | "success" | "passed">("verifying");
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
   const [rayId, setRayId] = useState("8e4c19a2f0b31d42");
   const [hostLabel, setHostLabel] = useState("artex.local");
+  const turnstileContainerRef = useRef<HTMLDivElement>(null);
 
   function handleTermsScroll() {
     const el = termsBodyRef.current;
@@ -70,6 +72,11 @@ export default function LoginPage() {
           setTurnstileState("passed");
           return;
         }
+        const configuredSiteKey = (st.turnstile_site_key ?? "").trim();
+        if (configuredSiteKey) {
+          setTurnstileSiteKey(configuredSiteKey);
+          return;
+        }
         await new Promise((r) => setTimeout(r, 950));
         try {
           const v = await api.turnstileVerify("auto-verified", navigator.userAgent);
@@ -94,6 +101,50 @@ export default function LoginPage() {
       })
       .finally(() => setChecking(false));
   }, [router]);
+
+  // If a real Cloudflare Turnstile Site Key is configured, load and render the official widget
+  useEffect(() => {
+    if (!turnstileSiteKey || turnstileState === "passed") return;
+    let mounted = true;
+    const w = window as any;
+    const renderWidget = () => {
+      if (!mounted || !turnstileContainerRef.current || !w.turnstile) return;
+      turnstileContainerRef.current.innerHTML = "";
+      w.turnstile.render(turnstileContainerRef.current, {
+        sitekey: turnstileSiteKey,
+        theme: "dark",
+        callback: async (cfToken: string) => {
+          try {
+            const v = await api.turnstileVerify(cfToken, navigator.userAgent);
+            if (v?.ray_id) setRayId(v.ray_id);
+            setTurnstileState("success");
+            await new Promise((r) => setTimeout(r, 700));
+            sessionStorage.setItem("artex_turnstile_ok", "1");
+            const existingToken = auth.getToken();
+            if (existingToken) {
+              window.location.replace("/function/tasks");
+              return;
+            }
+            setTurnstileState("passed");
+          } catch {
+            setError("Cloudflare Turnstile verification failed");
+          }
+        },
+      });
+    };
+    if (w.turnstile) {
+      renderWidget();
+    } else {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.onload = renderWidget;
+      document.head.appendChild(script);
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [turnstileSiteKey, turnstileState]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -128,28 +179,32 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <div className="flex w-full max-w-[320px] items-center justify-between rounded-md border border-zinc-700 bg-[#222226] px-4 py-3.5 shadow-lg">
-            <div className="flex items-center gap-3.5">
-              {turnstileState === "verifying" ? (
-                <div className="flex size-7 items-center justify-center">
-                  <Loader2 className="size-6 animate-spin text-emerald-500" />
-                </div>
-              ) : (
-                <div className="flex size-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 animate-in zoom-in-75 duration-200">
-                  <CheckCircle2 className="size-6 fill-emerald-500 text-[#222226]" />
-                </div>
-              )}
-              <span className="text-sm font-medium text-zinc-100">
-                {turnstileState === "verifying" ? "Verifying..." : "Success!"}
-              </span>
-            </div>
-            <div className="flex flex-col items-end text-right leading-tight">
-              <div className="flex items-center gap-1 text-[11px] font-bold tracking-wide text-orange-400">
-                <ShieldCheck className="size-3.5" /> CLOUDFLARE
+          {turnstileSiteKey ? (
+            <div ref={turnstileContainerRef} className="min-h-[66px]" />
+          ) : (
+            <div className="flex w-full max-w-[320px] items-center justify-between rounded-md border border-zinc-700 bg-[#222226] px-4 py-3.5 shadow-lg">
+              <div className="flex items-center gap-3.5">
+                {turnstileState === "verifying" ? (
+                  <div className="flex size-7 items-center justify-center">
+                    <Loader2 className="size-6 animate-spin text-emerald-500" />
+                  </div>
+                ) : (
+                  <div className="flex size-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 animate-in zoom-in-75 duration-200">
+                    <CheckCircle2 className="size-6 fill-emerald-500 text-[#222226]" />
+                  </div>
+                )}
+                <span className="text-sm font-medium text-zinc-100">
+                  {turnstileState === "verifying" ? "Verifying..." : "Success!"}
+                </span>
               </div>
-              <span className="text-[9px] text-zinc-400">Turnstile · Privacy · Terms</span>
+              <div className="flex flex-col items-end text-right leading-tight">
+                <div className="flex items-center gap-1 text-[11px] font-bold tracking-wide text-orange-400">
+                  <ShieldCheck className="size-3.5" /> CLOUDFLARE
+                </div>
+                <span className="text-[9px] text-zinc-400">Turnstile · Privacy · Terms</span>
+              </div>
             </div>
-          </div>
+          )}
 
           <p className="text-sm text-zinc-400 leading-relaxed">
             {hostLabel} needs to review the security of your connection before proceeding.

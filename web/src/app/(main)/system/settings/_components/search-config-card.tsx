@@ -105,8 +105,10 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
                 const active = avail(e.type);
                 return (
                   <div key={e.type} className={
-                    "flex items-center gap-1.5 text-xs p-1.5 rounded " +
-                    (active ? "bg-green-100 text-green-800 dark:bg-green-900" : "bg-gray-100 text-gray-600")
+                    "flex items-center gap-1.5 text-xs font-medium p-2 rounded-md border " +
+                    (active
+                      ? "bg-emerald-500/15 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300"
+                      : "bg-muted text-muted-foreground border-border")
                   }>
                     {active ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
                     {e.label}

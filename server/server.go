@@ -3983,6 +3983,10 @@ func (s *Server) settingsPayload() map[string]any {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
+		"turnstile_enabled":          func() bool { en, _, _ := s.turnstileConfig(); return en }(),
+		"turnstile_site_key":         func() string { _, sk, _ := s.turnstileConfig(); return sk }(),
+		"turnstile_secret_key_set":   func() bool { _, _, sec := s.turnstileConfig(); return sec != "" }(),
+		"git_autosync_enabled":       s.m.pg.GetBool("git_autosync_enabled", true),
 	}
 }
 
@@ -4073,9 +4077,13 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NoaCompaction *bool `json:"noa_compaction"`
 		// 漏洞 IM 推送的全局项。三者都由投递引擎每轮读一次，改完即时生效，
 		// 不需要重建 agent 或重启。
-		NotifyEnabled    *bool   `json:"notify_enabled"`
-		NotifyBaseURL    *string `json:"notify_public_base_url"`
-		NotifyDigestMins *int    `json:"notify_digest_interval_min"`
+		NotifyEnabled      *bool   `json:"notify_enabled"`
+		NotifyBaseURL      *string `json:"notify_public_base_url"`
+		NotifyDigestMins   *int    `json:"notify_digest_interval_min"`
+		TurnstileEnabled   *bool   `json:"turnstile_enabled"`
+		TurnstileSiteKey   *string `json:"turnstile_site_key"`
+		TurnstileSecretKey *string `json:"turnstile_secret_key"`
+		GitAutoSyncEnabled *bool   `json:"git_autosync_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -4135,13 +4143,40 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.NotifyDigestMins != nil {
 		// 下限 1 分钟:更短的周期等于实时推送,那样应该直接把渠道改成 realtime 模式。
 		if *req.NotifyDigestMins < 1 || *req.NotifyDigestMins > 24*60 {
-			writeErr(w, 400, "汇总周期需在 1 到 1440 分钟之间")
+			writeErr(w, 400, "Digest interval must be between 1 and 1440 minutes")
 			return
 		}
 		if err := s.m.pg.SetSetting(settingNotifyDigestMinutes, strconv.Itoa(*req.NotifyDigestMins)); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
+	}
+	if req.TurnstileEnabled != nil {
+		if err := s.m.pg.SetBool("turnstile_enabled", *req.TurnstileEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.TurnstileSiteKey != nil {
+		if err := s.m.pg.SetSetting("turnstile_site_key", strings.TrimSpace(*req.TurnstileSiteKey)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.TurnstileSecretKey != nil {
+		if err := s.m.pg.SetSetting("turnstile_secret_key", strings.TrimSpace(*req.TurnstileSecretKey)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.GitAutoSyncEnabled != nil {
+		if err := s.m.pg.SetBool("git_autosync_enabled", *req.GitAutoSyncEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		maintState.mu.Lock()
+		maintState.AutoSyncOn = *req.GitAutoSyncEnabled
+		maintState.mu.Unlock()
 	}
 	// A non-empty pool list takes precedence when both fields are present and
 	// synchronizes workers to its total. An empty list clears pools; when workers
