@@ -47,7 +47,7 @@ ARTEX uses a streamlined **two-script workflow**:
 - **`./start.sh`** — Daily service runner (`tmux` multi-service orchestration, Nginx custom domain/SSL routing, status checks, and live logs).
 
 ```bash
-git clone <your-repo-url> ARTEX
+git clone https://github.com/Billioncodes001/myartex.git ARTEX
 cd ARTEX
 
 # 1. Full Ubuntu setup (installs PostgreSQL, Go 1.26, Node.js 20, Nginx, Certbot,
