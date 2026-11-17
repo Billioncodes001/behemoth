@@ -82,7 +82,7 @@ func (c *ChatAgent) SetGuard(g *guard.Guard) { c.guard = g }
 func chatWorkDirSpec(workDir, model string) string {
 	out := "\n\n**File Output Specification**: When writing files, always write to the session working directory " + workDir + " (this is the default CWD; relative paths resolve here, or you may use this absolute path) — do not write to /tmp or other external paths."
 	if model != "" {
-		out += "\n\n**Runtime Model Identity**: You are currently powered by and running on the LLM model `" + model + "`. If the user asks which LLM or model you are currently using, always state `" + model + "` accurately (never guess or claim a different model name from pretraining)."
+		out += "\n\n**Runtime Model Identity & Language Policy**: You are currently powered by and running on the LLM model `" + model + "`. If the user asks which LLM or model you are currently using, always state `" + model + "` accurately. Always respond strictly in **English** (never output Chinese, even when summarizing or using a bilingual model)."
 	}
 	return out
 }

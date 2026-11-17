@@ -112,15 +112,15 @@ const (
 )
 
 // CompactionWindow returns the model context window in TOKENS for compaction
-// thresholds, resolved from the user-configured size (ContextWindowK). 0/unset →
-// a 200K default; otherwise clamped to [32K, 1M] so compaction stays effective.
+// CompactionWindow returns the context-window size (in tokens) that drives
+// compaction thresholds, resolved from the user-configured size (ContextWindowK).
+// Because norma's compaction math reserves ~35K–48K tokens of fixed buffer, any
+// window below 200K would falsely trigger AutoCompact after just a few messages;
+// therefore we enforce a minimum effective compaction window of 200K tokens.
 func (c Config) CompactionWindow() int {
 	k := c.ContextWindowK
-	if k <= 0 {
+	if k < defaultWindowK {
 		k = defaultWindowK
-	}
-	if k < minWindowK {
-		k = minWindowK
 	}
 	if k > maxWindowK {
 		k = maxWindowK
@@ -132,10 +132,13 @@ func (c Config) CompactionWindow() int {
 // in tokens. agentcore.NewSession wires the summarizer (same provider) when this
 // is set on Options.Compaction.
 func compactionConfig(windowTokens int) *compaction.Config {
-	if windowTokens <= 0 {
+	if windowTokens < defaultWindowK*1000 {
 		windowTokens = defaultWindowK * 1000
 	}
-	return &compaction.Config{ContextWindow: windowTokens}
+	return &compaction.Config{
+		ContextWindow:   windowTokens,
+		MaxOutputTokens: 4000,
+	}
 }
 
 // FromEnv resolves the LLM provider config:
