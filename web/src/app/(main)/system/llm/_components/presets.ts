@@ -122,8 +122,8 @@ export const LLM_PRESETS: LLMProviderPreset[] = [
       { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro (1M ctx)", badge: "FLAGSHIP", effort: "high", contextWindowK: 1000, maxTokens: 128000 },
       { id: "deepseek-v4.1-flash-1017", label: "DeepSeek V4.1 Flash 1017 (1M ctx)", badge: "RECOMMENDED", effort: "high", contextWindowK: 1000, maxTokens: 128000 },
       { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash (1M ctx)", effort: "high", contextWindowK: 1000, maxTokens: 128000 },
-      { id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", effort: "high", contextWindowK: 128, maxTokens: 64000 },
-      { id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindowK: 128, maxTokens: 64000 },
+      { id: "deepseek-reasoner", label: "DeepSeek Reasoner (R1)", effort: "high", contextWindowK: 200, maxTokens: 64000 },
+      { id: "deepseek-chat", label: "DeepSeek Chat (V3)", contextWindowK: 200, maxTokens: 64000 },
     ],
   },
   {
@@ -185,12 +185,12 @@ export const LLM_PRESETS: LLMProviderPreset[] = [
     baseUrl: "http://localhost:11434/v1",
     model: "qwen3:32b",
     models: [
-      { id: "qwen3:32b", label: "Qwen 3 32B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "qwen2.5-coder:32b", label: "Qwen 2.5 Coder 32B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "qwen2.5:14b", label: "Qwen 2.5 14B", contextWindowK: 128, maxTokens: 16384 },
-      { id: "deepseek-r1:32b", label: "DeepSeek R1 32B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "llama3.3:70b", label: "Llama 3.3 70B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "gemma3:27b", label: "Gemma 3 27B", contextWindowK: 128, maxTokens: 16384 },
+      { id: "qwen3:32b", label: "Qwen 3 32B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "qwen2.5-coder:32b", label: "Qwen 2.5 Coder 32B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "qwen2.5:14b", label: "Qwen 2.5 14B", contextWindowK: 200, maxTokens: 16384 },
+      { id: "deepseek-r1:32b", label: "DeepSeek R1 32B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "llama3.3:70b", label: "Llama 3.3 70B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "gemma3:27b", label: "Gemma 3 27B", contextWindowK: 200, maxTokens: 16384 },
     ],
   },
   {
@@ -200,9 +200,9 @@ export const LLM_PRESETS: LLMProviderPreset[] = [
     baseUrl: "http://localhost:1234/v1",
     model: "qwen3-30b-a3b-abliterated",
     models: [
-      { id: "qwen3-30b-a3b-abliterated", label: "Qwen 3 30B A3B Abliterated", contextWindowK: 128, maxTokens: 32768 },
-      { id: "openai/gpt-oss-20b", label: "OpenAI GPT-OSS 20B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "deepseek-r1-distill-qwen-32b", label: "DeepSeek R1 Distill Qwen 32B", contextWindowK: 128, maxTokens: 32768 },
+      { id: "qwen3-30b-a3b-abliterated", label: "Qwen 3 30B A3B Abliterated", contextWindowK: 200, maxTokens: 32768 },
+      { id: "openai/gpt-oss-20b", label: "OpenAI GPT-OSS 20B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "deepseek-r1-distill-qwen-32b", label: "DeepSeek R1 Distill Qwen 32B", contextWindowK: 200, maxTokens: 32768 },
     ],
   },
   {
@@ -212,9 +212,9 @@ export const LLM_PRESETS: LLMProviderPreset[] = [
     baseUrl: "http://localhost:8000/v1",
     model: "Qwen/Qwen3.8-27B",
     models: [
-      { id: "Qwen/Qwen3.8-27B", label: "Qwen/Qwen3.8-27B", contextWindowK: 128, maxTokens: 32768 },
-      { id: "deepseek-ai/DeepSeek-V4.1-Flash", label: "deepseek-ai/DeepSeek-V4.1-Flash", contextWindowK: 128, maxTokens: 32768 },
-      { id: "meta-llama/Llama-3.3-70B-Instruct", label: "meta-llama/Llama-3.3-70B-Instruct", contextWindowK: 128, maxTokens: 32768 },
+      { id: "Qwen/Qwen3.8-27B", label: "Qwen/Qwen3.8-27B", contextWindowK: 200, maxTokens: 32768 },
+      { id: "deepseek-ai/DeepSeek-V4.1-Flash", label: "deepseek-ai/DeepSeek-V4.1-Flash", contextWindowK: 200, maxTokens: 32768 },
+      { id: "meta-llama/Llama-3.3-70B-Instruct", label: "meta-llama/Llama-3.3-70B-Instruct", contextWindowK: 200, maxTokens: 32768 },
     ],
   },
 ];
