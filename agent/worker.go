@@ -142,7 +142,7 @@ func (w *Worker) SetRunTimeout(run time.Duration) {
 // settleWrapUpPrompt is injected by the SDK settlement phase when a worker hits its
 // turn/time budget: stop probing, write back what was found, then end with a
 // plain-text one-liner (which becomes this run's displayed result).
-const settleWrapUpPrompt = "你即将因预算耗尽被终止。不要再运行任何命令/探测。请依次：(1) 把你上面已识别但还没写回的内容逐条写回——新资产用 insert_assets、探索结论/事实用 record_fact、确认漏洞用 report_finding；(2) **最后单独用一句话纯文本**总结你做了什么、得到哪些关键结论（这句会作为本次运行的结果展示，务必输出）。"
+const settleWrapUpPrompt = "You are about to be terminated because your turn/time budget is exhausted. Do NOT run any more commands or probes. In order: (1) write back everything you have identified above but not yet persisted — new assets via insert_assets, exploration conclusions/facts via record_fact, confirmed vulnerabilities via report_finding; (2) **finish with a single plain-text sentence** summarizing what you did and the key conclusions (this sentence will be displayed as the result of this run)."
 
 func NewWorker(prov llm.Provider, model, workDir string, tx *transcript.Store, window, maxTurns int, extra ...actool.CoreTool) *Worker {
 	return &Worker{prov: prov, model: model, workDir: workDir, tx: tx, window: window, maxTurns: maxTurns, extraTools: extra}
@@ -220,45 +220,34 @@ func proxyEnv(proxyAddr, caCert string) []string {
 // prompt, seeded into agent_prompts. The trafficTool block and the 中间产物输出规约
 // are NOT here — they are code-owned and appended by workerSystem after rendering
 // (段 [B]/[C]), so editing the DB body can never drop them.
-const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系统的"执行者"(work agent)。你领到【一条意图】(一句话探索方向)，唯一职责：**完成这一条意图、把发现写回知识图谱、然后停止返回。**
+const workerDefaultTmpl = `You are a "Worker Agent" in an authorized penetration testing system. You claim [one intent] (a one-sentence exploration direction), and your sole responsibility is: **complete this single intent, write your findings back to the knowledge graph, and then stop and return.**
 
-**边界（红线）**：
-1. **只做你领到的这一条意图**。**探本意图时若瞥见本意图之外值得深挖的线索**（报错泄露的路径、可能与其它资产联动的点、疑似另一条利用链的入口），**在 fact 的 summary 里点一句交给规划者**。
-2. 初次受阻（payload 被过滤 / 404 / 注入无回显）不代表已探透——把本意图的所有绕过手段走完再输出结论；
-3. 只在授权范围内操作。系统提示顶部若附【操作约束】，那是最高优先级红线：每条命令/探测执行前先自检，违反即不做（哪怕它落在你领到的意图里）。
+**Boundaries (Red Lines)**:
+1. **Execute ONLY the single intent you claimed**. **If you spot a lead outside this intent that is worth investigating** (e.g., a leaked path in an error message, a cross-asset pivot, or an entry point for another exploit chain), **mention it briefly in the fact's summary so the planner can follow up**.
+2. An initial obstacle (filtered payload / 404 / no output from injection) does not mean the direction is exhausted — try all reasonable bypasses for this intent before concluding;
+3. Operate strictly within the authorized scope. If [Operational Constraints] are attached at the top of the system prompt, they are the highest-priority red line: check every command/probe against them before execution and never violate them.
 
-**边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
-- **新资产/资源 → insert_assets（资产图）**：子域 / service / endpoint / 指纹 / 凭据 等一切资产【本身】。**这里只登记资产；探索结论/判断不写这里，用 record_fact。**
-- **探索结论/事实 → record_fact（探索图，传 intent_id）**：都用它。**多个观察汇总成【一条】事实**（summary 一句总结 + detail写对总结的拓展，依靠真实的执行过程），不要一个属性一条、一意图通常只一条，拆碎会让图谱无限膨胀——**默认就写一条，能并进 detail 的都并进去**；仅当确有【彼此完全独立、无法归并】的结论时才用 facts 数组分条，这是极少数例外，不是常规。**只写增量**：只记这次【新得到】的，别把已有事实换措辞重记（只印证已有、无新增就不必记）。**只写真实看到的**：给 evidence（一行：命令+最能证明的一两行输出，简洁，细节在 detail）、标 confidence（observed=直接看到 / inferred=据现象推断）。
-- **确认漏洞 → report_finding（探索图，含 PoC，传 intent_id）**：**只有你本次真实触发过、拿到可复现证据（请求/响应或命令输出）才用**。严禁把"版本/指纹匹配到 CVE""参数看起来可注入""外部漏洞库/更新日志/代码 diff 推断"当已确认，也不要用查 CVE 库或对比补丁版本替代实际触发。触发不了但有嫌疑 → 用 record_fact 记一条 inferred 事实（嫌疑点+为何未触发）交规划者，别硬记成 finding。
+**Write Back As You Discover** (only what is written to the graph counts; persist results immediately so nothing is lost if turns run out). Three write-back tools — do not mix them up:
+- **New Assets / Resources -> insert_assets (Asset Graph)**: subdomains / services / endpoints / fingerprints / credentials, etc. **Register only assets here; write exploration conclusions/judgments via record_fact.**
+- **Exploration Conclusions / Facts -> record_fact (Exploration Graph, pass intent_id)**: **consolidate multiple observations from this exploration into [one] fact** (summary = one-sentence conclusion + detail = supporting observations from actual execution) rather than splitting every attribute into a separate fact; use the facts array only for genuinely independent conclusions. **Write only increments**: record only what was newly discovered in this run. **Record only what you actually observed**: provide concise single-line evidence (command + the 1–2 output lines proving it) and set confidence (observed = directly seen / inferred = inferred from behavior).
+- **Confirmed Vulnerabilities -> report_finding (Exploration Graph, with PoC, pass intent_id)**: **call ONLY when you have genuinely triggered the vulnerability in this run and obtained reproducible proof (request/response or command output)**. Never report unverified version/CVE matches or theoretical suspicions as confirmed findings; if a point is suspicious but unconfirmed, record an inferred fact via record_fact explaining the suspicion and why it did not trigger.
 
 
-完成本意图后用一句话总结你做了什么、写回了哪些事实。`
+After completing this intent, summarize what you did and which facts you wrote back in one sentence.`
 
-// workerTrafficBlock is 段 [B]: the traffic-tool note, code-injected only when
-// traffic capture (recording) is on — i.e. the traffic_* tools actually exist.
-// Gated on recording, NOT on the egress proxy: a global proxy with capture off
-// routes traffic but records nothing, so the tools would not be there. Not stored,
-// not editable.
 func workerTrafficBlock(recording bool) string {
 	if !recording {
 		return ""
 	}
-	return "\n\n**流量工具**：\n- traffic_search / traffic_get / traffic_blob：回看响应、找已访问过的资源，**先查流量、不要重复 curl 同一 URL**。traffic_search **必须指定 host**、默认只回 3 条极轻量索引(id/method/url/status/resp_len，无响应内容)，需要更多显式调大 limit；可用 body_contains 在请求/响应正文里做全文搜索(至少 3 字符，支持子串和中文，如找密码/密钥/报错/内网地址)；要看某条原文用 traffic_get(id)，其中超大正文显示为 @blob sha256:<hash>，用 traffic_blob(hash) 分段取全文。"
+	return "\n\n**Traffic Tools**:\n- traffic_search / traffic_get / traffic_blob: inspect captured responses and find already-visited resources — **check captured traffic first instead of re-curling the same URL**. traffic_search **requires host** and returns a lightweight index of 3 items by default (id/method/url/status/resp_len, no body); increase limit if needed; use body_contains for full-text search across request/response headers and bodies (min 3 chars, e.g., finding passwords/keys/errors/internal IPs); use traffic_get(id) to view raw request/response, and traffic_blob(hash) to read oversized bodies marked with @blob sha256:<hash>."
 }
 
-// artifactSpec is 段 [C]: the code-owned, non-editable tail appended to every
-// pentest agent's prompt — intermediate artifacts must land in the shared work
-// dir, never /tmp. Guaranteed present regardless of how the DB body is edited.
 func artifactSpec(dir string) string {
-	return "\n\n**中间产物输出规约**：脚本、payload、抓到的响应体、临时数据等一切中间产物，**一律写到本任务工作目录 " + dir + "**（相对路径即写在这里，也可用该绝对路径）——**不要写 /tmp、不要用其它绝对路径**。"
+	return "\n\n**Intermediate Artifact Output Rule**: All scripts, payloads, captured response bodies, and temporary data **must be written to this task's working directory " + dir + "** (relative paths resolve here, or use this absolute path) — **never write to /tmp or other absolute paths**."
 }
 
-// workerArtifactSpec is the worker's 段 [C]: its per-intent run dir is pre-created
-// by the engine (ensureRunDir), so it just writes relative paths there — no manual
-// mkdir, no cross-worker name collisions.
 func workerArtifactSpec(runDir string) string {
-	return "\n\n**中间产物输出规约**：脚本、payload、抓到的响应体、临时数据等一切中间产物，**一律写到本次意图的专属工作目录 " + runDir + "**（已自动建好，直接用相对路径写在这里即可，无需再手动建目录）——**不要写 /tmp、不要用其它绝对路径**。"
+	return "\n\n**Intermediate Artifact Output Rule**: All scripts, payloads, captured response bodies, and temporary data **must be written to this intent's dedicated working directory " + runDir + "** (pre-created; write relative paths directly here) — **never write to /tmp or other absolute paths**."
 }
 
 // ensureRunDir builds and creates an agent's working directory under base:
@@ -307,26 +296,18 @@ func intentAssetIDs(intent *db.Node) []int64 {
 }
 
 func renderIntentTask(intent *db.Node) string {
-	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s\n意图 id: %d（写回 record_fact / report_finding 时传它）", string(intent.Payload), intent.ID)
+	return fmt.Sprintf("\n\n[Your Claimed Intent (Sole Objective for This Run: execute only this direction, record facts, and stop when done)]:\n%s\nintent id: %d (pass this when calling record_fact / report_finding)", string(intent.Payload), intent.ID)
 }
 
-// renderWorkerGraphOverview folds the global situational snapshot into the worker's
-// launch USER message for AWARENESS ONLY. The framing is deliberately strong: the overview
-// must NOT widen the worker's job — it still does only its assigned intent. Its sole
-// purpose is letting the worker read context (existing facts/assets/hints)
-// so it avoids redundant work and doesn't re-derive what others already found.
 func renderWorkerGraphOverview(data map[string]any) string {
-	// coverage 是给规划者判断「哪类测得少 / 要不要扩范围」的信号，与 worker「只做领到的
-	// 那条意图、别追未覆盖的点」的职责边界相悖 → 从 worker 视图里剔除。data 是本次 worker
-	// 专属的新 map，删键不影响 planner。
 	delete(data, "coverage")
 	b, err := json.Marshal(data)
 	if err != nil {
 		return "" // fall back silently: the worker just won't have the global context
 	}
-	return "\n\n【全局探索态势（只读，帮你把自己这条意图放进大局看）】：\n" +
-		"下面是整个任务当前的探索概况。用途有两个：一是知道别人已发现什么，别重复；二是让你探自己这条意图时，能联想到它和全局的关系。\n" +
-		"**发散是好事**：探本意图时尽管深想、多联想。唯一的界线是——别真的动手去执行别的意图（那是别的 worker 的事，由规划者调度）。但凡你联想到有价值的线索（跨资产的联动、疑似另一条利用链的入口、全局层面的可疑点），**务必写进 fact 交规划者**——这是你重要的产出，不是可有可无。宁可多报一条让规划者判断，也别自己咽下去。\n" +
+	return "\n\n[Global Exploration Situational Overview (Read-Only Context)]:\n" +
+		"Below is the current exploration overview of the entire task. It serves two purposes: first, to see what others have already found so you don't duplicate work; second, to help you connect your current intent to the bigger picture.\n" +
+		"**Think broadly, execute narrowly**: Do not execute other intents yourself (that is for other workers scheduled by the planner). However, whenever you spot valuable cross-asset leads, potential entry points for another exploit chain, or global anomalies, **include them in your fact summary for the planner**.\n" +
 		string(b)
 }
 

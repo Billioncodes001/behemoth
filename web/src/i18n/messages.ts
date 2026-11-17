@@ -4,6 +4,7 @@ import { inlineEditorMessages } from "./inline-editor-messages";
 import { notifyMessages } from "./notify-messages";
 import { overviewMessages } from "./overview-messages";
 import { scheduleMessages } from "./schedule-messages";
+import { searchMessages } from "./search-messages";
 import screenCatalog from "./screen-catalog.json";
 import { settingsMessages } from "./settings-messages";
 import { settingsRuntimeMessages } from "./settings-runtime-messages";
@@ -18,6 +19,7 @@ export const messages = {
   ...notifyMessages,
   ...inlineEditorMessages,
   ...scheduleMessages,
+  ...searchMessages,
   ...chatUIMessages,
   ...errorMessages,
   ...overviewMessages,
@@ -62,6 +64,13 @@ export const messages = {
   "nav.approvals": ["审批记录", "Approval history"],
   "nav.logs": ["日志", "Logs"],
   "nav.settings": ["系统配置", "Settings"],
+  "nav.proxy-pool": ["代理池", "Proxy pool"],
+  "nav.search": ["多引擎搜索", "Multi-Engine Search"],
+  "proxyPool.title": ["代理池 v2", "Proxy Pool v2"],
+  "proxyPool.subtitle": [
+    "支持 GeoIP、轮换策略与健康检查的增强代理池管理",
+    "Enhanced proxy management with GeoIP, rotation strategies, and health monitoring",
+  ],
   "search.placeholder": ["搜索页面与功能…", "Search pages and features…"],
   "search.empty": ["没有匹配结果", "No results found"],
   "account.changePassword": ["修改密码", "Change password"],

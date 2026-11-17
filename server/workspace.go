@@ -58,16 +58,19 @@ type wsEntry struct {
 func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 	abs, ok := s.wsResolve(r.URL.Query().Get("path"))
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
+	}
+	if abs == filepath.Clean(s.m.dir) {
+		_ = os.MkdirAll(abs, 0o755)
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		writeErr(w, 404, "路径不存在")
+		writeErr(w, 404, "Path does not exist")
 		return
 	}
 	if !fi.IsDir() {
-		writeErr(w, 400, "不是目录")
+		writeErr(w, 400, "Not a directory")
 		return
 	}
 	ents, err := os.ReadDir(abs)
@@ -89,7 +92,7 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 			MTime: info.ModTime().UnixMilli(),
 		})
 	}
-	// 目录在前，各自按名称排序。
+	// Directories first, then sorted alphabetically.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Dir != out[j].Dir {
 			return out[i].Dir
@@ -104,16 +107,16 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wsRead(w http.ResponseWriter, r *http.Request) {
 	abs, ok := s.wsResolve(r.URL.Query().Get("path"))
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		writeErr(w, 404, "文件不存在")
+		writeErr(w, 404, "File does not exist")
 		return
 	}
 	if fi.IsDir() {
-		writeErr(w, 400, "是目录，不能作为文件读取")
+		writeErr(w, 400, "Target is a directory and cannot be read as a file")
 		return
 	}
 	f, err := os.Open(abs)
@@ -137,11 +140,11 @@ func (s *Server) wsWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	abs, ok := s.wsResolve(req.Path)
 	if !ok || abs == filepath.Clean(s.m.dir) {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-		writeErr(w, 400, "目标是目录")
+		writeErr(w, 400, "Target is a directory")
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -166,7 +169,7 @@ func (s *Server) wsMkdir(w http.ResponseWriter, r *http.Request) {
 	}
 	abs, ok := s.wsResolve(req.Path)
 	if !ok || abs == filepath.Clean(s.m.dir) {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
@@ -181,15 +184,15 @@ func (s *Server) wsMkdir(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wsDelete(w http.ResponseWriter, r *http.Request) {
 	abs, ok := s.wsResolve(r.URL.Query().Get("path"))
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	if abs == filepath.Clean(s.m.dir) {
-		writeErr(w, 400, "不能删除工作区根目录")
+		writeErr(w, 400, "Cannot delete workspace root directory")
 		return
 	}
 	if _, err := os.Stat(abs); err != nil {
-		writeErr(w, 404, "路径不存在")
+		writeErr(w, 404, "Path does not exist")
 		return
 	}
 	if err := os.RemoveAll(abs); err != nil {

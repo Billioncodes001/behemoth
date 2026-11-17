@@ -31,11 +31,11 @@ func (s *Server) isHistoricalFindingReview(conv int64) (bool, error) {
 
 func (s *Server) toolCompleteFindingCaseReview() actool.CoreTool {
 	decision := objSchema(map[string]any{
-		"finding_id":          idParam("所选独立漏洞记录 ID"),
+		"finding_id":          idParam("Selected standalone vulnerability record ID"),
 		"verdict":             map[string]any{"type": "string", "enum": []string{"independent", "merged", "suggested"}},
-		"reason":              strParam("判断理由，引用已证据化的共同点或不同代码路径；仅类型、标题或资产相同不足以证明共同根因"),
-		"root_cause_evidence": strParam("原始报告/证据中支持实际共同或不同根因的具体材料；suggested 须说明具体共同点、缺失的关键证据及已保存分组；没有具体共同点应判 independent")}, "finding_id", "verdict", "reason", "root_cause_evidence")
-	return wrTool("complete_finding_case_review", "历史整理结束前提交每条所选记录的根因判断并验收：必须已读取全部记录，疑似必须已有待确认分组建议；归并只需已在活动文件夹中，统一报告可稍后补齐。验收失败不能宣布完成。", objSchema(map[string]any{"summary": strParam("整理结果总结"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+		"reason":              strParam("Judgment rationale citing evidenced commonalities or distinct code paths; same type, title, or asset alone does not prove a shared root cause"),
+		"root_cause_evidence": strParam("Specific material from original reports/evidence supporting the shared or distinct root cause; 'suggested' must explain specific commonalities, missing key evidence, and the saved group; use 'independent' when no specific commonality exists")}, "finding_id", "verdict", "reason", "root_cause_evidence")
+	return wrTool("complete_finding_case_review", "Submit root cause judgment and acceptance for each selected record before historical review completion: must have read all records, suspected ones must have pending group suggestions; merging only requires being in active folder, unified report can be supplemented later. Cannot announce completion if acceptance fails.", objSchema(map[string]any{"summary": strParam("Review result summary"), "decisions": map[string]any{"type": "array", "items": decision}}, "summary", "decisions"), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		var a findingReviewConclusion
 		if err := json.Unmarshal(raw, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -44,13 +44,13 @@ func (s *Server) toolCompleteFindingCaseReview() actool.CoreTool {
 		if err := s.saveFindingReviewConclusion(ctx, conv, a); err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		return actool.Text("历史整理验收通过；原始记录和报告保留，逐条根因判断已保存。"), nil
+		return actool.Text("Historical review validation passed; original records and reports retained, per-record root cause judgments saved."), nil
 	})
 }
 
 func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a findingReviewConclusion) error {
 	if conv <= 0 {
-		return errors.New("仅用于有上下文的历史整理会话")
+		return errors.New("only available in historical review sessions with context")
 	}
 	return s.m.pg.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		var idsRaw, readsRaw json.RawMessage
@@ -59,7 +59,7 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 			return err
 		}
 		if state != "running" {
-			return errors.New("整理会话未运行，不能提交验收")
+			return errors.New("review session is not running; cannot submit validation")
 		}
 		var ids, reads []int64
 		if err := json.Unmarshal(idsRaw, &ids); err != nil {
@@ -75,20 +75,20 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 		decisions := map[int64]findingReviewDecision{}
 		for _, d := range a.Decisions {
 			if _, ok := decisions[d.FindingID]; ok {
-				return errors.New("重复的判断编号")
+				return errors.New("duplicate decision finding_id")
 			}
 			decisions[d.FindingID] = d
 		}
 		if strings.TrimSpace(a.Summary) == "" || len(ids) != len(decisions) {
-			return errors.New("须提供总结和覆盖全部所选记录的逐条判断")
+			return errors.New("must provide a summary and per-record judgments covering all selected records")
 		}
 		for _, id := range ids {
 			d, ok := decisions[id]
 			if !ok || !read[id] {
-				return fmt.Errorf("请先 get_finding_record 读取并判断所选记录 #%d", id)
+				return fmt.Errorf("please call get_finding_record first to read and judge selected record #%d", id)
 			}
 			if strings.TrimSpace(d.Reason) == "" || strings.TrimSpace(d.RootCauseEvidence) == "" {
-				return fmt.Errorf("记录 #%d 缺少判断理由或根因证据", id)
+				return fmt.Errorf("record #%d is missing reason or root_cause_evidence", id)
 			}
 			var cid sql.NullInt64
 			if err := tx.QueryRow(`SELECT m.case_id FROM findings f LEFT JOIN finding_case_members m ON m.finding_id=f.id WHERE f.id=$1`, id).Scan(&cid); err != nil {
@@ -97,7 +97,7 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 			switch d.Verdict {
 			case "merged":
 				if !cid.Valid {
-					return fmt.Errorf("记录 #%d 尚未归并", id)
+					return fmt.Errorf("record #%d has not been merged yet", id)
 				}
 			case "suggested":
 				var pending bool
@@ -107,14 +107,14 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 					return err
 				}
 				if !pending {
-					return fmt.Errorf("记录 #%d 须先保存待确认建议", id)
+					return fmt.Errorf("record #%d must first be saved in a pending suggestion", id)
 				}
 			case "independent":
 				if cid.Valid {
-					return fmt.Errorf("记录 #%d 已在文件夹中，不能声明为独立", id)
+					return fmt.Errorf("record #%d is already in a folder and cannot be declared independent", id)
 				}
 			default:
-				return errors.New("无效判断类型")
+				return errors.New("invalid verdict type")
 			}
 			if cid.Valid {
 				var active bool
@@ -122,7 +122,7 @@ func (s *Server) saveFindingReviewConclusion(ctx context.Context, conv int64, a 
 					return err
 				}
 				if !active {
-					return fmt.Errorf("文件夹 #%d 已关闭", cid.Int64)
+					return fmt.Errorf("folder #%d is closed", cid.Int64)
 				}
 			}
 		}

@@ -1,0 +1,405 @@
+"use client";
+
+import React from "react";
+import { toast } from "sonner";
+import { useLiveTranslation } from "@/i18n/use-live-translation";
+import { api } from "@/lib/api";
+import type { ProxyV2Entry, ProxyV2Stats, ProxyV2SwitchLog, ProxyV2Config } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  RefreshCw, Upload, Trash2, Play, CheckCircle2, XCircle,
+  Loader2, Globe, Activity, Zap, Settings, MapPin, Clock,
+} from "lucide-react";
+
+type ProxyStatus = "healthy" | "unhealthy" | "unknown" | "disabled";
+
+export default function ProxyPoolPage() {
+  const { t } = useLiveTranslation();
+  const [proxies, setProxies] = React.useState<ProxyV2Entry[]>([]);
+  const [stats, setStats] = React.useState<ProxyV2Stats>({
+    total: 0, healthy: 0, unhealthy: 0, unknown: 0, disabled: 0,
+    avg_latency_ms: 0, total_requests: 0, success_rate: 0,
+  });
+  const [logs, setLogs] = React.useState<ProxyV2SwitchLog[]>([]);
+  const [config, setConfig] = React.useState<ProxyV2Config | null>(null);
+  const [importText, setImportText] = React.useState("");
+  const [testing, setTesting] = React.useState<string | null>(null);
+  const [testingAll, setTestingAll] = React.useState(false);
+  const [importing, setImporting] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+
+  const [rotationStrategy, setRotationStrategy] = React.useState<string>("round_robin");
+  const [rotationInterval, setRotationInterval] = React.useState("30");
+  const [autoRotateOnFailure, setAutoRotateOnFailure] = React.useState(true);
+  const [healthInterval, setHealthInterval] = React.useState("30");
+  const [maxFailures, setMaxFailures] = React.useState("3");
+  const [cooldown, setCooldown] = React.useState("60");
+  const [sessionSticky, setSessionSticky] = React.useState(true);
+
+
+  const fetchData = React.useCallback(async () => {
+    try {
+      const [proxyList, poolStats, switchLogs, poolConfig] = await Promise.all([
+        api.proxyV2.listProxies().catch(() => []),
+        api.proxyV2.getStats().catch(() => null),
+        api.proxyV2.getLogs().catch(() => []),
+        api.proxyV2.getConfig().catch(() => null),
+      ]);
+      setProxies(Array.isArray(proxyList) ? proxyList : []);
+      if (poolStats) {
+        setStats({
+          total: poolStats.total ?? 0,
+          healthy: poolStats.healthy ?? 0,
+          unhealthy: poolStats.unhealthy ?? 0,
+          unknown: (poolStats as any).untested ?? poolStats.unknown ?? 0,
+          disabled: poolStats.disabled ?? 0,
+          avg_latency_ms: poolStats.avg_latency_ms ?? 0,
+          total_requests: poolStats.total_requests ?? 0,
+          success_rate: poolStats.success_rate ?? 0,
+        });
+      }
+      setLogs(Array.isArray(switchLogs) ? switchLogs : []);
+      if (poolConfig) {
+        setConfig(poolConfig);
+        setRotationStrategy(poolConfig.rotation_strategy || "round_robin");
+        setRotationInterval(String(poolConfig.rotation_interval_seconds ?? 30));
+        setAutoRotateOnFailure(Boolean(poolConfig.auto_rotate_on_failure));
+        setHealthInterval(String(poolConfig.health_check_interval_seconds ?? 30));
+        setMaxFailures(String(poolConfig.max_consecutive_failures ?? 3));
+        setCooldown(String(poolConfig.cooldown_seconds ?? 60));
+        setSessionSticky(Boolean(poolConfig.session_sticky));
+      }
+    } catch {
+      // Ignore transient fetch errors so Next.js dev overlay does not pop up
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { fetchData(); }, [fetchData]);
+
+  const handleImport = async () => {
+    if (!importText.trim()) {
+      toast.warning("Please enter at least one proxy URL to import.");
+      return;
+    }
+    setImporting(true);
+    try {
+      const r = await api.proxyV2.importProxies({ data: importText });
+      if (r.errors?.length) {
+        toast.warning(`Imported ${r.imported} proxies with ${r.errors.length} errors`);
+      } else {
+        toast.success(`Successfully imported ${r.imported} proxies`);
+      }
+      setImportText("");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Import failed: " + (e?.message || String(e)));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleTestOne = async (id: string) => {
+    setTesting(id);
+    try {
+      const res = await api.proxyV2.proxyAction(id, "test");
+      if (res?.success === false) {
+        toast.error(`Proxy check failed: ${res.error || "unreachable"}`);
+      } else {
+        toast.success(`Proxy healthy${res?.latency_ms ? ` (${res.latency_ms}ms)` : ""}`);
+      }
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Proxy test failed: " + (e?.message || String(e)));
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const handleTestAll = async () => {
+    if (proxies.length === 0) {
+      toast.warning("No proxies in the pool to test. Import proxies first.");
+      return;
+    }
+    setTestingAll(true);
+    try {
+      await api.proxyV2.testAll();
+      toast.success("Completed health check for all proxies");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Test all failed: " + (e?.message || String(e)));
+    } finally {
+      setTestingAll(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.proxyV2.deleteProxy(id);
+      toast.success("Proxy deleted");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Delete failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleActivate = async (id: string) => {
+    try {
+      await api.proxyV2.proxyAction(id, "activate");
+      toast.success("Proxy status toggled");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Toggle failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleClearFailed = async () => {
+    if (proxies.length === 0) {
+      toast.warning("No proxies in the pool.");
+      return;
+    }
+    try {
+      const r = await api.proxyV2.clearFailed();
+      toast.success(`${r.cleared ?? 0} failed proxies removed`);
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Clear failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    try {
+      await api.proxyV2.updateConfig({
+        enabled: config?.enabled ?? false,
+        rotation_strategy: rotationStrategy as any,
+        rotation_interval_seconds: parseInt(rotationInterval) || 30,
+        auto_rotate_on_failure: autoRotateOnFailure,
+        health_check_interval_seconds: parseInt(healthInterval) || 30,
+        max_consecutive_failures: parseInt(maxFailures) || 3,
+        cooldown_seconds: parseInt(cooldown) || 60,
+        session_sticky: sessionSticky,
+      });
+      toast.success("Proxy pool configuration saved");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Save failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleForceRotate = async () => {
+    if (proxies.length === 0) {
+      toast.warning("No proxies in the pool to rotate. Import proxies first.");
+      return;
+    }
+    try {
+      await api.proxyV2.forceRotate();
+      toast.success("Rotated to next available proxy");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Rotate failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const statusBadge = (status: ProxyStatus) => {
+    const healthy = { label: "Healthy", variant: "default" as const, icon: <CheckCircle2 className="w-3 h-3" /> };
+    const failed = { label: "Failed", variant: "destructive" as const, icon: <XCircle className="w-3 h-3" /> };
+    const unknown = { label: "Unknown", variant: "secondary" as const, icon: <span className="w-3 h-3">?</span> };
+    const disabled = { label: "Disabled", variant: "outline" as const, icon: <span className="w-3 h-3">-</span> };
+    const map: Record<ProxyStatus, { label: string; variant: "default" | "destructive" | "secondary" | "outline"; icon: React.ReactNode }> = { healthy, unhealthy: failed, unknown, disabled };
+    const s = map[status] || unknown;
+    return <Badge variant={s.variant} className="gap-1">{s.icon}<span>{s.label}</span></Badge>;
+  };
+
+  return (
+    <div className="space-y-6 p-6" translate="no">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Globe className="w-6 h-6" />
+            <span>{t("proxyPool.title")}</span>
+            {loading && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+          </h1>
+          <p className="text-muted-foreground text-sm mt-1">{t("proxyPool.subtitle")}</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handleForceRotate}><Zap className="w-4 h-4 mr-1" /><span>Force Rotate</span></Button>
+          <Button variant="outline" size="sm" onClick={fetchData}><RefreshCw className="w-4 h-4 mr-1" /><span>Refresh</span></Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        {[
+          { label: "Total", value: stats.total, Icon: Globe },
+          { label: "Healthy", value: stats.healthy, Icon: CheckCircle2 },
+          { label: "Failed", value: stats.unhealthy, Icon: XCircle },
+          { label: "Untested", value: stats.unknown, Icon: Activity },
+          { label: "Disabled", value: stats.disabled, Icon: null },
+        ].map(({ label, value, Icon }) => (
+          <Card key={label}>
+            <CardContent className="pt-4 pb-4 flex items-center gap-3">
+              {Icon && <Icon className="w-5 h-5 text-muted-foreground" />}
+              <div><p className="text-2xl font-bold">{value}</p><p className="text-xs text-muted-foreground">{label}</p></div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Tabs defaultValue="proxies">
+        <TabsList>
+          <TabsTrigger value="proxies">Proxies ({stats.total})</TabsTrigger>
+          <TabsTrigger value="config">Configuration</TabsTrigger>
+          <TabsTrigger value="logs">Switch Logs ({logs.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="proxies">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Proxy List</CardTitle>
+              <div className="flex gap-2">
+                <Dialog>
+                  <DialogTrigger asChild><Button size="sm"><Upload className="w-4 h-4 mr-1" /> Import</Button></DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader><DialogTitle>Import Proxies</DialogTitle></DialogHeader>
+                    <div className="space-y-4">
+                      <p className="text-sm text-muted-foreground">One proxy per line. Supports http://, https://, socks5://</p>
+                      <Textarea rows={10} placeholder="http://user:pass@host:port|Name|Remark" value={importText} onChange={(e) => setImportText(e.target.value)} />
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" onClick={() => setImportText("")}><span>Clear</span></Button>
+                        <Button onClick={handleImport} disabled={importing || !importText.trim()}>
+                          {importing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Upload className="w-4 h-4 mr-1" />}
+                          <span>Import</span>
+                        </Button>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+                <Button size="sm" variant="outline" onClick={handleTestAll} disabled={testingAll}>
+                  {testingAll ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Play className="w-4 h-4 mr-1" />}
+                  <span>Test All</span>
+                </Button>
+                <Button size="sm" variant="destructive" onClick={handleClearFailed}>
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  <span>Clear Failed</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!proxies.length ? (<p className="text-center text-muted-foreground py-12">No proxies. Import some to get started!</p>) : (
+                <Table>
+                  <TableHeader><TableRow>
+                    <TableHead>Status</TableHead><TableHead>URL</TableHead><TableHead>Name</TableHead>
+                    <TableHead>Type</TableHead><TableHead>Location</TableHead><TableHead>Latency</TableHead>
+                    <TableHead>Fails</TableHead><TableHead>Last Check</TableHead><TableHead className="text-right">Actions</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>{proxies.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell>{statusBadge(p.status as ProxyStatus)}</TableCell>
+                      <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{p.url}</code></TableCell>
+                      <TableCell className="max-w-[120px] truncate" title={p.name}>{p.name || "-"}</TableCell>
+                      <TableCell><Badge variant="outline">{p.proxy_type}</Badge></TableCell>
+                      <TableCell>{p.country ? (<span className="flex items-center gap-1 text-xs"><MapPin className="w-3 h-3" />{[p.country, p.city].filter(Boolean).join(", ")}</span>) : "-"}</TableCell>
+                      <TableCell>{p.latency_ms > 0 ? p.latency_ms + "ms" : "-"}</TableCell>
+                      <TableCell>{p.consecutive_failures > 0 ? (<span className="text-red-500">{p.consecutive_failures}</span>) : "0"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{p.last_checked_at ? new Date(p.last_checked_at).toLocaleString() : "-"}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => handleActivate(p.id)}>Activate</Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleTestOne(p.id)} disabled={testing === p.id}>{testing === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}</Button>
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => handleDelete(p.id)}><Trash2 className="w-3 h-3" /></Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}</TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="config">
+          <Card>
+            <CardHeader><CardTitle>Pool Configuration</CardTitle></CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <h3 className="font-medium flex items-center gap-2"><Settings className="w-4 h-4" /> Rotation Settings</h3>
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <Label>Enable Proxy Pool</Label>
+                    <Switch checked={config?.enabled ?? false} onCheckedChange={(checked) => setConfig(prev => prev ? {...prev, enabled: checked} : null)} />
+                  </div>
+                  <div>
+                    <Label>Rotation Strategy</Label>
+                    <Select value={rotationStrategy} onValueChange={setRotationStrategy}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="round_robin">Round Robin</SelectItem>
+                        <SelectItem value="random">Random</SelectItem>
+                        <SelectItem value="least_used">Least Used</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label>Rotation Interval (seconds)</Label><Input type="number" min={5} value={rotationInterval} onChange={e => setRotationInterval(e.target.value)} /></div>
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <Label>Auto-rotate on Failure</Label>
+                    <Switch checked={autoRotateOnFailure} onCheckedChange={setAutoRotateOnFailure} />
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border p-3">
+                    <Label>Session Sticky</Label>
+                    <Switch checked={sessionSticky} onCheckedChange={setSessionSticky} />
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <h3 className="font-medium flex items-center gap-2"><Activity className="w-4 h-4" /> Health Check</h3>
+                  <div><Label>Check Interval (seconds)</Label><Input type="number" min={10} value={healthInterval} onChange={e => setHealthInterval(e.target.value)} /></div>
+                  <div><Label>Max Consecutive Failures</Label><Input type="number" min={1} value={maxFailures} onChange={e => setMaxFailures(e.target.value)} /></div>
+                  <div><Label>Cooldown (seconds)</Label><Input type="number" min={10} value={cooldown} onChange={e => setCooldown(e.target.value)} /></div>
+                </div>
+              </div>
+              <Button onClick={handleSaveConfig}>Save Configuration</Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="logs">
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="w-4 h-4" /> Switch History</CardTitle></CardHeader>
+            <CardContent>
+              {!logs.length ? (<p className="text-center text-muted-foreground py-8">No switch logs yet</p>) : (
+                <Table>
+                  <TableHeader><TableRow>
+                    <TableHead>Time</TableHead><TableHead>From</TableHead><TableHead>To</TableHead><TableHead>Reason</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>{[...logs].reverse().map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="text-xs">{new Date(log.timestamp).toLocaleString()}</TableCell>
+                      <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{log.from_proxy_id || "(direct)"}</code></TableCell>
+                      <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{log.to_proxy_id || "(direct)"}</code></TableCell>
+                      <TableCell>{log.reason}</TableCell>
+                    </TableRow>
+                  ))}</TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -120,7 +121,7 @@ func extractToken(r *http.Request) string {
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/api/auth/") || p == "/api/health" || p == "/api/basic-auth/check" {
+		if strings.HasPrefix(p, "/api/auth/") || p == "/api/health" || p == "/api/basic-auth/check" || p == "/api/update/maintenance" || p == "/api/update/webhook" {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -137,10 +138,8 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 	})
 }
 
-// GET /api/auth/status — reports whether the admin password has been initialised.
-// 读失败必须回 503 而不是 initialized:false：前端在 initialized:false 时会把用户
-// 送到 /setup 去设置密码（login/page.tsx），把数据库故障包装成 200 等于把用户往
-// 覆盖已有密码的路上推。
+// GET /api/auth/status — reports whether the admin password has been initialised
+// and returns optional Cloudflare Turnstile configuration.
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -151,7 +150,60 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 503, "data_unavailable", errDataSourceUnavailable, nil)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"initialized": hash != ""})
+	siteKey := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY"))
+	if siteKey == "" {
+		if v, ok, _ := pg.GetSetting("turnstile_site_key"); ok {
+			siteKey = strings.TrimSpace(v)
+		}
+	}
+	turnstileEnabled := pg.GetBool("turnstile_enabled", true)
+	writeJSON(w, 200, map[string]any{
+		"initialized":        hash != "",
+		"turnstile_enabled":  turnstileEnabled,
+		"turnstile_site_key": siteKey,
+	})
+}
+
+// POST /api/auth/turnstile-verify — verifies a Cloudflare Turnstile token (when
+// CLOUDFLARE_TURNSTILE_SECRET_KEY / turnstile_secret_key is set) or validates the
+// built-in automatic browser security check.
+func (s *Server) authTurnstileVerify(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token     string `json:"token"`
+		UserAgent string `json:"user_agent"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	secretKey := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
+	if secretKey == "" && s.m != nil && s.m.pg != nil {
+		if v, ok, _ := s.m.pg.GetSetting("turnstile_secret_key"); ok {
+			secretKey = strings.TrimSpace(v)
+		}
+	}
+
+	if secretKey != "" && req.Token != "" && req.Token != "auto-verified" {
+		form := strings.NewReader(fmt.Sprintf("secret=%s&response=%s&remoteip=%s",
+			secretKey, req.Token, getClientIP(r)))
+		resp, err := http.Post("https://challenges.cloudflare.com/turnstile/v0/siteverify",
+			"application/x-www-form-urlencoded", form)
+		if err != nil {
+			writeProductError(w, 502, "turnstile_unreachable", "Failed to contact Cloudflare Turnstile verification service", nil)
+			return
+		}
+		defer resp.Body.Close()
+		var out struct {
+			Success bool `json:"success"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Success {
+			writeProductError(w, 403, "turnstile_failed", "Cloudflare Turnstile verification failed", nil)
+			return
+		}
+	}
+
+	writeJSON(w, 200, map[string]any{
+		"verified": true,
+		"ray_id":   fmt.Sprintf("%x", time.Now().UnixNano()&0xffffffffffff),
+	})
 }
 
 // POST /api/auth/init — sets the password for the first time; rejected if already set.

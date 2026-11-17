@@ -835,6 +835,7 @@ func (s *Server) importProxyPool(w http.ResponseWriter, r *http.Request) {
 	// Probe imported/unchecked entries before any pool-wide pause decision. The
 	// task state is untouched until this round has completed.
 	s.proxyPoolTick()
+	s.syncV1ToProxyPoolV2()
 	entriesOut, activeOut, logs := s.m.ProxyPoolSnapshot()
 	writeJSON(w, 200, map[string]any{"entries": entriesOut, "active_id": activeOut, "switch_log": logs, "errors": errs})
 }
@@ -1017,6 +1018,7 @@ func (s *Server) updateProxyPool(w http.ResponseWriter, r *http.Request) {
 		if recoverPaused {
 			s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 		}
+		s.syncV1ToProxyPoolV2()
 		writeJSON(w, 200, map[string]any{"entry": out})
 		return
 	}
@@ -1112,6 +1114,7 @@ func (s *Server) deleteProxyPool(w http.ResponseWriter, r *http.Request) {
 	if recoverPaused {
 		s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 	}
+	s.syncV1ToProxyPoolV2()
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -1125,6 +1128,7 @@ func (s *Server) activateProxyPool(w http.ResponseWriter, r *http.Request) {
 	if before != id {
 		s.proxyReconnectSuccess()
 	}
+	s.syncV1ToProxyPoolV2()
 	writeJSON(w, 200, map[string]any{"ok": true, "active_id": id, "active_proxy": maskSecrets(s.m.GlobalProxy())})
 }
 
@@ -1139,11 +1143,12 @@ func (s *Server) testProxyPoolEntry(w http.ResponseWriter, r *http.Request) {
 			if res.OK {
 				s.reconcileProxyPoolAfterProbe(id == s.m.proxyPoolActiveID())
 			}
+			s.syncV1ToProxyPoolV2()
 			writeJSON(w, 200, map[string]any{"ok": res.OK, "result": res})
 			return
 		}
 	}
-	writeErr(w, 404, "代理不存在")
+	writeErr(w, 404, "Proxy not found")
 }
 
 func (s *Server) testAllProxyPool(w http.ResponseWriter, r *http.Request) {
@@ -1155,6 +1160,7 @@ func (s *Server) testAllProxyPool(w http.ResponseWriter, r *http.Request) {
 	}
 	s.proxyPoolTickLocked(true)
 	s.proxyPoolTickMu.Unlock()
+	s.syncV1ToProxyPoolV2()
 	entries, active, logs := s.m.ProxyPoolSnapshot()
 	writeJSON(w, 200, map[string]any{"entries": entries, "active_id": active, "switch_log": logs})
 }

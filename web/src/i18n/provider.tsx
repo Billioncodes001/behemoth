@@ -7,6 +7,26 @@ import { I18nextProvider } from "react-i18next";
 import { LOCALE_STORAGE_KEY, resolveLocale } from "./config";
 import { createAppI18n } from "./instance";
 
+// Guard React's reconciler against third-party browser extensions (e.g. Google
+// Translate, Grammarly) that wrap text nodes in <font>/<span> elements and
+// otherwise trigger NotFoundError during removeChild / insertBefore.
+if (typeof window !== "undefined" && typeof Node !== "undefined") {
+  const origRemoveChild = Node.prototype.removeChild;
+  Node.prototype.removeChild = function <T extends Node>(child: T): T {
+    if (child.parentNode !== this) {
+      return child;
+    }
+    return origRemoveChild.call(this, child) as T;
+  };
+  const origInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function <T extends Node>(newNode: T, referenceNode: Node | null): T {
+    if (referenceNode && referenceNode.parentNode !== this) {
+      return newNode;
+    }
+    return origInsertBefore.call(this, newNode, referenceNode) as T;
+  };
+}
+
 export function AppI18nProvider({ children }: { children: ReactNode }) {
   // A per-tree instance keeps prerenders isolated. The first browser render
   // matches static HTML; saved preferences are applied after hydration.

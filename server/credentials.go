@@ -30,7 +30,7 @@ func (s *Server) seedCredentialProcessor() {
 		return
 	}
 	if a == nil {
-		a, err = s.m.pg.CreateAgent(db.CredentialAgentKey, "凭据整理", "Agent 开关控制的凭据整理：拆分账号、密码、Token、Cookie，仅分析已上报内容，不主动登录。可独立绑定模型；每条最多一次模型调用。")
+		a, err = s.m.pg.CreateAgent(db.CredentialAgentKey, "Credential Processor", "Agent-controlled credential processing: splits usernames, passwords, tokens, and cookies; analyzes only reported content without active login. Can bind its own model; at most one model call per entry.")
 		if err != nil {
 			return
 		}

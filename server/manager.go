@@ -649,11 +649,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	}
 	// Asset auto-completion engine (§5): HTTP probes routed through the recording
 	// proxy (via m.ProxyAddr, which honors the traffic-capture toggle).
-	m.trafficOn = pg.GetBool(settingTrafficCapture, false)
-	// LLM 录制开关（默认关）。录制器每次调用时读取此标志。
-	m.llmRecOn = pg.GetBool(settingLLMRecord, false)
-	// Load persisted web-search config (default: off, ddgs).
-	m.webSearchOn = pg.GetBool(settingWebSearchOn, false)
+	m.trafficOn = pg.GetBool(settingTrafficCapture, true)
+	m.llmRecOn = pg.GetBool(settingLLMRecord, true)
+	m.webSearchOn = pg.GetBool(settingWebSearchOn, true)
 	if v, ok, _ := pg.GetSetting(settingWebSearchBackend); ok && v != "" {
 		m.webSearchBackend = v
 	} else {

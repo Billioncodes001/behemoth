@@ -118,6 +118,14 @@ export const settingsMessages = {
     "MCP 服务端 访问令牌 token 智能体 编排 外部 bot 审计 白名单 来源 IP",
     "mcp server access token agent orchestration external bot audit allowlist whitelist source ip",
   ],
+  "settings.keywords.search": [
+    "搜索 引擎 Google DuckDuckGo Tavily SearXNG Sploitus 多引擎 Web Search",
+    "search engine google duckduckgo tavily searxng sploitus multi-engine web search pentagi",
+  ],
+  "settings.keywords.browser": [
+    "浏览器 截图 内容抓取 Chrome 自动化 Browser screenshot content scraper automation",
+    "browser screenshot content scraper chrome automation pentagi",
+  ],
   "settings.trafficCapture": ["流量捕获", "Traffic capture"],
   "settings.trafficCaptureHelp": [
     "开启后，所有 Agent 的 HTTP 流量经记录代理全量落库，并向 Agent 注入 traffic_search / traffic_get 工具与代理配置（提示词含代理说明）。",
@@ -767,4 +775,8 @@ export const settingsMessages = {
   "settings.egressCheck.direct": ["① 直连出口 IP", "① Direct outbound IP"],
   "settings.egressCheck.global": ["② 全局代理出口 IP", "② Global proxy outbound IP"],
   "settings.noGlobalProxy": ["未配置全局代理", "No global proxy configured"],
+  "settings.keywords.security": [
+    "隐匿 反检测 UA轮换 请求头随机化 TLS指纹 IOC封禁 限流",
+    "stealth anti-detect user-agent rotation header randomization tls fingerprint ioc blocklist rate limit",
+  ],
 } satisfies Record<string, readonly [string, string]>;

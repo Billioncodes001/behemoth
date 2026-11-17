@@ -20,6 +20,7 @@ import { LayoutControls } from "./sidebar/layout-controls";
 import { SearchDialog } from "./sidebar/search-dialog";
 import { ThemeSwitcher } from "./sidebar/theme-switcher";
 import { UpdateBadge } from "./update-badge";
+import { MaintenanceOverlay } from "@/components/maintenance-overlay";
 
 // 任务详情页保持原样：它自带头部/Tabs 与内边距，这里不再叠加全局头部和 padding。
 function isFullBleed(pathname: string) {
@@ -39,6 +40,7 @@ function isFullBleed(pathname: string) {
 export function MainContent({ children }: { children: ReactNode }) {
   return (
     <EgressIpProvider>
+      <MaintenanceOverlay />
       <MainContentInner>{children}</MainContentInner>
     </EgressIpProvider>
   );

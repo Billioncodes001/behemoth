@@ -116,6 +116,78 @@ function AgentGridCard({ agent, onOpen, onDeleted }: { agent: Agent; onOpen: () 
   );
 }
 
+type AgentPreset = {
+  label: string;
+  key: string;
+  name: string;
+  description: string;
+  prompt: string;
+};
+
+const AGENT_PRESETS: AgentPreset[] = [
+  {
+    label: "Web App Pentester",
+    key: "web_pentester",
+    name: "Web Application Pentester",
+    description: "End-to-end OWASP Top 10 & WSTG v4.2 web penetration testing specialist.",
+    prompt:
+      "You are an expert Web Application Penetration Tester operating under explicit authorization.\n\n" +
+      "## Methodology (OWASP WSTG v4.2 / Top 10)\n" +
+      "1. **Recon & Fingerprinting**: Identify frameworks, headers, hidden routes, and JS bundle endpoints.\n" +
+      "2. **Auth & Access Control**: Test IDOR/BOLA, vertical privilege escalation, session handling, and JWT weaknesses.\n" +
+      "3. **Injection & Input Validation**: Probe SQLi, NoSQLi, SSTI, command injection, XXE, SSRF, and XSS.\n" +
+      "4. **Adversarial Verification**: Confirm every finding with a non-destructive proof-of-concept and raw HTTP evidence.\n",
+  },
+  {
+    label: "API Security Auditor",
+    key: "api_auditor",
+    name: "API Security Specialist",
+    description: "REST, GraphQL, and gRPC security specialist focused on OWASP API Security Top 10 (BOLA/BFLA/Mass Assignment).",
+    prompt:
+      "You are an API Security Specialist assessing REST and GraphQL endpoints per OWASP API Top 10 2023.\n\n" +
+      "## Core Focus\n" +
+      "- Discover OpenAPI/Swagger schemas, GraphQL introspection, and undocumented v1/v2 routes.\n" +
+      "- Test BOLA (ID swapping), BFLA (admin endpoints with low-priv tokens), and Mass Assignment.\n" +
+      "- Verify rate limits, batching abuse, SSRF in webhooks, and broken token validation.\n",
+  },
+  {
+    label: "Recon & OSINT",
+    key: "recon_specialist",
+    name: "Recon & Attack Surface Analyst",
+    description: "External attack surface discovery, subdomain enumeration, port scanning, and CVE fingerprinting.",
+    prompt:
+      "You are an External Attack Surface & Reconnaissance Analyst following MITRE ATT&CK Recon tactics.\n\n" +
+      "## Workflow\n" +
+      "- Enumerate subdomains, DNS records, certificate transparency logs, and virtual hosts.\n" +
+      "- Fingerprint exposed services, versions, admin panels, and cloud storage buckets.\n" +
+      "- Map versions to known CVEs/CISA KEV and prioritize high-value targets.\n",
+  },
+  {
+    label: "Cloud & Container",
+    key: "cloud_auditor",
+    name: "Cloud & Infrastructure Auditor",
+    description: "AWS/GCP/Azure metadata, Kubernetes, Docker, IAM misconfiguration, and CIS benchmark auditor.",
+    prompt:
+      "You are a Cloud & Container Security Auditor.\n\n" +
+      "## Workflow\n" +
+      "- Check for exposed `.env`, `.git`, actuator endpoints, Docker sockets, and Kubernetes APIs.\n" +
+      "- Safely test SSRF vectors against cloud metadata services and verify IAM/storage permissions.\n" +
+      "- Produce clear remediation guidance aligned with CIS benchmarks.\n",
+  },
+  {
+    label: "Exploit & PoC Verifier",
+    key: "poc_verifier",
+    name: "Exploit & PoC Verifier",
+    description: "Adversarial verification specialist that reproduces candidate vulnerabilities and eliminates false positives.",
+    prompt:
+      "You are an Adversarial Exploit & PoC Verifier.\n\n" +
+      "## Rules\n" +
+      "- Never trust scanner banners or version numbers alone; reproduce every finding with a minimal, harmless PoC.\n" +
+      "- Record exact HTTP requests, responses, and reproduction commands.\n" +
+      "- Reject false positives and clearly document root causes.\n",
+  },
+];
+
 function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) {
   const { ui } = useUITranslation();
 
@@ -123,17 +195,22 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
   const [key, setKey] = React.useState("");
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [presetPrompt, setPresetPrompt] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
   async function create() {
     setBusy(true);
     try {
       const a = await api.createAgent(key.trim(), name.trim(), description.trim());
+      if (presetPrompt.trim()) {
+        await api.saveAgentPrompt(a.key, presetPrompt.trim()).catch(() => {});
+      }
       toast.success(ui("screen.e3157f17b61218", { v0: a.name }));
       setOpen(false);
       setKey("");
       setName("");
       setDescription("");
+      setPresetPrompt("");
       onCreated(a.key);
     } catch (e) {
       toast.error(ui("screen.39e6db7a1b1a1d") + (e as Error).message);
@@ -158,6 +235,28 @@ function CreateAgentDialog({ onCreated }: { onCreated: (key: string) => void }) 
           <DialogDescription>{ui("screen.fbc0da0804457d")}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">
+          <div className="grid gap-1.5">
+            <Label className="text-muted-foreground text-xs">Quick Template</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {AGENT_PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  onClick={() => {
+                    setKey(preset.key);
+                    setName(preset.name);
+                    setDescription(preset.description);
+                    setPresetPrompt(preset.prompt);
+                  }}
+                  className={`rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
+                    key === preset.key ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="grid gap-1.5">
             <Label htmlFor="agent-key">Key</Label>
             <Input

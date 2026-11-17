@@ -196,7 +196,7 @@ var (
 	ErrActiveLLMProfileDelete      = errors.New("cannot delete the active LLM profile; activate another profile first")
 	ErrLLMProfileReferencesChanged = errors.New("LLM profile references changed while deleting; retry the request")
 	ErrLLMProfileNotFound          = errors.New("LLM profile not found")
-	ErrJevProfileJudgeOnly         = errors.New("Jev System One 配置仅可用于拦截判定模型，不能用于对话或任务")
+	ErrJevProfileJudgeOnly         = errors.New("Jev System One profile can only be used as an interception judge model, not for chat or tasks")
 )
 
 func (d *DB) DeleteProfile(id int64) error {
@@ -777,14 +777,14 @@ func (d *DB) SeedPromptIfEmpty(agentID int64, tmpl string) error {
 	if cur.Valid {
 		return nil // already seeded or user-edited → leave it
 	}
-	_, err := d.SavePrompt(agentID, tmpl, "内置默认", "system")
+	_, err := d.SavePrompt(agentID, tmpl, "Built-in default", "system")
 	return err
 }
 
 // ResetPromptToDefault appends the code-default template as a new version and
-// points current at it — the explicit "恢复为内置默认" action.
+// points current at it — the explicit "Reset to built-in default" action.
 func (d *DB) ResetPromptToDefault(agentID int64, tmpl string) (int, error) {
-	return d.SavePrompt(agentID, tmpl, "恢复为内置默认", "system")
+	return d.SavePrompt(agentID, tmpl, "Reset to built-in default", "system")
 }
 
 // SavePrompt appends a new version and points current_prompt_id at it.

@@ -33,7 +33,7 @@ export function LanguageSwitcher() {
           aria-label={t("language.change")}
         >
           <Languages className="size-4" aria-hidden="true" />
-          <span className="hidden sm:inline">{locale === "en" ? "English" : "简体中文"}</span>
+          <span className="hidden sm:inline">{locale === "zh-CN" ? "简体中文" : "English"}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label={t("language.label")}>

@@ -41,11 +41,11 @@ var wrapupTurnDefaults = map[string]int{
 
 const genericWrapupTurns = 10
 
-const plannerWrapUpDefault = "你本轮规划的步数即将用尽——注意只是【这一轮】结束,系统之后仍会随态势变化再次唤醒你继续规划,并非任务终止,你无需在此收束整个规划。请把本轮已经想清楚的结论落地、别让这一轮白跑,但也【不要为了收尾硬凑意图】(本轮 0 个意图仍是完全正常的结果)：(1) 若已判断出【当前就该派发】的探索方向,用一次 add_intent 批量提交(想好的别憋着不发);(2) 对已被某发现/事实证明达成的目标,调 prove_goal 标记 met(别漏判);(3) 若识别出需要分步的串行利用链,用 TodoWrite 记下,便于下次唤醒接着派。做完直接结束本轮,无需输出总结文本。"
+const plannerWrapUpDefault = "Your turn budget for this planning round is almost exhausted — note that only [this round] is ending, and the system will wake you again as the graph changes. Persist any conclusions you have already reached this round without forcing unnecessary intents (0 intents is completely normal): (1) if you have identified exploration directions that should be dispatched now, submit them in a single batch call to add_intent; (2) for any goal proven met by a finding or fact, call prove_goal to mark it met; (3) if you identified a multi-step serial exploit chain, record it via TodoWrite for the next wake-up. Then finish this round directly without outputting summary text."
 
-const mainAgentWrapUpDefault = "你的步数即将用尽,本次交互就要结束。不要再发起新的探索/操作。请**单独用一句话纯文本**向用户总结当前进展、关键结论,以及建议的下一步。"
+const mainAgentWrapUpDefault = "Your turn budget is almost exhausted and this interaction is about to end. Do not initiate any new exploration or actions. Please **output a single plain-text sentence** to the user summarizing current progress, key conclusions, and recommended next steps."
 
-const genericWrapUpDefault = "你即将因预算耗尽被终止。请先把已完成但未落库的结果写回,再**单独用一句话纯文本**总结你做了什么、得到哪些关键结论(这句会作为本次运行的结果展示)。"
+const genericWrapUpDefault = "You are about to be terminated because your budget is exhausted. First write back any completed but unpersisted results, then **output a single plain-text sentence** summarizing what you did and the key conclusions (this sentence will be displayed as the result of this run)."
 
 // WrapupDefault returns the built-in default wrap-up prompt for an agent key —
 // used by the admin UI as the "restore default" value and empty-field placeholder.
@@ -117,9 +117,9 @@ var taskTimeoutWrapupDefaults = map[string]string{
 	"planner": plannerTaskTimeoutDefault,
 }
 
-const workerTaskTimeoutDefault = "**整个任务已到达超时上限，即将结束**（不是你这次 run 的预算，是整场探索到点了）。这是最后机会：(1) 把你已识别但还没写回的内容【全部】落库——新资产 insert_assets、探索结论/事实 record_fact、确认漏洞 report_finding；(2) 不要再启动任何新命令/探测；(3) **最后单独用一句话纯文本**总结你在本意图上的关键结论。"
+const workerTaskTimeoutDefault = "**The entire task has reached its timeout limit and is about to end** (not just this run's budget, the whole engagement is concluding). This is your final opportunity: (1) write back [all] findings and observations you have identified but not yet persisted — new assets via insert_assets, exploration conclusions/facts via record_fact, confirmed vulnerabilities via report_finding; (2) do not start any new commands or probes; (3) **finish with a single plain-text sentence** summarizing your key conclusion on this intent."
 
-const plannerTaskTimeoutDefault = "**整个任务已到达超时上限，即将结束**（不是本轮，是整个任务终止）。请基于当前【全部】事实与发现，做最后一次目标判定：对已被证据证明达成的目标调 prove_goal 标记 met（别漏判）。**不要再生成任何新意图**（此时派意图也不会再被执行）。判定完即收束，无需输出总结文本。"
+const plannerTaskTimeoutDefault = "**The entire task has reached its timeout limit and is about to end** (the whole task is terminating). Based on [all] current facts and findings, perform one final goal evaluation: call prove_goal to mark any goal proven by evidence as met. **Do not generate any new intents** (they will not be executed). Finish immediately after judging goals without outputting summary text."
 
 // TaskTimeoutWrapupDefault 返回某 agent 的任务超时内置默认收尾词（供后台占位/恢复默认）。
 func TaskTimeoutWrapupDefault(agentKey string) string {

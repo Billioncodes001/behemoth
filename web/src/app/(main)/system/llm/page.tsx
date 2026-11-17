@@ -2,6 +2,7 @@
 import * as React from "react";
 
 import {
+  CheckCircle2Icon,
   Loader2Icon,
   PlugZapIcon,
   PlusIcon,
@@ -37,6 +38,33 @@ import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_componen
 // 存库空字符串 = 该字段【不发送】；Radix Select 不接受空 value，故 UI 用 "none"
 // 哨兵表示不发送，存取时与 "" 互转（NONE / fromStore / toStore）。
 const NONE = "none";
+
+// LLMProviderPreset pre-fills the new-profile form for a known provider.
+// Local runtimes (Ollama / LM Studio / vLLM) speak the OpenAI Chat Completions
+// wire format on a localhost port, so they map to format "openai" with a
+// loopback base URL and no real API key.
+type LLMProviderPreset = {
+  name: string;
+  hint: string;
+  format: "anthropic" | "openai" | "openai-responses";
+  baseUrl: string;
+  model: string;
+};
+
+const LLM_PRESETS: LLMProviderPreset[] = [
+  { name: "Cline", hint: "api.cline.bot/api/v1 — Cline Official Gateway (Claude / GPT / Gemini / Kimi)", format: "openai", baseUrl: "https://api.cline.bot/api/v1", model: "anthropic/claude-opus-4.5" },
+  { name: "Cline (Kimi)", hint: "api.moonshot.ai/v1 — Cline Moonshot Kimi preset", format: "openai", baseUrl: "https://api.moonshot.ai/v1", model: "kimi-latest" },
+  { name: "Anthropic", hint: "api.anthropic.com — Claude models", format: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
+  { name: "OpenAI", hint: "api.openai.com/v1 — GPT models", format: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5" },
+  { name: "DeepSeek", hint: "api.deepseek.com — V3 / R1 models", format: "openai", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { name: "Google Gemini", hint: "OpenAI-compatible Gemini endpoint", format: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-pro" },
+  { name: "OpenRouter", hint: "openrouter.ai — gateway to 300+ models", format: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4.5" },
+  { name: "Ollama (local)", hint: "Local Ollama at localhost:11434 — run: ollama serve, then ollama pull qwen2.5:14b", format: "openai", baseUrl: "http://localhost:11434/v1", model: "qwen2.5:14b" },
+  { name: "LM Studio (local)", hint: "Local LM Studio server at localhost:1234 — start the server tab in LM Studio", format: "openai", baseUrl: "http://localhost:1234/v1", model: "qwen3-30b-a3b-abliterated" },
+  { name: "vLLM (local)", hint: "Self-hosted vLLM OpenAI server at localhost:8000", format: "openai", baseUrl: "http://localhost:8000/v1", model: "meta-llama/Llama-3.1-8B-Instruct" },
+  { name: "Ollama (remote)", hint: "Ollama on another machine — edit the host after preset", format: "openai", baseUrl: "http://ollama-host:11434/v1", model: "qwen2.5:14b" },
+];
+
 const fromStore = (v?: string) => (v ? v : NONE);
 const toStore = (v: string) => (v === NONE ? "" : v);
 const THINKING_TYPES = (ui: UITranslate): { value: string; label: string }[] => [
@@ -312,11 +340,13 @@ function PoolSheet({
 
 function ProfileSheet({
   profile,
+  initialPreset,
   open,
   onOpenChange,
   onSaved,
 }: {
   profile: LLMProfile | null; // null = 新建
+  initialPreset?: LLMProviderPreset | null;
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onSaved: (id: string) => void;
@@ -348,11 +378,61 @@ function ProfileSheet({
   const [models, setModels] = React.useState<string[]>([]);
   const [loadingModels, setLoadingModels] = React.useState(false);
   const [modelsOpen, setModelsOpen] = React.useState(false);
+  const [verifiedSig, setVerifiedSig] = React.useState<string | null>(null);
+  const [verifiedLatencyMs, setVerifiedLatencyMs] = React.useState<number | null>(null);
+
+  const connectionSig = React.useMemo(
+    () =>
+      JSON.stringify([
+        format,
+        model.trim(),
+        baseUrl.trim(),
+        proxy.trim(),
+        apiKey,
+        toStore(thinkingType),
+        toStore(effort),
+        streaming,
+        sessionHeaderKey.trim(),
+      ]),
+    [format, model, baseUrl, proxy, apiKey, thinkingType, effort, streaming, sessionHeaderKey],
+  );
+  const isConnectionVerified = verifiedSig !== null && verifiedSig === connectionSig && model.trim().length > 0;
 
   // 每次打开时从传入的 profile 灌一遍表单（新建则重置为默认值）。抽屉关掉再打开
   // 就是一次干净的开始，不会留下上一个配置的残影。
   React.useEffect(() => {
     if (!open) return;
+    if (!profile && initialPreset) {
+      setName(initialPreset.name);
+      setFormat(initialPreset.format);
+      setModel(initialPreset.model);
+      setBaseUrl(initialPreset.baseUrl);
+      setProxy("");
+      setRps("0");
+      setRpm("0");
+      setCw("0");
+      setThinkingType(NONE);
+      setEffort(NONE);
+      setPriority("0");
+      setPoolExclude(false);
+      setStreaming(true);
+      setMaxTokens("0");
+      setMaxTokensField(NONE);
+      setSessionHeaderKey("");
+      setRetry(ZERO_OVERRIDE);
+      if (initialPreset.name.startsWith("Ollama") || initialPreset.name.includes("(local)")) {
+        setApiKey("ollama");
+        setKeyHint("local (not required locally)");
+      } else {
+        setApiKey("");
+        setKeyHint("");
+      }
+      setModels([]);
+      setModelsOpen(false);
+      setVerifiedSig(null);
+      setVerifiedLatencyMs(null);
+      return;
+    }
     setName(profile?.name ?? "");
     setFormat(
       profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "jev"
@@ -378,12 +458,20 @@ function ProfileSheet({
     setKeyHint(profile?.api_key_hint ?? "");
     setModels([]);
     setModelsOpen(false);
-  }, [open, profile]);
+    setVerifiedSig(null);
+    setVerifiedLatencyMs(null);
+  }, [open, profile, initialPreset]);
 
   const profileId = profile ? Number(profile.id) : undefined;
 
+  const isLocalEndpoint = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(\/|$)/i.test(baseUrl.trim());
+
   async function loadModels() {
     if (loadingModels) return;
+    if (!isLocalEndpoint && !apiKey.trim() && !keyHint && format !== "jev") {
+      toast.warning("Please enter an API Key before fetching models from this provider.");
+      return;
+    }
     setLoadingModels(true);
     setModels([]);
     try {
@@ -402,8 +490,16 @@ function ProfileSheet({
     }
   }
 
-  async function testConnection() {
-    if (testing) return;
+  async function testConnection(): Promise<boolean> {
+    if (testing) return false;
+    if (!model.trim()) {
+      toast.error(ui("screen.423920e9ada105"));
+      return false;
+    }
+    if (!isLocalEndpoint && !apiKey.trim() && !keyHint && format !== "jev") {
+      toast.error("API Key is required to test this provider.");
+      return false;
+    }
     setTesting(true);
     try {
       // 用配置实际会跑的思考参数来测，这样不支持该字段的模型在这里就失败，
@@ -421,13 +517,23 @@ function ProfileSheet({
         sessionHeaderKey.trim(),
       );
       // 回复内容一并展示：看得见模型确实说了话，才算和会话里跑通是一回事。
-      if (r.ok)
+      if (r.ok) {
+        setVerifiedSig(connectionSig);
+        setVerifiedLatencyMs(r.latency_ms ?? null);
         toast.success(ui("screen.93d5dd1011a40a", { v0: r.latency_ms ?? "?", v1: r.model ?? model }), {
           description: r.reply ? ui("screen.38982edd7ce6f4", { v0: r.reply }) : undefined,
         });
-      else toast.error(ui("screen.a94694b2dddf55", { v0: r.error ?? ui("screen.4d8c1c5b428307") }));
+        return true;
+      }
+      setVerifiedSig(null);
+      setVerifiedLatencyMs(null);
+      toast.error(ui("screen.a94694b2dddf55", { v0: r.error ?? ui("screen.4d8c1c5b428307") }));
+      return false;
     } catch (e) {
+      setVerifiedSig(null);
+      setVerifiedLatencyMs(null);
       toast.error(ui("screen.51787f607cb79a", { v0: (e as Error).message }));
+      return false;
     } finally {
       setTesting(false);
     }
@@ -436,6 +542,10 @@ function ProfileSheet({
   async function save() {
     if (!name.trim() || !model.trim()) {
       toast.error(ui("screen.423920e9ada105"));
+      return;
+    }
+    if (!isConnectionVerified) {
+      toast.error("Please test and verify the model connection before saving.");
       return;
     }
     if (saving) return;
@@ -525,6 +635,40 @@ function ProfileSheet({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Provider presets: one click fills format/base URL/default model.
+              Ollama & friends run locally via their OpenAI-compatible endpoint,
+              so no API key is needed (a dummy key is stored to enter the pool). */}
+          <div className="grid gap-2">
+            <Label>Quick preset</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {LLM_PRESETS.map((p) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  title={p.hint}
+                  onClick={() => {
+                    setFormat(p.format);
+                    setModel(p.model);
+                    setBaseUrl(p.baseUrl);
+                    if (isNew && !name.trim()) setName(p.name);
+                    if (p.name.startsWith("Ollama") || p.name.includes("(local)")) {
+                      setApiKey("ollama");
+                      setKeyHint("local (not required locally)");
+                    }
+                  }}
+                  className={`rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
+                    format === p.format && baseUrl === p.baseUrl ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
+                  }`}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Local models: start Ollama (<code>ollama serve</code>) and pull a model (<code>ollama pull qwen2.5:14b</code>), then click the Ollama preset. LM Studio / vLLM work the same way via their OpenAI-compatible servers.
+            </p>
           </div>
 
           <div className="grid gap-2">
@@ -770,16 +914,34 @@ function ProfileSheet({
           <ProfileRetryFields value={retry} onChange={setRetry} />
         </div>
 
-        <div className="flex gap-2 border-t px-4 py-3">
-          <Button variant="outline" onClick={testConnection} disabled={testing}>
-            {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
-            {testing ? ui("screen.105a9082c346f9") : ui("screen.0a98a48eaaac41")}
-          </Button>
-          <Button onClick={save} disabled={saving} className="flex-1">
-            {saving && <Loader2Icon className="animate-spin" />}
-            {!saving && (isNew ? <PlusIcon /> : <SaveIcon />)}
-            {isNew ? ui("screen.50ef2f4cf6a469") : ui("screen.a3030bf8f16dc6")}
-          </Button>
+        <div className="flex flex-col gap-2 border-t px-4 py-3">
+          {isConnectionVerified ? (
+            <div className="flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2Icon className="size-3.5 shrink-0" />
+              <span>
+                Connection verified{verifiedLatencyMs != null ? ` (${verifiedLatencyMs} ms)` : ""} — ready to save
+              </span>
+            </div>
+          ) : (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+              Connection test required: click Test to verify this model endpoint before saving.
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => void testConnection()} disabled={testing}>
+              {testing ? <Loader2Icon className="animate-spin" /> : <PlugZapIcon />}
+              {testing ? ui("screen.105a9082c346f9") : ui("screen.0a98a48eaaac41")}
+            </Button>
+            <Button
+              onClick={save}
+              disabled={saving || testing || !isConnectionVerified || !name.trim() || !model.trim()}
+              className="flex-1"
+            >
+              {saving && <Loader2Icon className="animate-spin" />}
+              {!saving && (isNew ? <PlusIcon /> : <SaveIcon />)}
+              {isNew ? ui("screen.50ef2f4cf6a469") : ui("screen.a3030bf8f16dc6")}
+            </Button>
+          </div>
         </div>
       </SheetContent>
     </Sheet>
@@ -798,8 +960,10 @@ export default function LLMPage() {
   // 「编辑 X」闪成「新建」。editing = null 表示新建。
   const [editOpen, setEditOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<LLMProfile | null>(null);
-  const openEditor = React.useCallback((p: LLMProfile | null) => {
+  const [selectedPreset, setSelectedPreset] = React.useState<LLMProviderPreset | null>(null);
+  const openEditor = React.useCallback((p: LLMProfile | null, preset: LLMProviderPreset | null = null) => {
     setEditing(p);
+    setSelectedPreset(preset);
     setEditOpen(true);
   }, []);
 
@@ -831,13 +995,19 @@ export default function LLMPage() {
     return m;
   }, [pool]);
 
+  const [activatingId, setActivatingId] = React.useState<string | null>(null);
+
   async function activate(id: string, name: string) {
+    if (activatingId) return;
+    setActivatingId(id);
     try {
       await api.activateLLMProfile(id);
       toast.success(ui("screen.9656bea09ffebb", { v0: name }));
       await load();
     } catch (e) {
       toast.error(ui("screen.183c05557317c6", { v0: (e as Error).message }));
+    } finally {
+      setActivatingId(null);
     }
   }
 
@@ -964,12 +1134,13 @@ export default function LLMPage() {
                         size="sm"
                         variant="outline"
                         className="flex-1"
-                        disabled={p.is_default || p.format === "jev"}
+                        disabled={p.is_default || p.format === "jev" || activatingId === p.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           void activate(p.id, p.name);
                         }}
                       >
+                        {activatingId === p.id && <Loader2Icon className="mr-1 size-3.5 animate-spin" />}
                         {p.is_default
                           ? ui("screen.8f3c822f08add5")
                           : p.format === "jev"
@@ -993,8 +1164,26 @@ export default function LLMPage() {
               );
             })}
             {profiles.length === 0 && (
-              <div className="col-span-full rounded-lg border border-dashed p-10 text-center text-muted-foreground text-sm">
-                {ui("screen.39aa348a5b607d")}
+              <div className="col-span-full space-y-4 rounded-lg border border-dashed p-8 text-center">
+                <p className="text-muted-foreground text-sm">{ui("screen.39aa348a5b607d")}</p>
+                <div className="mx-auto max-w-2xl space-y-2">
+                  <p className="text-xs font-medium text-foreground">Quick-Start Model Templates</p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {LLM_PRESETS.map((preset) => (
+                      <Button
+                        key={preset.name}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        title={preset.hint}
+                        onClick={() => openEditor(null, preset)}
+                      >
+                        <PlusIcon className="mr-1 size-3.5" />
+                        <span>{preset.name}</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -1005,7 +1194,13 @@ export default function LLMPage() {
         </TabsContent>
       </Tabs>
 
-      <ProfileSheet profile={editing} open={editOpen} onOpenChange={setEditOpen} onSaved={() => void load()} />
+      <ProfileSheet
+        profile={editing}
+        initialPreset={selectedPreset}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={() => void load()}
+      />
       <PoolSheet open={poolOpen} onOpenChange={setPoolOpen} pool={pool} onReload={loadPool} />
     </div>
   );

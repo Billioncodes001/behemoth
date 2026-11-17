@@ -18,24 +18,24 @@ func intelligenceEnabled() bool { return IntelligenceEnabled != nil && Intellige
 func intelligenceSchema() map[string]any {
 	return obj(map[string]any{
 		"kind":       map[string]any{"type": "string", "enum": []string{"credential", "lead", "sensitive_data"}},
-		"title":      str("简短标题，禁止包含密码、Token 或敏感数据原文"),
-		"content":    str("实际获取的信息。凭据用 JSON 字符串保存账号/密码/Token 等；敏感数据仅少量样例、数量和文件位置，禁止整库粘贴"),
-		"evidence":   str("真实来源：命令/请求/响应/文件位置及关键观察，禁止编造"),
+		"title":      str("Short title; must NOT contain raw passwords, tokens, or sensitive data"),
+		"content":    str("Actual information obtained. For credentials, store username/password/token etc. as a JSON string; for sensitive data, include only a few samples, count, and file location — do NOT paste entire databases"),
+		"evidence":   str("Authentic source: command/request/response/file location and key observations; never fabricate"),
 		"confidence": map[string]any{"type": "string", "enum": []string{"observed", "inferred"}},
-		"status":     str("凭据 unverified/verified/invalid；线索 pending/in_progress/dismissed/converted；敏感数据 suspected/confirmed/dismissed。省略时保守默认，verified 需要真实认证成功证据"),
+		"status":     str("Credentials: unverified/verified/invalid; Leads: pending/in_progress/dismissed/converted; Sensitive data: suspected/confirmed/dismissed. Defaults conservatively when omitted; 'verified' requires proof of successful authentication"),
 		"asset_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
 	}, "kind", "title", "content", "evidence", "confidence")
 }
 func (t *ToolSet) saveIntelligence(ctx context.Context, nodeID int64, in db.IntelligenceInput) (int64, error) {
 	if !intelligenceEnabled() || IntelligenceRecord == nil {
-		return 0, fmt.Errorf("任务情报自动记录已关闭")
+		return 0, fmt.Errorf("automatic task intelligence recording is disabled")
 	}
 	taskID := t.taskID
 	if taskID <= 0 {
 		taskID = RunInfoFrom(ctx).TaskID
 	}
 	if taskID <= 0 {
-		return 0, fmt.Errorf("任务情报需要当前任务上下文")
+		return 0, fmt.Errorf("task intelligence requires current task context")
 	}
 	if nodeID <= 0 {
 		nodeID = t.ownerNode
@@ -50,10 +50,10 @@ func (t *ToolSet) saveIntelligence(ctx context.Context, nodeID int64, in db.Inte
 	return id, err
 }
 func (t *ToolSet) recordIntelligence() actool.CoreTool {
-	return writeTool("record_intelligence", "记录当前任务实际获取的凭据、重要线索或敏感数据。任务和执行来源由系统绑定；凭据发现不等于验证成功。重复记录会去重。已有 insert_assets.auth 自动登记凭据，无需重复调用。", intelligenceSchema(), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
+	return writeTool("record_intelligence", "Record credentials, important leads, or sensitive data actually obtained in the current task. Task and execution source are bound by the system; discovering credentials does not equal successful verification. Duplicate records are deduplicated. Service credentials in insert_assets.auth are registered automatically, so no duplicate call is needed.", intelligenceSchema(), func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 		var in db.IntelligenceInput
 		if err := json.Unmarshal(raw, &in); err != nil {
-			return actool.Errorf("无效情报参数"), nil
+			return actool.Errorf("invalid intelligence parameters"), nil
 		}
 		id, err := t.saveIntelligence(ctx, 0, in)
 		if err != nil {
@@ -82,7 +82,7 @@ func intelligenceWorkflow(ctx context.Context, tools []actool.CoreTool) ([]actoo
 				if props != nil {
 					delete(props, "intelligence")
 					if enabled {
-						props["intelligence"] = map[string]any{"type": "array", "maxItems": 20, "description": "随事实一次写回情报，字段与 record_intelligence 相同；无需再单独调用该工具", "items": intelligenceSchema()}
+						props["intelligence"] = map[string]any{"type": "array", "maxItems": 20, "description": "Write back intelligence together with the fact in a single call (same fields as record_intelligence; no separate call needed)", "items": intelligenceSchema()}
 						hasFact = true
 					}
 				}
@@ -93,7 +93,7 @@ func intelligenceWorkflow(ctx context.Context, tools []actool.CoreTool) ([]actoo
 	}
 	guide := ""
 	if enabled && (hasRecord || hasFact) {
-		guide = "\n\n**任务情报记录已开启**：发现凭据、值得跟进的线索或真实敏感数据时立即结构化写回，不等用户追问；结束前检查遗漏。record_fact 可附 intelligence 数组一起写回，每条事实/批量 facts 的元素均支持；单独记录用 record_intelligence（若可用）。insert_assets.auth 已由后端自动登记，勿重复调用。只记录新增、有价值的信息，普通指纹/端口状态仍仅作 fact。title 禁止包含秘密原文；正文带实际内容和来源。凭据默认未验证，只有真实认证成功才标 verified；推断必须 inferred；敏感数据写类型、数量、少量样例、文件位置，勿粘整库。"
+		guide = "\n\n**Task Intelligence Recording (Enabled)**: When you discover credentials, actionable leads, or authentic sensitive data, write them back in structured form immediately without waiting for user prompts; check for any missed items before finishing. `record_fact` can attach an `intelligence` array (supported on both single facts and elements of batch `facts`); or call `record_intelligence` directly if available. `insert_assets.auth` is automatically registered by the backend — do not duplicate. Record only new, high-value information; ordinary fingerprints/port states remain regular facts. `title` must NOT contain raw secrets; `content` carries the actual values and `evidence` the source. Credentials default to `unverified` and should only be marked `verified` when authentication actually succeeds; inferred items must use `inferred`; sensitive data should note type, count, a few samples, and file location — never paste entire databases."
 	}
 	return out, guide
 }

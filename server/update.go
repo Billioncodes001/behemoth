@@ -14,31 +14,34 @@ import (
 	"github.com/Autumn-27/artex/selfupdate"
 )
 
-// 页面一键更新的 HTTP 面。真正的下载/校验/换装逻辑全在 selfupdate 包里，
-// 这里只负责鉴权边界、并发互斥、进度广播，以及把"该退出了"告诉 main。
+// HTTP handler for one-click in-app updates. The actual download/verify/replace logic
+// lives entirely in the selfupdate package; this file only handles auth boundaries,
+// concurrency mutex, progress broadcasting, and signaling main to exit.
 //
-// 重启不由本进程完成：暂存好新版本后进程以 selfupdate.ExitRestart 退出，
-// 由守护脚本（start.sh / start.bat，Docker 下是 ENTRYPOINT）重新拉起。
+// Restart is NOT performed by this process: after staging the new version, the process
+// exits via selfupdate.ExitRestart, and the daemon script (start.sh / start.bat, or
+// ENTRYPOINT in Docker) relaunches it.
 
-// restartCh 在升级就绪或回滚完成后关闭，main 收到后以 ExitRestart 退出。
+// restartCh is closed when upgrade is ready or rollback completes; main then exits via ExitRestart.
 var (
 	restartOnce sync.Once
 	restartCh   = make(chan struct{})
 )
 
-// RestartRequested 返回一个在"请退出并让守护进程重新拉起我"时关闭的 channel。
+// RestartRequested returns a channel that closes when we should exit and let the daemon restart us.
 func RestartRequested() <-chan struct{} { return restartCh }
 
 func requestRestart() { restartOnce.Do(func() { close(restartCh) }) }
 
-// bootState 是本次启动时 selfupdate.Bootstrap 的结论（升级成功 / 刚回滚 /
-// 暂存件被丢弃），由 main 注入，供 /api/update/check 如实告诉前端上一次升级的下场。
+// bootState captures the result of selfupdate.Bootstrap at startup (upgrade succeeded /
+// just rolled back / staged file was discarded), injected by main, exposed to frontend
+// via /api/update/check so it can show the outcome of the last upgrade attempt.
 var (
 	bootStateMu sync.Mutex
 	bootState   selfupdate.State
 )
 
-// SetBootUpdateState 由 main 在启动时调用一次。
+// SetBootUpdateState is called once by main at startup.
 func SetBootUpdateState(st selfupdate.State) {
 	bootStateMu.Lock()
 	defer bootStateMu.Unlock()
@@ -51,11 +54,13 @@ func bootUpdateState() selfupdate.State {
 	return bootState
 }
 
-// releaseCache 缓存 GitHub 的最新版本查询结果。
+// releaseCache caches GitHub's latest version query result.
 //
-// 顶栏的"有新版本"提示会在每次整页加载时查一次，而未认证的 GitHub API 是
-// 每 IP 每小时 60 次——不缓存的话，多开几个标签页或刷几次页面就把配额耗光了，
-// 之后真想更新时反而查不动。用户显式点"检查更新"时可以 force 绕过缓存。
+// The "new version available" banner in the top bar queries once per full page load,
+// and unauthenticated GitHub API allows 60 requests/IP/hour -- without caching,
+// opening a few tabs or refreshing a few times would exhaust the quota, preventing
+// real update checks later. Users explicitly clicking "check for updates" can force
+// bypass the cache.
 type releaseCache struct {
 	mu      sync.Mutex
 	rel     *selfupdate.Release
@@ -136,7 +141,7 @@ var updHub = &updateHub{
 	subs: map[chan updateProgress]struct{}{},
 }
 
-// begin 抢占升级权限，已在进行中则返回 false。
+// begin acquires the upgrade lock; returns false if already in progress.
 func (h *updateHub) begin(version string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -144,20 +149,20 @@ func (h *updateHub) begin(version string) bool {
 		return false
 	}
 	h.running = true
-	h.cur = updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "准备中…", Version: version}
+	h.cur = updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "Preparing...", Version: version}
 	h.fanout(h.cur)
 	return true
 }
 
-// finish 结束一次升级。err 为 nil 表示暂存成功，等待重启。
+// finish ends an upgrade cycle. err=nil means staging succeeded, waiting for restart.
 func (h *updateHub) finish(err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.running = false
 	if err != nil {
-		h.cur = updateProgress{Phase: selfupdate.PhaseFailed, Percent: -1, Message: "更新失败", Error: err.Error(), Version: h.cur.Version}
+		h.cur = updateProgress{Phase: selfupdate.PhaseFailed, Percent: -1, Message: "Update failed", Error: err.Error(), Version: h.cur.Version}
 	} else {
-		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: "新版本已就绪，正在重启…", Version: h.cur.Version}
+		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: "New version ready, restarting...", Version: h.cur.Version}
 	}
 	h.fanout(h.cur)
 }

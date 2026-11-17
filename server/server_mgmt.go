@@ -26,6 +26,7 @@ import (
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept/jev"
 	"github.com/Autumn-27/artex/llmhttp"
+	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
 )
@@ -854,7 +855,33 @@ func (s *Server) pgResetTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true})
 		return
 	}
-	writeErr(w, 404, "非内置工具或不存在: "+key)
+	retestAgents, _ := json.Marshal([]string{db.FindingRetestAgentKey})
+	for _, t := range s.findingRetestTools() {
+		if t.Name() != key {
+			continue
+		}
+		schema, _ := json.Marshal(t.InputSchema())
+		if err := pg.UpsertToolForce(t.Name(), t.Description(), schema, retestAgents); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	trafficAgents, _ := json.Marshal([]string{"worker"})
+	for _, t := range traffic.SeedToolMetas() {
+		if t.Name() != key {
+			continue
+		}
+		schema, _ := json.Marshal(t.InputSchema())
+		if err := pg.UpsertToolForce(t.Name(), t.Description(), schema, trafficAgents); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	writeErr(w, 404, "not a built-in tool or does not exist: "+key)
 }
 
 // ---------- mcp ----------
@@ -1807,6 +1834,83 @@ func (s *Server) pgListProfiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"profiles": llmProfileDTOs(ps)})
 }
 
+// isLocalLLMEndpoint reports whether rawURL points to a local or private LLM
+// runtime (e.g. Ollama on :11434, LM Studio on :1234, vLLM on :8000) that does
+// not require an API key.
+func isLocalLLMEndpoint(rawURL string) bool {
+	u := strings.ToLower(strings.TrimSpace(rawURL))
+	if u == "" {
+		return false
+	}
+	return strings.Contains(u, "localhost") ||
+		strings.Contains(u, "127.0.0.1") ||
+		strings.Contains(u, "[::1]") ||
+		strings.Contains(u, ":11434") ||
+		strings.Contains(u, ":1234") ||
+		strings.Contains(u, "ollama")
+}
+
+// verifyProfileConnection runs a live connection test for the given profile
+// configuration so a profile cannot be saved or activated unless it can
+// actually reach and complete a request against its target model endpoint.
+func (s *Server) verifyProfileConnection(ctx context.Context, p *db.LLMProfile) error {
+	apiKey := strings.TrimSpace(p.APIKey)
+	baseURL := strings.TrimSpace(p.BaseURL)
+	model := strings.TrimSpace(p.Model)
+	proxy := strings.TrimSpace(p.Proxy)
+	sessionHeaderKey := strings.TrimSpace(p.SessionHeaderKey)
+
+	if p.ID != 0 && s.m != nil && s.m.pg != nil {
+		if existing, err := s.m.pg.ProfileByID(p.ID); err == nil && existing != nil {
+			if apiKey == "" {
+				apiKey = existing.APIKey
+			}
+			if baseURL == "" {
+				baseURL = existing.BaseURL
+			}
+			if model == "" {
+				model = existing.Model
+			}
+			if proxy == "" {
+				proxy = existing.Proxy
+			}
+			if sessionHeaderKey == "" {
+				sessionHeaderKey = existing.SessionHeaderKey
+			}
+		}
+	}
+	if apiKey == "" && isLocalLLMEndpoint(baseURL) {
+		apiKey = "ollama"
+	}
+	if apiKey == "" {
+		return fmt.Errorf("API Key is required")
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if strings.TrimSpace(p.Format) == "jev" {
+		if model == "" {
+			model = jev.DefaultModel
+		}
+		_, _, err := (jev.Config{
+			BaseURL: baseURL,
+			APIKey:  apiKey,
+			Model:   model,
+			Proxy:   proxy,
+		}).TestConnection(testCtx)
+		return err
+	}
+
+	cfg := agent.ConfigFrom(p.Format, model, baseURL, apiKey, proxy)
+	cfg.ThinkingType = p.ThinkingType
+	cfg.ReasoningEffort = p.ReasoningEffort
+	cfg.Stream = p.Streaming
+	cfg.SessionHeaderKey = sessionHeaderKey
+	_, _, err := agent.TestConnection(testCtx, cfg)
+	return err
+}
+
 func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -1828,6 +1932,12 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	p := body.LLMProfile
 	p.APIKey = body.APIKey
+	if strings.TrimSpace(p.APIKey) == "" && p.ID == 0 && isLocalLLMEndpoint(p.BaseURL) {
+		p.APIKey = "ollama"
+		if p.APIKeyHint == "" {
+			p.APIKeyHint = "local (no key required)"
+		}
+	}
 	p.Streaming = body.Streaming == nil || *body.Streaming
 	// 输出上限:负数无意义,归零(= 不发送该字段)。字段名开关只有 Chat Completions
 	// 用得上——anthropic 与 openai-responses 各自定死了字段名,存下来只会误导后续读者,
@@ -1838,6 +1948,11 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 	if p.Format != "openai" || p.MaxTokensField != llm.MaxTokensFieldCompletion {
 		p.MaxTokensField = ""
 	}
+	// Mandatory connection test before saving any LLM profile.
+	if err := s.verifyProfileConnection(r.Context(), &p); err != nil {
+		writeErr(w, http.StatusBadRequest, "Connection test failed before saving: "+err.Error())
+		return
+	}
 	id, err := pg.SaveProfile(&p)
 	if err != nil {
 		if errors.Is(err, db.ErrJevProfileJudgeOnly) {
@@ -1846,6 +1961,13 @@ func (s *Server) pgSaveProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, 500, err.Error())
 		return
+	}
+	// If no active default profile exists yet and this is a chat-capable profile,
+	// automatically activate it once verified so it can be used immediately.
+	if p.Format != "jev" {
+		if active, err := pg.ActiveProfile(); err == nil && active == nil {
+			_ = pg.SetActiveProfile(id)
+		}
 	}
 	// Editing a profile rebuilds any task pinned to it on its next round. Reapply
 	// the active profile too: the global fallback and explicit task chains must
@@ -1953,6 +2075,20 @@ func (s *Server) pgActivateProfile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	prof, err := pg.ProfileByID(body.ID)
+	if err != nil || prof == nil {
+		writeErr(w, 404, "LLM profile not found")
+		return
+	}
+	if prof.Format == "jev" {
+		writeErr(w, 400, db.ErrJevProfileJudgeOnly.Error())
+		return
+	}
+	// Mandatory connection test before a profile can be activated for use.
+	if err := s.verifyProfileConnection(r.Context(), prof); err != nil {
+		writeErr(w, http.StatusBadRequest, "Connection test failed; cannot activate profile: "+err.Error())
+		return
+	}
 	if err := pg.SetActiveProfile(body.ID); err != nil {
 		if errors.Is(err, db.ErrJevProfileJudgeOnly) {
 			writeErr(w, 400, err.Error())
@@ -2028,8 +2164,11 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 			apiKey = p.APIKey
 		}
 	}
+	if apiKey == "" && isLocalLLMEndpoint(req.BaseURL) {
+		apiKey = "ollama"
+	}
 	if apiKey == "" {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key"})
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "API Key is required"})
 		return
 	}
 
@@ -2170,8 +2309,8 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 // (see agent.nowStr, rendered fresh each turn), so a prompt may always reference
 // {{.Now}} — e.g. subtract it from a fixed start stamp to reason about elapsed time.
 var globalPromptVars = []db.PromptVar{
-	{Name: "Now", Description: "服务端当前时间（每次运行实时刷新；可与固定起始时间相减判断已用时长）", Example: "2026-08-11 14:30:00 CST", Source: "runtime"},
-	{Name: "DataDir", Description: "服务端数据根目录（所有任务/会话产物的根；各 agent 实际写盘在其下的子目录，如 <DataDir>/<taskID>）", Example: "/app/data", Source: "runtime"},
+	{Name: "Now", Description: "Current server time (refreshed live on each run; can be compared against a start timestamp to determine elapsed time)", Example: "2026-08-11 14:30:00 UTC", Source: "runtime"},
+	{Name: "DataDir", Description: "Server root data directory (root of all task/session artifacts; each agent writes to its own subdirectory under it, e.g. <DataDir>/<taskID>)", Example: "/app/data", Source: "runtime"},
 }
 
 // withGlobalVars appends the universal runtime vars onto an agent's own catalog,

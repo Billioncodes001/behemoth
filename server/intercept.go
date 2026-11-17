@@ -44,15 +44,15 @@ func (s *Server) wireInterceptReviewer() {
 			}
 		}
 		if profileID == 0 {
-			return intercept.Decision{}, fmt.Errorf("未配置可用的裁判模型")
+			return intercept.Decision{}, fmt.Errorf("no reviewer model configured")
 		}
 		profile, err := s.m.pg.ProfileByID(profileID)
 		if err != nil || profile == nil {
-			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("裁判模型 profile %d 不可用", profileID)
+			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("reviewer model profile %d unavailable", profileID)
 		}
 		if profile.Format == "jev" {
 			if strings.TrimSpace(profile.APIKey) == "" {
-				return intercept.Decision{ProfileID: profileID}, fmt.Errorf("Jev 判定模型未设置 API Key")
+				return intercept.Decision{ProfileID: profileID}, fmt.Errorf("Jev judge model has no API key configured")
 			}
 			ctx = llmrec.WithWorker(ctx, judgeWorkerLane)
 			started := time.Now()
@@ -64,7 +64,7 @@ func (s *Server) wireInterceptReviewer() {
 		}
 		prov, _, ok := s.providerForProfile(profileID)
 		if !ok {
-			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("裁判模型 profile %d 不可用", profileID)
+			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("reviewer model profile %d unavailable", profileID)
 		}
 		// Tag this call's usage as the "judge" lane so the config page can report
 		// how much the fallback approval has spent, separate from model profiles.
@@ -75,7 +75,7 @@ func (s *Server) wireInterceptReviewer() {
 		}
 		v := intercept.ParseVerdict(text)
 		if v.Action == "" {
-			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("模型裁决格式无效，必须包含裁决、实际操作、成功后的后果和命中规则")
+			return intercept.Decision{ProfileID: profileID}, fmt.Errorf("invalid verdict format: must include action, operation, consequences and matched rules")
 		}
 		return intercept.Decision{Action: v.Action, Message: v.Reason, ProfileID: profileID}, nil
 	})
@@ -375,12 +375,12 @@ func interceptFilterParams(q url.Values) (db.InterceptApprovalFilter, error) {
 		CreatedTo:      q.Get("to"),
 	}
 	if utf8.RuneCountInString(filter.Search) > 200 {
-		return filter, fmt.Errorf("q 不能超过 200 个字符")
+		return filter, fmt.Errorf("search query cannot exceed 200 characters")
 	}
 	if strings.HasPrefix(filter.Search, "#") {
 		id, err := strconv.ParseInt(strings.TrimPrefix(filter.Search, "#"), 10, 64)
 		if err != nil || id <= 0 {
-			return filter, fmt.Errorf("审批编号必须为 # 后接正整数")
+			return filter, fmt.Errorf("approval ID must be # followed by a positive integer")
 		}
 	}
 	for name, value := range map[string]string{"from": filter.CreatedFrom, "to": filter.CreatedTo} {
@@ -388,21 +388,21 @@ func interceptFilterParams(q url.Values) (db.InterceptApprovalFilter, error) {
 			continue
 		}
 		if _, err := time.Parse("2006-01-02", value); err != nil {
-			return filter, fmt.Errorf("%s 必须是 YYYY-MM-DD 日期", name)
+			return filter, fmt.Errorf("%s must be a YYYY-MM-DD date", name)
 		}
 	}
 	if filter.CreatedFrom != "" && filter.CreatedTo != "" && filter.CreatedFrom > filter.CreatedTo {
-		return filter, fmt.Errorf("from 不能晚于 to")
+		return filter, fmt.Errorf("'from' date cannot be later than 'to' date")
 	}
 	switch filter.Status {
 	case "", "pending", "allowed", "denied", "timeout":
 	default:
-		return filter, fmt.Errorf("status 必须是 pending、allowed、denied 或 timeout")
+		return filter, fmt.Errorf("status must be pending, allowed, denied, or timeout")
 	}
 	switch filter.DecisionSource {
 	case "", "model", "rule", "manual", "unknown":
 	default:
-		return filter, fmt.Errorf("decision_source 必须是 model、rule、manual 或 unknown")
+		return filter, fmt.Errorf("decision_source must be model, rule, manual, or unknown")
 	}
 	return filter, nil
 }
@@ -584,29 +584,29 @@ type interceptRuleReq struct {
 
 func validateInterceptRuleReq(req interceptRuleReq) error {
 	if req.Name == "" {
-		return fmt.Errorf("name 不能为空")
+		return fmt.Errorf("name cannot be empty")
 	}
 	switch req.MatchTarget {
 	case "tool_name", "tool_input":
 	default:
-		return fmt.Errorf("match_target 必须是 tool_name 或 tool_input")
+		return fmt.Errorf("match_target must be tool_name or tool_input")
 	}
 	switch req.MatchType {
 	case "string", "regex":
 	default:
-		return fmt.Errorf("match_type 必须是 string 或 regex")
+		return fmt.Errorf("match_type must be string or regex")
 	}
 	if req.Pattern == "" {
-		return fmt.Errorf("pattern 不能为空")
+		return fmt.Errorf("pattern cannot be empty")
 	}
 	switch req.Action {
 	case "allow", "deny", "ask":
 	default:
-		return fmt.Errorf("action 必须是 allow、deny 或 ask")
+		return fmt.Errorf("action must be allow, deny, or ask")
 	}
 	if req.MatchType == "regex" {
 		if _, err := regexp.Compile(req.Pattern); err != nil {
-			return fmt.Errorf("pattern 不是有效正则：%w", err)
+			return fmt.Errorf("pattern is not a valid regex: %w", err)
 		}
 	}
 	return nil

@@ -120,6 +120,12 @@ import type {
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
+  // Search & Browser types (Pentagi-inspired)
+  BrowserRequest,
+  BrowserResult,
+  SearchEnginesStatus,
+  SearchResult,
+  SearchRequest,
 } from "@/lib/types";
 
 /**
@@ -151,14 +157,50 @@ let basicAuthProbe: Promise<void> | null = null;
 // Renew the outer gate through a page navigation, where the browser can send
 // Basic credentials without replacing an API request's Bearer authorization.
 // Keep the admin token and collapse concurrent failures into one reload.
+
+// Dynamic auth header name - detected from first response or defaulted
+let detectedAuthHeader = "X-Artex-Auth";  // Will be updated on first 401 response
+
+function directBackendOrigin(): string {
+  if (typeof window === "undefined") return "";
+  const port = window.location.port;
+  if (port === "3000" || port === "5173") {
+    return `${window.location.protocol}//${window.location.hostname}:8787`;
+  }
+  return "";
+}
+
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
-  const response = await fetch(input, init);
-  if (basicAuthReloading) throw new Error("访问验证已过期，正在重新验证");
-  if (response.status === 401 && response.headers.get("X-Artex-Auth") === "basic") {
+  if (basicAuthReloading) throw new Error("Auth expired, revalidating...");
+  const directBase = input.startsWith("/api") ? directBackendOrigin() : "";
+  const targetUrl = directBase ? `${directBase}${input}` : input;
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, init);
+  } catch (err) {
+    // Fallback to same-origin proxy or retry once after brief delay on transient socket reset
+    if (directBase) {
+      response = await fetch(input, init);
+    } else {
+      await new Promise((r) => setTimeout(r, 250));
+      response = await fetch(input, init);
+    }
+  }
+  if (basicAuthReloading) throw new Error("Auth expired, revalidating...");
+  
+  // Check for basic auth challenge - support both static and dynamic header names
+  const authHeader = response.headers?.get("X-Artex-Auth") || 
+                     response.headers?.get(detectedAuthHeader) || '';
+  if (response.status === 401 && authHeader === "basic") {
+    // Remember the actual header name for future requests
+    const headerName = response.headers ? [...response.headers.keys()].find(k => 
+      k.toLowerCase().includes('auth') && k !== 'authorization'
+    ) : undefined;
+    if (headerName) detectedAuthHeader = headerName;
+    
     basicAuthReloading = true;
     window.location.reload();
-    throw new Error("访问验证已过期，正在重新验证");
+    throw new Error("Auth expired, revalidating...");
   }
   return response;
 }
@@ -303,9 +345,10 @@ function mockReport(_task?: string): string {
 export function sseUrl(path: string): string {
   const base =
     process.env.NEXT_PUBLIC_SSE_BASE ??
-    (process.env.NODE_ENV !== "production" && typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.hostname}:8787`
-      : "");
+    (directBackendOrigin() ||
+      (process.env.NODE_ENV !== "production" && typeof window !== "undefined"
+        ? `${window.location.protocol}//${window.location.hostname}:8787`
+        : ""));
   const token = getToken();
   const sep = path.includes("?") ? "&" : "?";
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
@@ -417,7 +460,13 @@ export const api = {
   systemMetrics: () => get<SystemMetrics>("/system/metrics"),
 
   // ---- auth ----
-  authStatus: () => get<{ initialized: boolean }>("/auth/status"),
+  authStatus: () =>
+    get<{ initialized: boolean; turnstile_enabled?: boolean; turnstile_site_key?: string }>("/auth/status"),
+  turnstileVerify: (token: string, userAgent?: string) =>
+    post<{ verified: boolean; ray_id?: string }>("/auth/turnstile-verify", { token, user_agent: userAgent }),
+  maintenanceStatus: () =>
+    get<{ updating: boolean; phase?: string; current_sha?: string; target_sha?: string }>("/update/maintenance"),
+  triggerGitSync: () => post<{ ok: boolean; message: string }>("/update/git-sync", {}),
   login: (username: string, password: string) => post<{ token: string }>("/auth/login", { username, password }),
   initPassword: (password: string) => post<{ token: string }>("/auth/init", { password }),
   changePassword: (oldPassword: string, newPassword: string) =>
@@ -1205,6 +1254,37 @@ export const api = {
     ),
   testTaskProxy: (taskID: string) => post<{ ok: boolean; error?: string }>(`/tasks/${taskID}/proxy/test`, {}),
 
+  // === PROXY POOL V2 API ===
+  // New enhanced proxy pool with GeoIP, multi-format import, rotation strategies
+  proxyV2: {
+    getConfig: () =>
+      get<ProxyV2Config>(`/v2/proxy-pool/config`),
+    updateConfig: (cfg: Partial<ProxyV2Config>) =>
+      put<{ ok: boolean }>(`/v2/proxy-pool/config`, cfg),
+    listProxies: () =>
+      get<ProxyV2Entry[]>(`/v2/proxy-pool/proxies`),
+    importProxies: (payload: { data: string; default_type?: string }) =>
+      post<ProxyV2ImportResult>(`/v2/proxy-pool/import`, payload),
+    getProxy: (id: string) =>
+      get<ProxyV2Entry>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
+    updateProxy: (id: string, payload: Partial<ProxyV2Entry>) =>
+      put<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`, payload),
+    deleteProxy: (id: string) =>
+      del<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
+    proxyAction: (id: string, action: "activate" | "deactivate" | "test" | "toggle") =>
+      post<{ ok?: boolean; status?: string; success?: boolean; latency_ms?: number; error?: string }>(`/v2/proxy-pool/action`, { id, action }),
+    testAll: () =>
+      post<ProxyV2TestResult[]>(`/v2/proxy-pool/test-all`, {}),
+    clearFailed: () =>
+      post<{ cleared: number }>(`/v2/proxy-pool/clear-failed`, {}),
+    forceRotate: () =>
+      get<ProxyV2Entry | null>(`/v2/proxy-pool/rotate`),
+    getStats: () =>
+      get<ProxyV2Stats>(`/v2/proxy-pool/stats`),
+    getLogs: () =>
+      get<ProxyV2SwitchLog[]>(`/v2/proxy-pool/logs`),
+  },
+
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
@@ -1475,7 +1555,19 @@ export const api = {
     put<{ ok: boolean }>(`/agents/${key}/visibility`, { mcp, skill }),
 
   // ---- tools (内置工具目录) ----
-  tools: () => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)),
+  tools: Object.assign(
+    () => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)),
+    {
+      list: () => get<{ tools: Tool[]; count: number }>("/v2/tools"),
+      get: (id: string) => get<Tool>(`/v2/tools/${id}`),
+      categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
+      search: (query: string) => post<{ results: Tool[]; count: number }>("/v2/tools/search", { query }),
+      execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
+        post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
+      getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),
+      history: () => get<{ history: ExecutionResult[]; count: number }>("/v2/tools/history"),
+    },
+  ),
   saveTool: (key: string, patch: Pick<Tool, "description" | "schema" | "agents" | "enabled">) =>
     put<{ ok: boolean }>(`/tools/${key}`, patch),
   resetTool: (key: string) => post<{ ok: boolean }>(`/tools/${key}/reset`, {}),
@@ -1706,4 +1798,114 @@ export const api = {
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),
   rollbackUpdate: () => post<{ ok: boolean }>(`/update/rollback`),
+
+  // ============================================================
+  // TOOL RECIPES API (CyberStrikeAI-style)
+  // ============================================================
+  recipes: {
+    list: () => get<{ recipes: Recipe[]; count: number }>("/v2/recipes"),
+    get: (id: string) => get<Recipe>(`/v2/recipes/${id}`),
+    categories: () => get<{ categories: string[]; count: number }>("/v2/recipes/categories"),
+    search: (query: string) => post<{ results: Recipe[]; query: string; count: number }>("/v2/recipes/search", { query }),
+  },
+
+  // ============================================================
+  // FACT GRAPH API (sapper-v2 style)
+  // ============================================================
+  facts: {
+    list: () => get<{ facts: Fact[]; count: number }>("/v2/facts"),
+    create: (data: CreateFactRequest) => post<Fact>("/v2/facts", data),
+    get: (id: string) => get<Fact>(`/v2/facts/${id}`),
+    update: (id: string, data: UpdateFactRequest) => patch<Fact>(`/v2/facts/${id}`, data),
+    delete: (id: string) => del<{ message: string; id: string }>(`/v2/facts/${id}`),
+    search: (query: string) => post<{ results: Fact[]; query: string; count: number }>("/v2/facts/search", { query }),
+    stats: () => get<Record<string, number>>("/v2/facts/stats"),
+    link: (sourceId: string, targetId: string) =>
+      post<{ message: string; source_id: string; target_id: string }>("/v2/facts/link", { source_id: sourceId, target_id: targetId }),
+  },
+
+  // ============================================================
+  // TLS FINGERPRINTING API
+  // ============================================================
+  tls: {
+    specs: () => get<{ specs: TLSSpec[]; count: number }>("/v2/tls/specs"),
+    current: () => get<TLSSpec>("/v2/tls/current"),
+  },
+
+  // ============================================================
+  // TOOL CATALOG & EXECUTION API (HexStrike-inspired)
+  // ============================================================
+  toolCatalog: {
+    list: () => get<{ tools: Tool[]; count: number }>("/v2/tools"),
+    get: (id: string) => get<Tool>(`/v2/tools/${id}`),
+    categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
+    search: (query: string) => post<{ results: Tool[]; count: number }>("/v2/tools/search", { query }),
+    execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
+      post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
+    getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),
+    history: () => get<{ history: ExecutionResult[]; count: number }>("/v2/tools/history"),
+  },
+
+  // ============================================================
+  // TARGET CONNECTORS API (HackingBuddyGPT-inspired)
+  // ============================================================
+  targets: {
+    connectSSH: (config: SSHConfig) =>
+      post<Target>("/v2/targets/connect/ssh", config),
+    connectWinRM: (config: WinRMConfig) =>
+      post<Target>("/v2/targets/connect/winrm", config),
+    disconnect: (id: string) =>
+      del<{ message: string; target_id: string }>(`/v2/targets/${id}`),
+    list: () => get<{ targets: Target[]; count: number }>("/v2/targets"),
+    execute: (targetId: string, command: string) =>
+      post<TargetExecResult>(`/v2/targets/${targetId}/execute`, { command }),
+    sftpUpload: (targetId: string, localPath: string, remotePath: string) =>
+      post<{ message: string; local: string; remote: string }>(`/v2/targets/${targetId}/sftp/upload`, { local_path: localPath, remote_path: remotePath }),
+    sftpDownload: (targetId: string, remotePath: string, localPath: string) =>
+      post<{ message: string; remote: string; local: string }>(`/v2/targets/${targetId}/sftp/download`, { remote_path: remotePath, local_path: localPath }),
+  },
+
+  // ============================================================
+  // SECURITY API (Anti-Bot/IOC/Backdoor Detection)
+  // ============================================================
+  security: {
+    stats: () => get<SecurityStats>("/v2/security/stats"),
+    listIOCs: () => get<{ blocked_ips: string[]; total_blocked: number }>("/v2/security/iocs"),
+    addIOC: (ip: string, reason?: string) =>
+      post<{ message: string; ip: string }>("/v2/security/iocs", { ip, reason }),
+    removeIOC: (ip: string) =>
+      del<{ message: string; ip: string }>(`/v2/security/iocs/${ip}`),
+    check: (request: SecurityCheckRequest) =>
+      post<SecurityCheckResponse>("/v2/security/check", request),
+    getStealthConfig: () => get<StealthConfig>("/v2/security/stealth/config"),
+    updateStealthConfig: (config: StealthConfig) =>
+      post<{ message: string; config: StealthConfig }>("/v2/security/stealth/config", config),
+  },
+
+  // ============================================================
+  // MULTI-ENGINE WEB SEARCH API (Pentagi-inspired)
+  // ============================================================
+  search: {
+    engines: () => get<SearchEnginesStatus>("/v2/search/engines"),
+    search: (request: SearchRequest) =>
+      post<SearchResult>("/v2/search", request),
+    exploit: (query: string, maxResults?: number) =>
+      post<SearchResult>("/v2/search/exploit", { query, max_results: maxResults ?? 15 }),
+    saveConfig: (config: { engine: string; api_key: string }) =>
+      post<{ ok: boolean }>("/v2/search/config", config),
+  },
+
+  // ============================================================
+  // BROWSER AUTOMATION API (Pentagi-inspired)
+  // ============================================================
+  browser: {
+    getConfig: () =>
+      get<{ scraper_url: string; use_local_chrome: boolean; chrome_path?: string; available?: boolean }>("/v2/browser/config"),
+    screenshot: (url: string, fullPage?: boolean) =>
+      post<BrowserResult>("/v2/browser/screenshot", { url, full_page: fullPage }),
+    content: (url: string) =>
+      post<BrowserResult>("/v2/browser/content", { url }),
+    saveConfig: (config: { scraper_url: string; use_local_chrome: boolean }) =>
+      post<{ ok: boolean }>("/v2/browser/config", config),
+  },
 };

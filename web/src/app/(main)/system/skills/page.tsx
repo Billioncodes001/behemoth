@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { agentDisplayName } from "@/i18n/agent-display";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { Agent, MCPServer, MissingSkill, SkillCall, SkillItem } from "@/lib/types";
@@ -49,6 +50,83 @@ function fmtTime(ts: string | undefined, ui: UITranslate) {
     minute: "2-digit",
   });
 }
+
+type SkillPreset = {
+  label: string;
+  name: string;
+  description: string;
+  license: string;
+  compatibility: string;
+  instructions: string;
+};
+
+const SKILL_PRESETS: SkillPreset[] = [
+  {
+    label: "SQLi Deep Dive",
+    name: "sqli-deepdive",
+    description: "Systematic SQL/NoSQL injection discovery and safe proof-of-concept validation (error, boolean, time-based, UNION).",
+    license: "MIT",
+    compatibility: "Requires curl, python3, or sqlmap",
+    instructions:
+      "## Methodology\n\n" +
+      "1. **Parameter Inventory**: Enumerate query, form, JSON, header, and cookie parameters.\n" +
+      "2. **Differential Probing**: Test single/double quotes, boolean pairs (`AND 1=1` vs `AND 1=2`), and arithmetic expressions.\n" +
+      "3. **Time-Based Verification**: Use bounded delays (`SLEEP(3)`, `pg_sleep(3)`) and compare baseline latency.\n" +
+      "4. **Safe Proof of Concept**: Extract only `version()` / `current_user()` to prove impact without dumping sensitive data.\n",
+  },
+  {
+    label: "XSS & Client-Side",
+    name: "xss-client-audit",
+    description: "Reflected, Stored, and DOM XSS hunting with context-aware payloads, sink tracing, and CSP bypass analysis.",
+    license: "MIT",
+    compatibility: "Browser / HTTP tools",
+    instructions:
+      "## Methodology\n\n" +
+      "1. **Reflection Mapping**: Inject harmless canary strings to identify HTML tag, attribute, JS string, or URL contexts.\n" +
+      "2. **Context-Specific Payloads**: Craft minimal non-destructive payloads matching the exact sink and encoding behavior.\n" +
+      "3. **DOM Source-to-Sink**: Inspect JS bundles for `innerHTML`, `eval`, `document.write`, and `postMessage` handlers.\n" +
+      "4. **Evidence**: Capture the rendered DOM / execution proof and HTTP exchange.\n",
+  },
+  {
+    label: "Auth & JWT Bypass",
+    name: "jwt-auth-bypass",
+    description: "Authentication, session management, OAuth/OIDC, and JWT cryptographic weakness testing (ASVS V2/V3).",
+    license: "MIT",
+    compatibility: "Requires python3 / curl",
+    instructions:
+      "## Methodology\n\n" +
+      "1. **Token Inspection**: Decode JWT header and claims; check `alg`, `kid`, `jku`, `exp`, `aud`, and `iss`.\n" +
+      "2. **Signature & Algorithm Checks**: Test `alg: none`, RS256-to-HS256 confusion, weak HMAC secrets, and path traversal in `kid`.\n" +
+      "3. **Session Lifecycle**: Verify cookie flags (`HttpOnly`, `Secure`, `SameSite`), fixation, and server-side revocation on logout.\n" +
+      "4. **OAuth Flows**: Check `redirect_uri` validation, missing `state`, and PKCE enforcement.\n",
+  },
+  {
+    label: "SSRF & Cloud Metadata",
+    name: "ssrf-cloud-probe",
+    description: "Server-Side Request Forgery detection across webhooks, URL importers, PDF generators, and cloud metadata endpoints.",
+    license: "MIT",
+    compatibility: "HTTP client",
+    instructions:
+      "## Methodology\n\n" +
+      "1. **Input Vectors**: Identify URL parameters, webhooks, file/avatar fetchers, XML/SVG parsers, and Host headers.\n" +
+      "2. **Filter Bypass**: Test IPv6 (`[::1]`), decimal/octal IP encodings, DNS rebinding, and redirect chains.\n" +
+      "3. **Cloud Metadata**: Probe `169.254.169.254` (AWS/GCP/Azure) and internal service ports safely (read-only metadata only).\n" +
+      "4. **Verification**: Log full HTTP request/response pairs demonstrating internal reachability.\n",
+  },
+  {
+    label: "IDOR / BOLA Matrix",
+    name: "idor-bola-matrix",
+    description: "Horizontal and vertical authorization matrix testing across REST and GraphQL object endpoints.",
+    license: "MIT",
+    compatibility: "HTTP client / Repeater",
+    instructions:
+      "## Methodology\n\n" +
+      "1. **Resource Enumeration**: Catalog all endpoints accepting object IDs, UUIDs, usernames, or tenant identifiers.\n" +
+      "2. **Cross-Account Replay**: Replay User A requests with User B session tokens for read (`GET`) and state-changing (`PUT`/`PATCH`/`DELETE`) verbs.\n" +
+      "3. **Mass Assignment**: Inject privilege attributes (`role`, `is_admin`, `org_id`) into profile and creation payloads.\n" +
+      "4. **Evidence**: Record side-by-side baseline vs. unauthorized responses.\n",
+  },
+];
 
 // ── Tree node ──────────────────────────────────────────────────────────────
 interface TreeNode {
@@ -1105,9 +1183,9 @@ export default function SkillsPage() {
                         <label key={a.key} className="flex cursor-pointer items-center gap-2 text-sm">
                           <Checkbox
                             checked={(visibility[selectedSkill.name] ?? []).includes(a.id)}
-                            onCheckedChange={() => toggleVisibility(selectedSkill.name, a.id, a.name)}
+                            onCheckedChange={() => toggleVisibility(selectedSkill.name, a.id, agentDisplayName(a, ui))}
                           />
-                          {a.name}
+                          {agentDisplayName(a, ui)}
                         </label>
                       ))}
                       {agents.length === 0 && (
@@ -1217,6 +1295,29 @@ export default function SkillsPage() {
               className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 pt-4 data-[state=inactive]:hidden"
             >
               <div className="grid gap-1.5">
+                <Label className="text-muted-foreground text-xs">Quick Template</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {SKILL_PRESETS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      onClick={() => {
+                        setNewName(preset.name);
+                        setNewDesc(preset.description);
+                        setNewLicense(preset.license);
+                        setNewCompat(preset.compatibility);
+                        setNewInst(preset.instructions);
+                      }}
+                      className={`rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
+                        newName === preset.name ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid gap-1.5">
                 <Label htmlFor="sk-name">
                   {ui("screen.d44e9b3d3b31d3")}
                   <span className="text-destructive">*</span>
@@ -1269,7 +1370,7 @@ export default function SkillsPage() {
                 <Textarea
                   id="sk-inst"
                   className="min-h-40 flex-1 resize-none font-mono text-sm leading-relaxed"
-                  placeholder={"## 执行方法\n\n1. 先探测错误\n2. 区分盲注类型\n\n脚本放 scripts/ 目录。"}
+                  placeholder={"## Methodology\n\n1. Probe for error differentials\n2. Classify blind injection vectors\n\nPlace helper scripts in the scripts/ directory."}
                   value={newInst}
                   onChange={(e) => setNewInst(e.target.value)}
                 />
@@ -1313,7 +1414,7 @@ export default function SkillsPage() {
                           setNewVisibility((cur) => (on ? [...cur, a.id] : cur.filter((id) => id !== a.id)))
                         }
                       />
-                      {a.name}
+                      {agentDisplayName(a, ui)}
                     </label>
                   ))}
                 </div>

@@ -409,17 +409,13 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	}
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" && len(req.Attachments) == 0 {
-		writeErr(w, 400, "消息不能为空")
+		writeErr(w, 400, "Message cannot be empty")
 		return
 	}
 	agentMessage, ok := s.prepareChatMentionMessage(w, msg)
 	if !ok {
 		return
 	}
-	// Same resolution as the background runner: honour the agent binding / this
-	// conversation's chosen profile before falling back to the global config, so a
-	// conversation that picked a valid LLM is not rejected just because no global
-	// config is active.
 	if s.resolveChatAgent(c) == nil {
 		writeErr(w, 503, s.chatUnavailableReason())
 		return
@@ -429,18 +425,12 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	s.chatMu.Lock()
 	if s.chatBusy[busyKey] {
 		s.chatMu.Unlock()
-		writeErr(w, 409, "该会话正在处理上一条消息，请稍候")
+		writeErr(w, 409, "This conversation is still processing the previous message; please wait")
 		return
 	}
 	s.chatBusy[busyKey] = true
 	s.chatMu.Unlock()
 
-	// persist + float the human turn; auto-title the thread from the first message.
-	// Worker is the agent key (not "user") so the transcript stays a single lane
-	// (no worker chips) — the kind='user' already right-aligns it as a human bubble.
-	// With attachments, Detail carries {text, attachments} JSON so the transcript
-	// renders attachment cards; without, Detail is the full text (Summary is truncated,
-	// so the transcript lazy-loads Detail to show the message untruncated).
 	ua := userActivityWithAttachments(c.AgentKey, msg, req.Attachments)
 	ua.Summary = firstLine(msg, 200)
 	if ua.Detail == "" {
@@ -449,10 +439,10 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	if _, err := pg.AppendConvActivity(c.ID, ua); err != nil {
 		log.Printf("[conv %d] append user msg failed: %v", c.ID, err)
 	}
-	if c.Title == "" || c.Title == "新对话" {
+	if c.Title == "" || c.Title == "新对话" || c.Title == "New Conversation" {
 		title := firstLine(msg, 40)
 		if title == "" {
-			title = "附件消息"
+			title = "Attachment Message"
 		}
 		_ = pg.RenameConversation(c.ID, title)
 		if s.m.pg.GetBool(db.SettingChatAutoTitle, false) {
@@ -654,21 +644,25 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		webSearch = a.WebSearch
 	}
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
+	log.Printf("[chat] Conversation #%d (%s) started turn: %s", c.ID, c.AgentKey, firstLine(msg, 120))
 	emit := func(rec db.Activity) {
+		if rec.Tool != "" {
+			log.Printf("[chat] Conversation #%d (%s) tool=%s summary=%s", c.ID, c.AgentKey, rec.Tool, firstLine(rec.Summary, 120))
+		}
 		if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
 			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
 		}
 	}
-	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
-	// step, so skip the raw-error entry — only surface genuine failures.
 	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
 		finishReason = err.Error()
+		log.Printf("[chat] Conversation #%d (%s) error: %v", c.ID, c.AgentKey, err)
 		if ctx.Err() == nil {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
-				Summary: "（出错：" + err.Error() + "）", Detail: err.Error()})
+				Summary: "(Error: " + err.Error() + ")", Detail: err.Error()})
 		}
 	} else {
 		finishStatus, finishReason = "completed", ""
+		log.Printf("[chat] Conversation #%d (%s) completed turn", c.ID, c.AgentKey)
 	}
 	_ = pg.TouchConversation(c.ID)
 }

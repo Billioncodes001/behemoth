@@ -262,9 +262,20 @@ export default function NotifyPage() {
     }
   }
 
+  const channelKinds = React.useMemo(
+    () =>
+      meta?.kinds && meta.kinds.length > 0
+        ? meta.kinds
+        : Object.keys(CHANNEL_FIELDS).map((kind) => ({
+            kind,
+            default_rate_per_min: 20,
+            secret_keys: [],
+          })),
+    [meta],
+  );
   const fields = CHANNEL_FIELDS[form.kind] ?? [];
-  const secretKeys = new Set(meta?.kinds.find((k) => k.kind === form.kind)?.secret_keys ?? []);
-  const defaultRate = meta?.kinds.find((k) => k.kind === form.kind)?.default_rate_per_min ?? 0;
+  const secretKeys = new Set(channelKinds.find((k) => k.kind === form.kind)?.secret_keys ?? []);
+  const defaultRate = channelKinds.find((k) => k.kind === form.kind)?.default_rate_per_min ?? 0;
 
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
@@ -447,10 +458,10 @@ export default function NotifyPage() {
                   disabled={!!editing}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder={translate(KIND_LABEL[form.kind] ?? form.kind)} />
                   </SelectTrigger>
                   <SelectContent>
-                    {(meta?.kinds ?? []).map((k) => (
+                    {channelKinds.map((k) => (
                       <SelectItem key={k.kind} value={k.kind}>
                         {translate(KIND_LABEL[k.kind] ?? k.kind)}
                       </SelectItem>

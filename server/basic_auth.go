@@ -12,15 +12,27 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Autumn-27/artex/server/fingerprint"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 const basicAuthKey = "auth.http_basic"
-const basicAuthCookie = "artex_basic_auth"
+// Dynamic cookie name - set at startup via fingerprint package
+var basicAuthCookie = "artex_basic_auth" // will be overridden by InitializeDynamicNames()
 const basicAuthTTL = 12 * time.Hour
 const basicAuthSaveTimeout = 10 * time.Second
+
+// Dynamic auth header name - set at startup
+var dynamicAuthHeaderName = "X-Artex-Auth" // will be overridden
+
+// InitializeDynamicNames sets dynamic names from fingerprint manager.
+// Call once at server startup after fingerprint.Initialize().
+func InitializeDynamicNames() {
+	basicAuthCookie = fingerprint.GetDynamicCookieName()
+	dynamicAuthHeaderName = fingerprint.GetDynamicAuthHeaderName()
+}
 
 type basicAuthConfig struct {
 	Enabled      bool   `json:"enabled"`
@@ -142,7 +154,7 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			// Background requests use Bearer auth. Challenging them with Basic
 			// can trap the browser in repeated native dialogs. Let the client
 			// reload the current page once to renew only the outer session.
-			w.Header().Set("X-Artex-Auth", "basic")
+			w.Header().Set(dynamicAuthHeaderName, "basic")
 			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
 			}

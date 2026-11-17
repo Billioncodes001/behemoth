@@ -260,17 +260,17 @@ func (s *Server) updateCaseReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) findingCaseTools() []actool.CoreTool {
-	props := map[string]any{"finding_id": idParam("独立 findings 记录 ID，不是探索节点 ID"), "finding_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "独立漏洞记录 ID 列表"}, "task_id": idParam("同一来源任务 ID"), "case_id": idParam("归并组 ID"), "version": idParam("get_finding_case 实际读取的 version"), "page": idParam("分页，从1开始，每页20条"), "title": strParam("同一实际缺陷的名称"), "reason": strParam("具体证据与归并理由，不能仅类型相同"), "report": strParam("全部成员证据的完整统一 Markdown 报告"), "severity": strParam("critical|high|medium|low"), "severity_reason": strParam("基于已验证影响的评级依据，不直接取最高等级")}
+	props := map[string]any{"finding_id": idParam("Standalone findings record ID, NOT exploration node ID"), "finding_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "List of standalone vulnerability record IDs"}, "task_id": idParam("Same source task ID"), "case_id": idParam("Merge group (case) ID"), "version": idParam("Actual version read from get_finding_case"), "page": idParam("Page number, 1-based, 20 items per page"), "title": strParam("Name of the shared underlying defect"), "reason": strParam("Specific evidence and merge rationale; same vulnerability class alone is insufficient"), "report": strParam("Complete unified Markdown report covering all member evidence"), "severity": strParam("critical|high|medium|low"), "severity_reason": strParam("Severity rationale based on verified impact, not simply taking the highest member severity")}
 	specs := []struct {
 		name, desc string
 		required   []string
 	}{
-		{"search_finding_duplicates", "只读检索同任务候选摘要与资产，按分数排序并返回 score、tier、hit_reasons：strong=同漏洞类型且资产重叠，weak=未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考。等级不同也可能重复。支持分页，按需读取详情。", []string{"finding_id"}},
-		{"get_finding_record", "读取独立漏洞完整原始证据和报告，返回探索节点编号以便追溯执行记录。", []string{"finding_id"}},
-		{"merge_finding_records", "证据明确证明同一缺陷时归并；保留所有原始记录。不跨任务、不改变原评级，不可绕过人工否决。", []string{"task_id", "finding_ids", "title", "reason"}},
-		{"suggest_finding_merge", "证据存在具体共同点但缺少关键证据时，提交一个疑似重复分组（2..20 条同任务记录，一次覆盖全部疑似成员，不要拆成两两建议），待人工确认；不是自动合并。仅类型/资产相同不应提交。", []string{"task_id", "finding_ids", "title", "reason"}},
-		{"get_finding_case", "读取归并组和成员分页。先记录version，再读取成员的原报告、证据及流量；版本变化必须重新读取。", []string{"case_id"}},
-		{"update_finding_case_report", "保存统一报告及评级理由，version必须来自实际读取。保留各条原报告，不新建漏洞。", []string{"case_id", "version", "title", "report", "severity", "severity_reason"}},
+		{"search_finding_duplicates", "Read-only search for candidate summaries and assets in the same task, sorted by score and returning score, tier, and hit_reasons: strong = same vulnerability class and overlapping assets; weak = does not have both, check hit_reasons for reference only. Different severities may still be duplicates. Supports pagination; fetch details on demand.", []string{"finding_id"}},
+		{"get_finding_record", "Read the full original evidence and report of a standalone vulnerability, returning the exploration node ID for tracing execution history.", []string{"finding_id"}},
+		{"merge_finding_records", "Merge records when evidence definitively proves the same underlying defect; retains all original records. Does not cross tasks, does not alter original severities, and cannot bypass manual rejections.", []string{"task_id", "finding_ids", "title", "reason"}},
+		{"suggest_finding_merge", "When specific commonalities exist in evidence but key proof of a shared root cause is missing, submit a suspected duplicate group (2..20 records in the same task, covering all suspected members at once rather than pairwise suggestions) for manual confirmation; does not auto-merge. Do not submit based on same type/asset alone.", []string{"task_id", "finding_ids", "title", "reason"}},
+		{"get_finding_case", "Read a merge group and paginated members. Record the version first, then read members' original reports, evidence, and traffic; re-read if the version changes.", []string{"case_id"}},
+		{"update_finding_case_report", "Save the unified report and severity rationale; version must come from an actual read. Retains each member's original report and does not create new findings.", []string{"case_id", "version", "title", "report", "severity", "severity_reason"}},
 	}
 	out := []actool.CoreTool{}
 	for _, spec := range specs {
@@ -326,14 +326,14 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		}
 		items, total, strongTotal, err := s.m.pg.FindingCaseCandidates(fid, page, 20, scopes...)
 		return map[string]any{"items": items, "total": total, "strong_total": strongTotal, "page": page, "page_size": 20,
-			"note": "按分数排序；weak 表示未同时具备同漏洞类型和资产重叠，请结合 hit_reasons 核对，仅作参考，通常不应据此建议归并"}, err
+			"note": "Sorted by score; weak means not having both same vulnerability class and asset overlap — check hit_reasons for reference only and generally do not suggest merging based on weak matches alone"}, err
 	case "get_finding_record":
 		f, err := s.m.pg.GetFinding(fid)
 		if err != nil {
 			return nil, err
 		}
 		if f == nil {
-			return nil, errors.New("漏洞不存在")
+			return nil, errors.New("vulnerability not found")
 		}
 		dto := s.caseFindingDTO(f)
 		cid, err := s.m.pg.FindingCaseID(f.ID)
@@ -355,7 +355,7 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 	case "suggest_finding_merge":
 		ids := a.ids()
 		if len(ids) < 2 || len(ids) > 20 {
-			return nil, errors.New("疑似重复分组需要2至20条记录")
+			return nil, errors.New("suspected duplicate group requires 2 to 20 records")
 		}
 		id, err := s.m.pg.SuggestFindingCase(ctx, parseProfileID(a.TaskID), ids, a.Title, a.Reason)
 		return map[string]any{"suggestion_id": i64s(id), "finding_ids": ids}, err
@@ -365,7 +365,7 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 			return nil, err
 		}
 		if c == nil {
-			return nil, errors.New("漏洞组不存在")
+			return nil, errors.New("finding group not found")
 		}
 		fs, total, err := s.m.pg.FindingCaseMembers(cid, page, 20)
 		members := []FindingDTO{}
@@ -380,13 +380,13 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 		err := s.m.pg.UpdateFindingCaseReport(ctx, cid, a.Version, a.Title, a.Report, a.Severity, a.SeverityReason)
 		return map[string]bool{"ok": err == nil}, err
 	}
-	return nil, errors.New("未知归并工具")
+	return nil, errors.New("unknown finding case tool")
 }
 func idParam(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 func (s *Server) seedFindingCaseTools() {
-	_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error='服务重启中断，请重新提交整理' WHERE state IN ('queued','running')`)
+	_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error='Interrupted by server restart; please resubmit review' WHERE state IN ('queued','running')`)
 	a, err := s.m.pg.GetAgentByKey("reporter")
 	if err != nil || a == nil {
 		return
@@ -425,7 +425,7 @@ func (s *Server) seedFindingCaseTools() {
 	_ = s.m.pg.SetSetting(flag, "true")
 }
 
-const findingCaseReviewTaskMessage = "人工选择整理（只读原始记录）：本任务所选 finding_ids=%s。逐条读取已有报告，仅判断同一实际根因；根因明确相同则直接归并。只有证据指向相同端点、处理器/后端组件、参数或缺失检查等具体共同点，但缺少确认共同根因的关键证据时，才提交一个覆盖2..20条同任务疑似成员的分组，不要拆成两两建议；仅类型或资产相同不足以建议，没有具体共同点时保持 independent，不要因为不确定就提交建议。证据表明属于不同代码路径时可判 independent。已有或新建组应尽力更新统一报告；统一报告暂缺或待更新不阻塞 complete_finding_case_review，可由后续运行或人工补齐。禁止生成或覆盖原始报告、改评级状态、补绑证据，不归并未选记录，不探测目标，遵守人工否决。结束前调用 complete_finding_case_review 提交逐条判断并通过验收。"
+const findingCaseReviewTaskMessage = "Manual selection review (read-only on original records): selected finding_ids=%s in this task. Read existing reports one by one and judge whether they share the exact same underlying root cause; merge directly when the root cause is definitively identical. Submit a suspected group covering 2..20 records in the same task ONLY when evidence points to specific commonalities (same endpoint, handler/backend component, parameter, or missing check) but lacks key evidence confirming a shared root cause — do not split into pairwise suggestions; same vulnerability class or asset alone is insufficient, keep independent when there is no specific commonality. Judge as independent when evidence shows distinct code paths. Update unified reports for existing or new groups on a best-effort basis; missing/pending unified reports do not block complete_finding_case_review. Never generate or overwrite original reports, alter severities/statuses, bind traffic, merge unselected records, or probe targets, and respect manual rejections. Call complete_finding_case_review before finishing to submit per-record judgments and pass validation."
 
 func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 	var a findingCaseRequest

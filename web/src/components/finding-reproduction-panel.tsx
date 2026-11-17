@@ -24,7 +24,9 @@ type ReproductionStep = {
 };
 
 function extractSection(report: string) {
-  const match = report.match(/^##\s+(?:复现步骤|测试过程|复现过程)\s*$/im);
+  const match = report.match(
+    /^##\s+(?:Reproduction Steps|Step-by-Step Reproduction|Testing Process|复现步骤|测试过程|复现过程)\s*$/im,
+  );
   if (!match || match.index === undefined) return "";
   const start = match.index + match[0].length;
   const tail = report.slice(start);
@@ -48,7 +50,7 @@ function parseSteps(report: string, fallback: string, ui: UITranslate): Reproduc
     ];
   }
 
-  const markers = [...section.matchAll(/^\s*(?:###\s*)?(?:步骤\s*)?(\d+)[.、:：)）]\s*(.+)$/gim)];
+  const markers = [...section.matchAll(/^\s*(?:###\s*)?(?:(?:Step|步骤)\s*)?(\d+)[.、:：)）\s-]\s*(.+)$/gim)];
   if (markers.length === 0) {
     return [{ number: 1, title: ui("screen.95454d7e6d0dea"), body: withoutPacket(section) }];
   }
@@ -238,12 +240,20 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
     [finding.evidence, finding.report, finding.summary, ui],
   );
   const [traffic, setTraffic] = React.useState<FindingTrafficBinding[] | undefined>(undefined);
-  const overviewSections = ["概述", "影响与危害", "受影响范围"]
-    .map((heading) => ({ heading, content: reportSection(finding.report ?? "", [heading]) }))
+  const overviewSections = [
+    { label: "Overview", aliases: ["Overview", "概述", "漏洞概述"] },
+    { label: "Impact & Risk", aliases: ["Impact & Risk", "Impact", "影响与危害", "影响"] },
+    { label: "Affected Scope", aliases: ["Affected Scope", "受影响范围"] },
+    {
+      label: "Discovery & Attack Chain Timeline",
+      aliases: ["Discovery & Attack Chain Timeline", "Attack Chain Timeline", "Prerequisites", "前置条件"],
+    },
+  ]
+    .map((item) => ({ heading: item.label, content: reportSection(finding.report ?? "", item.aliases) }))
     .filter((item) => item.content);
-  const outcome = reportSection(finding.report ?? "", ["最终结果"]);
-  const rootCause = reportSection(finding.report ?? "", ["根因分析"]);
-  const remediation = reportSection(finding.report ?? "", ["修复建议"]);
+  const outcome = reportSection(finding.report ?? "", ["Evidence", "PoC", "最终结果", "证据"]);
+  const rootCause = reportSection(finding.report ?? "", ["Root Cause Analysis", "Root Cause", "根因分析"]);
+  const remediation = reportSection(finding.report ?? "", ["Remediation", "Recommendations", "修复建议"]);
 
   React.useEffect(() => {
     let active = true;
@@ -302,9 +312,9 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
         })}
         {outcome || rootCause || remediation ? (
           <div className="space-y-3 border-t pt-3">
-            {outcome ? <Markdown text={`## 最终结果\n\n${outcome}`} /> : null}
-            {rootCause ? <Markdown text={`## 根因分析\n\n${rootCause}`} /> : null}
-            {remediation ? <Markdown text={`## 修复建议\n\n${remediation}`} /> : null}
+            {outcome ? <Markdown text={`## Evidence & PoC\n\n${outcome}`} /> : null}
+            {rootCause ? <Markdown text={`## Root Cause Analysis\n\n${rootCause}`} /> : null}
+            {remediation ? <Markdown text={`## Remediation\n\n${remediation}`} /> : null}
           </div>
         ) : null}
       </CardContent>

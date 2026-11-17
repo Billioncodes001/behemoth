@@ -2863,6 +2863,8 @@
   "builtinAgent.asset_mapper.name": ["资产梳理", "Asset mapper"],
   "builtinAgent.pentest.name": ["渗透测试", "Pentest"],
   "builtinAgent.retester.name": ["漏洞复测", "Finding retest"],
+  "builtinAgent.reporter.name": ["报告撰写", "Report writing"],
+  "builtinAgent.credential_processor.name": ["凭据整理", "Credential processing"],
   "screen.7cb488ec57048e": [
     "把渗透任务目标拆解成若干独立、可验证的子目标。",
     "Split test goals into independent, verifiable subgoals."
@@ -2961,6 +2963,14 @@
   "builtinAgentDescription.12": [
     "从漏洞详情手动启动，保存独立复测结论",
     "Start from a finding and save an independent retest conclusion."
+  ],
+  "builtinAgentDescription.13": [
+    "漏洞详细报告撰写：发现漏洞时自动触发，查取证据与执行过程后写 Markdown 报告并回写。",
+    "Automatically triggered when a finding is recorded; gathers evidence and execution history to write and save a detailed Markdown report."
+  ],
+  "builtinAgentDescription.14": [
+    "Agent 开关控制的凭据整理：拆分账号、密码、Token、Cookie，仅分析已上报内容，不主动登录。可独立绑定模型；每条最多一次模型调用。",
+    "Credential processing controlled by the Agent toggle: extracts usernames, passwords, tokens and cookies from reported leads without logging in."
   ],
   "punctuation.f2e44c6c95": ["）", ")"],
   "punctuation.ece2891a25": ["Agent：", "Agent: "],

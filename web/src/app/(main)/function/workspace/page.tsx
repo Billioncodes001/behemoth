@@ -91,8 +91,13 @@ function WorkspaceInner() {
         setPath(result.path);
         setLoading(false);
       })
-      .catch(async () => {
+      .catch(async (err) => {
         if (!alive) return;
+        if (!requestedPath) {
+          setLoading(false);
+          toast.error(liveUI("screen.d9861c29979739", { v0: (err as Error).message }));
+          return;
+        }
         load(requestedPath.split("/").slice(0, -1).join("/"));
         try {
           const file = await api.workspaceRead(requestedPath);

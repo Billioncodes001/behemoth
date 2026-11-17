@@ -1072,6 +1072,87 @@ export interface ProxySwitchLog {
   reason: string;
 }
 
+// === PROXY POOL V2 TYPES ===
+// Enhanced proxy pool with GeoIP, success rate tracking, rotation strategies
+
+export interface ProxyV2Config {
+  enabled: boolean;
+  rotation_strategy: "round_robin" | "random" | "least_used";
+  rotation_interval_seconds: number;
+  auto_rotate_on_failure: boolean;
+  health_check_interval_seconds: number;
+  health_check_timeout_seconds: number;
+  max_consecutive_failures: number;
+  cooldown_seconds: number;
+  session_sticky: boolean;
+  test_url: string;
+}
+
+export interface ProxyV2Entry {
+  id: string;
+  url: string;                    // Masked in responses (***:****@host:port)
+  name?: string;
+  remark?: string;
+  proxy_type: "http" | "https" | "socks5" | "auto";
+  enabled: boolean;
+  status: "healthy" | "unhealthy" | "unknown" | "disabled";
+  
+  // Health & Performance
+  latency_ms: number;
+  consecutive_failures: number;
+  total_requests: number;
+  successful_requests: number;
+  last_checked_at?: string;
+  last_error?: string;
+  
+  // GeoIP (populated after test)
+  country?: string;
+  city?: string;
+  isp?: string;
+  egress_ip?: string;
+  
+  // Timestamps
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProxyV2ImportResult {
+  imported: number;
+  errors: Array<{ line: number; input: string; error: string }>;
+  proxies: ProxyV2Entry[];
+}
+
+export interface ProxyV2TestResult {
+  id: string;
+  status: "healthy" | "unhealthy";
+  latency_ms: number;
+  error?: string;
+  country?: string;
+  city?: string;
+  isp?: string;
+  egress_ip?: string;
+}
+
+export interface ProxyV2Stats {
+  total: number;
+  healthy: number;
+  unhealthy: number;
+  unknown: number;
+  disabled: number;
+  active_proxy_id?: string;
+  avg_latency_ms: number;
+  total_requests: number;
+  success_rate: number;
+}
+
+export interface ProxyV2SwitchLog {
+  id: string;
+  from_proxy_id: string;
+  to_proxy_id: string;
+  reason: string;
+  timestamp: string;
+}
+
 export interface WorkerPool {
   profile_id: string;
   workers: number;
@@ -1996,4 +2077,335 @@ export interface TaskFileListing {
   size: number;
   truncated: boolean;
   missing: boolean;
+}
+
+// ============================================================
+// TOOL RECIPES TYPES (CyberStrikeAI-style)
+// ============================================================
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  version: string;
+  author: string;
+  tags: string[];
+  command?: string;
+  script?: string;
+  handler?: string;
+  parameters: RecipeParameter[];
+  parse_output: boolean;
+  output_format?: string;
+  risk_level: string;
+  requires: string[];
+  examples: RecipeExample[];
+}
+
+export interface RecipeParameter {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: unknown;
+  description: string;
+  options?: string[];
+}
+
+export interface RecipeExample {
+  input: Record<string, unknown>;
+  output?: string;
+  description: string;
+}
+
+// ============================================================
+// FACT GRAPH TYPES (sapper-v2 style)
+// ============================================================
+
+export type FactKind = "host" | "service" | "credential" | "vulnerability" | "loot" | "flag" | "note";
+
+export interface Fact {
+  id: string;
+  kind: FactKind;
+  task_id?: string;
+  session_id?: string;
+  title: string;
+  content: string;
+  metadata?: Record<string, string>;
+  tags?: string[];
+  source_ids?: string[];
+  derived_ids?: string[];
+  confidence: number;
+  verified: boolean;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  agent?: string;
+  method?: string;
+}
+
+export interface CreateFactRequest {
+  kind: FactKind;
+  title: string;
+  content: string;
+  task_id?: string;
+  session_id?: string;
+  metadata?: Record<string, string>;
+  tags?: string[];
+  confidence?: number;
+  agent?: string;
+  method?: string;
+}
+
+export interface UpdateFactRequest {
+  title?: string;
+  content?: string;
+  tags?: string[];
+  confidence?: number;
+  verified?: boolean;
+  active?: boolean;
+  metadata?: Record<string, string>;
+}
+
+// ============================================================
+// TLS FINGERPRINTING TYPES
+// ============================================================
+
+export interface TLSSpec {
+  id: string;
+  name: string;
+  description: string;
+}
+
+// ============================================================
+// TOOL CATALOG & EXECUTION TYPES (HexStrike-inspired)
+// ============================================================
+
+export interface ToolParameter {
+  name: string;
+  type: "string" | "int" | "bool" | "url" | "domain" | "file" | "select";
+  required: boolean;
+  description?: string;
+  default?: string | number | boolean;
+  flag?: string;
+  options?: string[];
+}
+
+export interface Tool {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  version?: string;
+  command: string;
+  parameters: ToolParameter[];
+  parse_output?: boolean;
+  output_type?: string;
+  tags: string[];
+  risk_level: "low" | "medium" | "high" | "critical";
+  timeout: number; // milliseconds
+}
+
+export interface ToolCategory {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
+  tool_count: number;
+}
+
+export interface ExecutionResult {
+  id: string;
+  tool_id: string;
+  tool_name: string;
+  status: "running" | "completed" | "failed" | "timeout";
+  command: string;
+  args: string[];
+  output: string;
+  error?: string;
+  exit_code: number;
+  duration: number; // milliseconds
+  parsed?: ParsedResult;
+  started_at: string;
+  ended_at: string;
+}
+
+export interface ParsedResult {
+  type: string;
+  raw?: string;
+  data: Record<string, unknown>;
+  summary: string;
+  timestamp: string;
+}
+
+// ============================================================
+// TARGET CONNECTOR TYPES (HackingBuddyGPT-inspired)
+// ============================================================
+
+export interface Target {
+  id: string;
+  type: "ssh" | "winrm";
+  host: string;
+  port: number;
+  user: string;
+  connected: boolean;
+  labels: string[];
+}
+
+export interface SSHConfig {
+  host: string;
+  port?: number;
+  user: string;
+  password?: string;
+  key_path?: string;
+  timeout?: number;
+}
+
+export interface WinRMConfig {
+  host: string;
+  port?: number;
+  user: string;
+  password: string;
+  use_https?: boolean;
+  insecure?: boolean;
+  timeout?: number;
+}
+
+export interface TargetExecResult {
+  target_id: string;
+  command: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  duration: string;
+}
+
+// ============================================================
+// SECURITY TYPES (Anti-Bot/IOC/Backdoor Detection)
+// ============================================================
+
+export interface SecurityResult {
+  allowed: boolean;
+  threat_score: number;
+  flags: string[];
+  block_reason?: string;
+  check_time: string;
+  client_ip?: string;
+}
+
+export interface BlocklistStats {
+  total_checked: number;
+  total_blocked: number;
+  ioc_blocks: number;
+  pattern_blocks: number;
+  last_block_time: string;
+  blocked_ips: string[];
+}
+
+export interface SecurityStats {
+  ioc_blocklist: BlocklistStats;
+  stealth_enabled: boolean;
+  backdoor_detection_enabled: boolean;
+}
+
+export interface BackdoorCheckResult {
+  suspicious: boolean;
+  patterns: string[];
+  severity?: string;
+}
+
+export interface StealthConfig {
+  enabled: boolean;
+  request_jitter: number; // milliseconds
+  ua_rotation: boolean;
+  header_randomize: boolean;
+  tls_fingerprinting: boolean;
+  rate_limit: number; // requests per minute
+  delay_between_requests: number; // milliseconds
+}
+
+export interface SecurityCheckRequest {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: string;
+  user_agent?: string;
+  client_ip?: string;
+}
+
+export interface SecurityCheckResponse {
+  ioc_check: SecurityResult;
+  backdoor_check: BackdoorCheckResult;
+  backdoor_body_check?: BackdoorCheckResult;
+}
+
+// ============================================================
+// SEARCH TYPES (Pentagi-inspired Multi-Engine Search)
+// ============================================================
+
+export type SearchMode = "general" | "news" | "exploit" | "technical" | "osint";
+export type SearchEngineType = "google" | "duckduckgo" | "tavily" | "searxng" | "sploitus";
+
+export interface SearchResultItem {
+  title: string;
+  url: string;
+  snippet: string;
+  engine: string;
+  rank: number;
+}
+
+export interface SearchResult {
+  query: string;
+  mode: SearchMode;
+  results: SearchResultItem[];
+  engines_used: string[];
+  warnings?: string[];
+  total_results: number;
+  query_time_ms?: number;
+  duration: string | number; // Duration
+  timestamp: string; // ISO timestamp
+}
+
+export type SearchResponse = SearchResult;
+
+export interface SearchEnginesStatus {
+  total_engines_registered: number;
+  available_engines: number;
+  engine_status: Record<SearchEngineType, boolean>;
+  searxng_url?: string;
+}
+
+export interface SearchRequest {
+  query: string;
+  mode?: SearchMode;
+  engine?: string;
+  max_results?: number;
+  site_filter?: string;
+}
+
+// ============================================================
+// BROWSER AUTOMATION TYPES (Pentagi-inspired)
+// ============================================================
+
+export type BrowserAction = "screenshot" | "content" | "both" | "pdf";
+
+export interface BrowserRequest {
+  url: string;
+  action?: BrowserAction;
+  full_page?: boolean;
+  width?: number;
+  height?: number;
+  wait_selector?: string;
+  user_agent?: string;
+}
+
+export interface BrowserResult {
+  success: boolean;
+  url: string;
+  action: BrowserAction;
+  screenshot_path?: string;
+  content?: string;      // Markdown content
+  title?: string;
+  duration: string;
+  error?: string;
+  status_code?: number;
 }

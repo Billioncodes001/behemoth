@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 
 import {
   ArrowUpIcon,
@@ -53,8 +54,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useSideQuestions } from "@/hooks/use-side-questions";
-import { agentDisplayName } from "@/i18n/agent-display";
+import { agentDisplayDescription, agentDisplayName } from "@/i18n/agent-display";
 import { localizedError } from "@/i18n/errors";
+import { conversationTitleLabel } from "@/i18n/fixed-ui-text";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { mergeActivities } from "@/lib/activity-merge";
 import { api } from "@/lib/api";
@@ -115,14 +117,19 @@ interface AgentGroup {
 // groupByAgent buckets conversations by agent, preserving the incoming order
 // both inside a group and across groups. The server already sorts by updated_at
 // DESC, so first-appearance order == most-recently-active group first.
-function groupByAgent(conversations: Conversation[], agentByKey: Map<string, Agent>): AgentGroup[] {
+function groupByAgent(
+  conversations: Conversation[],
+  agentByKey: Map<string, Agent>,
+  translate: (key: string) => string,
+): AgentGroup[] {
   const groups = new Map<string, AgentGroup>();
   for (const conversation of conversations) {
     let group = groups.get(conversation.agent_key);
     if (!group) {
+      const ag = agentByKey.get(conversation.agent_key);
       group = {
         key: conversation.agent_key,
-        name: agentByKey.get(conversation.agent_key)?.name || conversation.agent_key,
+        name: ag ? agentDisplayName(ag, translate) : conversation.agent_key,
         conversations: [],
         runningCount: 0,
       };
@@ -415,16 +422,31 @@ function DraftChat({
   }, [agentKey, agents]);
 
   const agent = agents.find((a) => a.key === agentKey);
+  const usableProfiles = profiles.filter((p) => p.format !== "jev");
+  const hasUsableLLM = usableProfiles.some((p) => p.is_default) || llmProfileId != null;
 
   async function send() {
     const msg = input.trim();
     if (!msg || !agentKey || sending) return;
+    if (usableProfiles.length === 0) {
+      toast.warning("No LLM profile configured yet. Please go to System -> LLM to add and activate a model profile.");
+      return;
+    }
+    if (!hasUsableLLM) {
+      toast.warning("No active LLM profile selected. Please activate a default profile in System -> LLM or choose one below the composer.");
+      return;
+    }
     setSending(true);
+    let createdId: number | null = null;
     try {
       const c = await api.createConversation(agentKey, "", llmProfileId);
+      createdId = c.id;
       await api.sendConversationMessage(c.id, msg);
       onStarted(c);
     } catch (e) {
+      if (createdId != null) {
+        await api.deleteConversation(createdId).catch(() => {});
+      }
       toast.error(translate("overview.sendFailedPrefix") + localizedError(e, translate));
       setSending(false);
     }
@@ -483,7 +505,17 @@ function DraftChat({
         <div className="text-sm font-medium">
           {translate("overview.startChat", { name: agent ? agentDisplayName(agent, translate) : "Agent" })}
         </div>
-        {agent?.description && <p className="text-muted-foreground max-w-md text-xs">{agent.description}</p>}
+        {agent?.description && (
+          <p className="text-muted-foreground max-w-md text-xs">{agentDisplayDescription(agent, translate)}</p>
+        )}
+        {usableProfiles.length === 0 && (
+          <div className="mt-3 flex flex-col items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-600 dark:text-amber-400">
+            <span>No LLM model profile is configured yet. An active LLM profile is required to chat with agents.</span>
+            <Button asChild size="sm" variant="outline" className="h-7 text-xs">
+              <Link href="/system/llm">Configure LLM Profile</Link>
+            </Button>
+          </div>
+        )}
       </div>
 
       <Composer
@@ -801,10 +833,12 @@ function ChatView({
     }
   }
 
+  const agentLabel = agent ? agentDisplayName(agent, translate) : conv.agent_key;
+
   return (
     <SideQuestionWorkspace
       side={side}
-      label={agent?.name ?? conv.agent_key}
+      label={agentLabel}
       composerLayout="inline"
       noSnapshotHint={translate("overview.sideQuestionUnavailable")}
       emptyDescription={translate("overview.sideQuestionHelp")}
@@ -812,7 +846,7 @@ function ChatView({
       {/* header: which agent + live + token meta */}
       <div className="flex min-w-0 flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <Bot className="text-muted-foreground size-4 shrink-0" />
-        <span className="min-w-0 max-w-48 truncate text-sm font-medium">{agent?.name ?? conv.agent_key}</span>
+        <span className="min-w-0 max-w-48 truncate text-sm font-medium">{agentLabel}</span>
         <span className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">{conv.agent_key}</span>
         {agent && !agent.builtin && (
           <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
@@ -820,7 +854,9 @@ function ChatView({
           </Badge>
         )}
         {agent?.description && (
-          <span className="text-muted-foreground min-w-0 truncate text-xs">{agent.description}</span>
+          <span className="text-muted-foreground min-w-0 truncate text-xs">
+            {agentDisplayDescription(agent, translate)}
+          </span>
         )}
         {running && <LiveBadge />}
         <SideQuestionButton side={side} />
@@ -845,7 +881,7 @@ function ChatView({
         <div className="min-w-0 max-w-full px-4 py-3" ref={contentRef}>
           {messages.length === 0 && !running ? (
             <div className="text-muted-foreground py-10 text-center text-sm">
-              {translate("overview.startChat", { name: agent?.name ?? conv.agent_key })}
+              {translate("overview.startChat", { name: agentLabel })}
             </div>
           ) : (
             <>
@@ -955,7 +991,7 @@ const ConversationItem = React.memo(function ConversationItem({
           checked={selectedForDelete}
           onCheckedChange={(checked) => onSelectedForDeleteChange(conv.id, checked === true)}
           aria-label={translate("overview.selectConversation", {
-            title: conv.title || translate("overview.newConversation"),
+            title: conversationTitleLabel(conv.title, translate),
           })}
           className="ml-1 shrink-0"
         />
@@ -988,7 +1024,7 @@ const ConversationItem = React.memo(function ConversationItem({
         >
           <div className="flex min-w-0 items-center gap-1.5">
             {pinned && <PinIcon className="text-primary size-3 shrink-0" aria-label={translate("overview.pinned")} />}
-            <div className="truncate text-sm">{conv.title || translate("overview.newConversation")}</div>
+            <div className="truncate text-sm">{conversationTitleLabel(conv.title, translate)}</div>
             {conv.running ? (
               <Badge variant="secondary" className="shrink-0 gap-1" title={translate("overview.agentRunning")}>
                 <Spinner className="size-3" aria-hidden="true" />
@@ -1000,7 +1036,7 @@ const ConversationItem = React.memo(function ConversationItem({
             {showAgent && (
               <>
                 <Bot className="size-3 shrink-0" />
-                <span className="min-w-0 truncate">{agent?.name ?? conv.agent_key}</span>
+                <span className="min-w-0 truncate">{agent ? agentDisplayName(agent, translate) : conv.agent_key}</span>
                 <span className="shrink-0">·</span>
               </>
             )}
@@ -1023,7 +1059,7 @@ const ConversationItem = React.memo(function ConversationItem({
             size="icon-sm"
             className="text-muted-foreground shrink-0"
             aria-label={translate("overview.manageConversation", {
-              title: conv.title || translate("overview.newConversation"),
+              title: conversationTitleLabel(conv.title, translate),
             })}
           >
             <MoreHorizontalIcon />
@@ -1053,7 +1089,7 @@ const ConversationItem = React.memo(function ConversationItem({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {translate("overview.deleteConversation", { title: conv.title || translate("overview.newConversation") })}
+              {translate("overview.deleteConversation", { title: conversationTitleLabel(conv.title, translate) })}
             </AlertDialogTitle>
             <AlertDialogDescription>{translate("overview.irreversible")}</AlertDialogDescription>
           </AlertDialogHeader>
@@ -1275,8 +1311,9 @@ export default function ChatPage() {
       groupByAgent(
         visibleConversations.filter((c) => !conversationIsPinned(c)),
         agentByKey,
+        translate,
       ),
-    [visibleConversations, agentByKey],
+    [visibleConversations, agentByKey, translate],
   );
   // conversation agents: custom agents + conversational built-ins (role=assistant,
   // e.g. Auto / 渗透测试). The orchestration built-ins (goals/planner/mainagent/worker)
@@ -1291,8 +1328,11 @@ export default function ChatPage() {
     const keys = new Set([...chatAgents.map((agent) => agent.key), ...counts.keys()]);
     if (agentFilter !== null) keys.add(agentFilter);
     return [...keys]
-      .map((key) => ({ key, name: agentByKey.get(key)?.name || key, count: counts.get(key) ?? 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+      .map((key) => {
+        const ag = agentByKey.get(key);
+        return { key, name: ag ? agentDisplayName(ag, translate) : key, count: counts.get(key) ?? 0 };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "en"));
   }, [convs, chatAgents, agentByKey, agentFilter]);
   const conversationCountLabel =
     agentFilter === null

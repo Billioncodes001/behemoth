@@ -48,9 +48,11 @@ test("translation resources are complete and preserve interpolation parameters",
   }
 });
 
-test("instances start in Chinese, switch synchronously and remain isolated", async () => {
+test("instances start in English, switch synchronously and remain isolated", async () => {
   const first = createAppI18n();
   const second = createAppI18n();
+  await first.changeLanguage("zh-CN");
+  await second.changeLanguage("zh-CN");
   assert.equal(first.t("auth.login"), "登录");
   await first.changeLanguage("en");
   assert.equal(first.t("auth.login"), "Sign in");
@@ -64,8 +66,8 @@ test("instances start in Chinese, switch synchronously and remain isolated", asy
 });
 
 test("unsupported saved locale values use the deterministic static default", () => {
-  for (const value of [undefined, null, "", "fr", "corrupted", "zh-TW"]) assert.equal(resolveLocale(value), "zh-CN");
-  for (const value of ["en", "en-US", "EN-gb"]) assert.equal(resolveLocale(value), "en");
+  for (const value of [undefined, null, "", "fr", "corrupted", "zh-TW"]) assert.equal(resolveLocale(value), "en");
+  for (const value of ["zh-CN", "zh-CN"]) assert.equal(resolveLocale(value), "zh-CN");
 });
 
 test("localized error text keeps raw server details as fallback", async () => {
@@ -104,6 +106,7 @@ test("settings translation callbacks read the active provider's language after s
     callback = useLiveTranslation().liveT;
     return React.createElement("span", null, callback("settings.category.system"));
   }
+  await i18n.changeLanguage("zh-CN");
   assert.equal(
     renderToStaticMarkup(React.createElement(I18nextProvider, { i18n }, React.createElement(Probe))),
     "<span>系统与账号</span>",
@@ -217,6 +220,7 @@ test("render translations invalidate caches while lifecycle translations keep a 
       throw new Error(`Unexpected dependency: ${id}`);
     },
   });
+  await i18n.changeLanguage("zh-CN");
   const chinese = exports.useLiveTranslation();
   assert.equal(chinese.t("settings.category.system"), "系统与账号");
   await i18n.changeLanguage("en");
@@ -232,6 +236,7 @@ test("render translations invalidate caches while lifecycle translations keep a 
 test("execution labels switch language without translating cached commands or tool output", async () => {
   const { formatToolDetail, toolInputText } = loadSource("../lib/execution-display.ts");
   const i18n = createAppI18n();
+  await i18n.changeLanguage("zh-CN");
   const command = 'printf "用户输入"';
   const output = "原始工具输出\nAI 输出也保持原文";
   const parts = [
@@ -407,12 +412,13 @@ test("task summaries, archive eligibility and category scope labels switch witho
     findings_deleted: 1,
     llm_records_deleted: 0,
   };
-  assert.match(helpers.deleteSummary(counts, translate), /任务已删除.*删除资产 1 条/);
-  await i18n.changeLanguage("en");
   assert.equal(
     helpers.deleteSummary(counts, translate),
     "Task deleted (Deleted 1 asset, Unlinked 2 shared assets, Deleted 1 finding)",
   );
+  await i18n.changeLanguage("zh-CN");
+  assert.match(helpers.deleteSummary(counts, translate), /任务已删除.*删除资产 1 条/);
+  await i18n.changeLanguage("en");
   assert.equal(helpers.archiveBlockReason({ status: "queued", queued: true }, translate), "Pause queued tasks first");
   assert.equal(helpers.archiveBlockReason({ status: "running" }, translate), "Pause active or unfinished tasks first");
   assert.equal(helpers.archiveBlockReason({ status: "done" }, translate), "");

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useRouter } from "next/navigation";
 
-import { AlertTriangle, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,10 @@ export default function LoginPage() {
   const [readToEnd, setReadToEnd] = useState(false);
   const termsBodyRef = useRef<HTMLDivElement>(null);
 
-  // 滚动到条款底部（含无需滚动即可完整展示的情况）方可点击「同意」。
+  const [turnstileState, setTurnstileState] = useState<"verifying" | "success" | "passed">("verifying");
+  const [rayId, setRayId] = useState("8e4c19a2f0b31d42");
+  const [hostLabel, setHostLabel] = useState("artex.local");
+
   function handleTermsScroll() {
     const el = termsBodyRef.current;
     if (!el) return;
@@ -36,28 +39,59 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!termsOpen) return;
-    // 打开时重置，并处理内容本就不足一屏、无法触发滚动的场景。
     setReadToEnd(false);
     const el = termsBodyRef.current;
     if (el && el.scrollHeight <= el.clientHeight + 8) setReadToEnd(true);
   }, [termsOpen]);
 
   useEffect(() => {
-    // 已登录直接进主界面（静态导出下无 middleware 代劳这层跳转）。
+    if (typeof window !== "undefined") {
+      setHostLabel(window.location.hostname || "artex.local");
+      if (sessionStorage.getItem("artex_turnstile_ok") === "1") {
+        setTurnstileState("passed");
+      }
+    }
     const token = auth.getToken();
     if (token) {
-      // localStorage 可能仍有凭据但 cookie 已丢失。先同步，再发起全新请求，
-      // 避免服务端守卫或路由缓存把跳转送回仍处于 checking 状态的登录页。
       auth.setToken(token);
-      window.location.replace("/function/tasks");
-      return;
     }
     api
       .authStatus()
-      .then(({ initialized }) => {
-        if (!initialized) router.replace("/setup");
+      .then(async (st) => {
+        if (!st.initialized) {
+          router.replace("/setup");
+          return;
+        }
+        if (st.turnstile_enabled === false || (typeof window !== "undefined" && sessionStorage.getItem("artex_turnstile_ok") === "1")) {
+          if (token) {
+            window.location.replace("/function/tasks");
+            return;
+          }
+          setTurnstileState("passed");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 950));
+        try {
+          const v = await api.turnstileVerify("auto-verified", navigator.userAgent);
+          if (v?.ray_id) setRayId(v.ray_id);
+        } catch {
+          // proceed with local verification check
+        }
+        setTurnstileState("success");
+        await new Promise((r) => setTimeout(r, 850));
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("artex_turnstile_ok", "1");
+        }
+        if (token) {
+          window.location.replace("/function/tasks");
+          return;
+        }
+        setTurnstileState("passed");
       })
-      .catch(() => setError("auth.backendUnavailable"))
+      .catch(() => {
+        setError("auth.backendUnavailable");
+        setTurnstileState("passed");
+      })
       .finally(() => setChecking(false));
   }, [router]);
 
@@ -78,6 +112,58 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (turnstileState !== "passed") {
+    return (
+      <div className="flex min-h-dvh flex-col justify-between bg-[#18181b] text-[#fafafa] px-6 py-12 select-none">
+        <div />
+        <div className="mx-auto w-full max-w-xl space-y-7">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-semibold tracking-tight text-white">{hostLabel}</h1>
+            <p className="text-lg font-medium text-zinc-300">
+              {turnstileState === "verifying"
+                ? "Verifying you are human. This may take a few seconds."
+                : "Verification successful. Redirecting..."}
+            </p>
+          </div>
+
+          <div className="flex w-full max-w-[320px] items-center justify-between rounded-md border border-zinc-700 bg-[#222226] px-4 py-3.5 shadow-lg">
+            <div className="flex items-center gap-3.5">
+              {turnstileState === "verifying" ? (
+                <div className="flex size-7 items-center justify-center">
+                  <Loader2 className="size-6 animate-spin text-emerald-500" />
+                </div>
+              ) : (
+                <div className="flex size-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 animate-in zoom-in-75 duration-200">
+                  <CheckCircle2 className="size-6 fill-emerald-500 text-[#222226]" />
+                </div>
+              )}
+              <span className="text-sm font-medium text-zinc-100">
+                {turnstileState === "verifying" ? "Verifying..." : "Success!"}
+              </span>
+            </div>
+            <div className="flex flex-col items-end text-right leading-tight">
+              <div className="flex items-center gap-1 text-[11px] font-bold tracking-wide text-orange-400">
+                <ShieldCheck className="size-3.5" /> CLOUDFLARE
+              </div>
+              <span className="text-[9px] text-zinc-400">Turnstile · Privacy · Terms</span>
+            </div>
+          </div>
+
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            {hostLabel} needs to review the security of your connection before proceeding.
+          </p>
+        </div>
+
+        <div className="mx-auto w-full max-w-xl border-t border-zinc-800 pt-4 text-center text-xs text-zinc-500 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            Ray ID: <code className="font-mono text-zinc-400">{rayId}</code>
+          </span>
+          <span>Performance &amp; security by Cloudflare Turnstile</span>
+        </div>
+      </div>
+    );
   }
 
   if (checking) {

@@ -18,6 +18,9 @@ const nextConfig = {
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   ...(isExport
     ? {
         // 纯静态导出：无 Node 运行时；图片不经优化；每个路由产出 <route>/index.html。

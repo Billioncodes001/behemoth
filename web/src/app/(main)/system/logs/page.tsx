@@ -9,7 +9,7 @@ import { MOCK } from "@/lib/mock/enabled";
 import type { LogLine } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Mock demo：无后端 SSE，塞几行示例日志。
+// Mock demo fallback
 const MOCK_LOGS: LogLine[] = [
   {
     seq: 1,
@@ -30,28 +30,28 @@ const MOCK_LOGS: LogLine[] = [
     ts: "2026-07-26T03:56:10Z",
     level: "info",
     tag: "planner",
-    text: "task t-acme-web: 第 3 轮规划，生成意图 i-4",
+    text: "task t-acme-web: planning round 3, generated intent i-4",
   },
   {
     seq: 4,
     ts: "2026-07-26T03:57:00Z",
     level: "warn",
     tag: "guard",
-    text: "block bash: 目标越界 out.evil.example 不在 scope 内",
+    text: "block bash: target out.evil.example is out of authorized scope",
   },
   {
     seq: 5,
     ts: "2026-07-26T03:57:30Z",
     level: "info",
     tag: "work#1",
-    text: "report_finding: Default Credentials (high) 已落库",
+    text: "report_finding: Default Credentials (high) saved to database",
   },
   {
     seq: 6,
     ts: "2026-07-26T03:58:20Z",
     level: "error",
     tag: "work#3",
-    text: "intercept: mysqldump 命中破坏性规则，等待人工审批",
+    text: "intercept: mysqldump matched destructive rule, awaiting manual approval",
   },
 ];
 
@@ -79,6 +79,7 @@ export default function LogsPage() {
   const [lines, setLines] = React.useState<LogLine[]>([]);
   const [q, setQ] = React.useState("");
   const [level, setLevel] = React.useState<"all" | LogLine["level"]>("all");
+  const [selectedTag, setSelectedTag] = React.useState<string>("all");
   const [paused, setPaused] = React.useState(false);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const [hasMore, setHasMore] = React.useState(false);
@@ -155,14 +156,51 @@ export default function LogsPage() {
     }
   }
 
+  const availableTags = React.useMemo(() => {
+    const set = new Set<string>([
+      "engine",
+      "chat",
+      "planner",
+      "worker",
+      "security",
+      "proxy-v2",
+      "search",
+      "tools",
+      "traffic",
+      "mcp",
+      "pg",
+    ]);
+    for (const l of lines) {
+      if (l.tag) set.add(l.tag);
+    }
+    return Array.from(set).sort();
+  }, [lines]);
+
   const filtered = React.useMemo(() => {
     const needle = q.trim().toLowerCase();
     return lines.filter(
       (l) =>
         (level === "all" || l.level === level) &&
+        (selectedTag === "all" || l.tag === selectedTag) &&
         (!needle || l.text.toLowerCase().includes(needle) || l.tag.toLowerCase().includes(needle)),
     );
-  }, [lines, q, level]);
+  }, [lines, q, level, selectedTag]);
+
+  function downloadLogs() {
+    if (filtered.length === 0) return;
+    const content = filtered
+      .map((l) => `${fmtTime(l.ts)} [${l.level.toUpperCase()}] ${l.tag ? `[${l.tag}] ` : ""}${l.text}`)
+      .join("\n");
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `artex-system-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.log`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   React.useEffect(() => {
     if (stick.current && !paused) bottom.current?.scrollIntoView();
@@ -216,6 +254,9 @@ export default function LogsPage() {
           <Button size="sm" variant="outline" className="h-8" onClick={() => setLines([])}>
             {ui("screen.1ef3de06b32e52")}
           </Button>
+          <Button size="sm" variant="outline" className="h-8" onClick={downloadLogs} disabled={filtered.length === 0}>
+            Download .log
+          </Button>
           <span className="ml-auto text-xs text-muted-foreground">
             {counts.total} {ui("screen.7049a63d1e7231")}{" "}
             <span className="text-amber-600 dark:text-amber-400">
@@ -226,6 +267,29 @@ export default function LogsPage() {
               {counts.error} {ui("screen.0bc1fb72ae1be5")}
             </span>
           </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground mr-1">Subsystem:</span>
+          <Button
+            size="sm"
+            variant={selectedTag === "all" ? "secondary" : "ghost"}
+            className="h-6 px-2 text-xs"
+            onClick={() => setSelectedTag("all")}
+          >
+            All Subsystems
+          </Button>
+          {availableTags.map((tg) => (
+            <Button
+              key={tg}
+              size="sm"
+              variant={selectedTag === tg ? "secondary" : "ghost"}
+              className="h-6 px-2 font-mono text-xs"
+              onClick={() => setSelectedTag(tg)}
+            >
+              [{tg}]
+            </Button>
+          ))}
         </div>
 
         <div

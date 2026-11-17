@@ -26,6 +26,15 @@ import (
 	"github.com/Autumn-27/artex/llmpool"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/artex/report"
+	"github.com/Autumn-27/artex/server/factgraph"
+	"github.com/Autumn-27/artex/server/fingerprint"
+	"github.com/Autumn-27/artex/server/proxy/v2"
+	"github.com/Autumn-27/artex/server/recipes"
+	"github.com/Autumn-27/artex/server/search"
+	"github.com/Autumn-27/artex/server/browser"
+	"github.com/Autumn-27/artex/server/security"
+	"github.com/Autumn-27/artex/server/targets"
+	"github.com/Autumn-27/artex/server/tools"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
@@ -88,13 +97,13 @@ type Server struct {
 	chatCancel map[string]context.CancelCauseFunc
 
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
-	// to a concurrency limit derived from the agent's策略: serial → limit 1 (+ optional
-	// merge); parallel → limit = trigger_max_parallel (0=∞), no merge. triggerActive
+	// to a concurrency limit derived from the agent's strategy: serial -> limit 1 (+ optional
+	// merge); parallel -> limit = trigger_max_parallel (0=inf), no merge. triggerActive
 	// counts in-flight runs per agent (replaces a boolean drain flag); a run's
 	// completion decrements it and re-pumps to fill the freed slot. triggerCfg caches
-	// the agent's last-read策略 so the pump never queries the DB while holding queueMu.
+	// the agent's last-read strategy so the pump never queries the DB while holding queueMu.
 	// Distinct agents always run concurrently. Queue is in-memory (matches chatBusy); a
-	// restart drops pending fires — the scheduler re-fires from watermarks next tick.
+	// restart drops pending fires -- the scheduler re-fires from watermarks next tick.
 	queueMu       sync.Mutex
 	triggerQ      map[string][]triggeredRun
 	triggerActive map[string]int
@@ -144,6 +153,31 @@ type Server struct {
 	// servers leave it nil and use probeEgress directly.
 	proxyProbe func(context.Context, string, string, []string, time.Duration) egressProbeResult
 	side       *sideQuestionState
+
+	// Recipe registry for tool definitions (CyberStrikeAI-style)
+	recipeReg *recipes.RecipeRegistry
+
+	// Fact graph for intelligence gathering (sapper-v2 style)
+	factGraph *factgraph.Graph
+
+	// Tool catalog and executor (HexStrike-inspired)
+	toolCatalog *tools.Catalog
+	toolExecutor *tools.ToolExecutor
+
+	// Target connectors for remote execution
+	targetMu    sync.Mutex
+	targets     map[string]targets.TargetConnector // keyed by target ID
+
+	// Security modules (anti-bot/IOC/backdoor detection)
+	iocBlocklist     *security.IOCBlocklist
+	antiDetect       *security.AntiDetect
+	backdoorDetector *security.BackdoorDetector
+
+	// Multi-engine web search (Pentagi-inspired)
+	searchOrchestrator *search.Orchestrator
+
+	// Browser automation (Pentagi-inspired)
+	browserScraper *browser.Scraper
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -163,10 +197,10 @@ type triggeredRun struct {
 
 	agentKey  string
 	title     string
-	message   string // 事件正文(触发语 + 工具/入参/返回等);不含任务描述/目标头
+	message   string // Event body (trigger phrase + tool/input/output); excludes task desc/goal header
 	taskID    int64  // source task for finding/goal triggers; 0 for interval/none
-	taskDesc  string // 任务描述(任务级,同任务相同);合并时只渲染一次
-	taskGoal  string // 任务目标(任务级,同任务相同);合并时只渲染一次
+	taskDesc  string // Task description (task-level, same for all runs in task); rendered once on merge
+	taskGoal  string // Task goal (task-level, same for all runs in task); rendered once on merge
 	mergeable bool   // true for finding/goal event triggers (merge by taskID)
 }
 
@@ -182,14 +216,133 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1), credentialWake: make(chan struct{}, 1)}
 	m.SetTaskControlMutex(&s.concMu)
+
+	// Initialize dynamic fingerprint system (randomizes cookies, headers, UAs per startup)
+	fingerprint.Initialize()
+	InitializeDynamicNames()
+
+	// Start runtime fingerprint rotation scheduler (rotate UAs every 5 minutes)
+	// This ensures fingerprints change DURING runtime, not just on restart
+	_ = fingerprint.StartRotationScheduler(5 * time.Minute)
+
+	// Initialize Proxy Pool v2 system (if DB available)
+	if m.pg != nil {
+		s.initProxyPoolV2(m)
+	}
+	s.startGitAutoSync(ctx)
+
+	// Initialize Recipe Registry (tool definitions)
+	s.recipeReg = recipes.NewRecipeRegistry(filepath.Join(dataDir, "recipes", "tools"))
+	if err := s.recipeReg.Load(); err != nil {
+		log.Printf("[recipes] Warning: could not load recipes: %v", err)
+	} else {
+		log.Printf("[recipes] Loaded %d tool recipes", s.recipeReg.Count())
+	}
+
+	// Initialize Fact Graph (intelligence gathering)
+	s.factGraph = factgraph.NewGraph()
+	log.Printf("[factgraph] Fact graph initialized")
+
+	// Initialize Tool Catalog & Executor (HexStrike-inspired)
+	s.toolCatalog = tools.NewCatalog()
+	s.toolExecutor = tools.NewToolExecutor(s.toolCatalog, tools.DefaultExecutorConfig())
+	s.targets = make(map[string]targets.TargetConnector)
+	log.Printf("[tools] Tool catalog loaded: %d tools", s.toolCatalog.Count())
+
+	// Initialize Security Modules (IOC blocking, anti-detect, backdoor detection)
+	s.iocBlocklist = security.NewIOCBlocklist()
+	stealthCfg := security.DefaultStealthConfig()
+	if m.pg != nil {
+		if raw, ok, _ := m.pg.GetSetting("security_stealth_config"); ok && strings.TrimSpace(raw) != "" {
+			_ = json.Unmarshal([]byte(raw), &stealthCfg)
+		}
+		if rawIOCs, ok, _ := m.pg.GetSetting("security_ioc_blocked_ips"); ok && strings.TrimSpace(rawIOCs) != "" {
+			var ips []string
+			if json.Unmarshal([]byte(rawIOCs), &ips) == nil && len(ips) > 0 {
+				s.iocBlocklist.SetBlockedIPs(ips)
+			}
+		}
+	}
+	s.antiDetect = security.NewAntiDetect(stealthCfg)
+	s.backdoorDetector = security.NewBackdoorDetector()
+	log.Printf("[security] Security modules initialized: IOC blocklist (%d IPs), anti-detect (enabled=%v), backdoor detector", len(s.iocBlocklist.GetStats().BlockedIPs), stealthCfg.Enabled)
+
+	// Initialize Multi-Engine Web Search (Pentagi-inspired)
+	searchCfg := search.DefaultConfig()
+	// Load search config from environment first, then DB settings override
+	if apiKey := os.Getenv("SEARCH_GOOGLE_API_KEY"); apiKey != "" {
+		searchCfg.Google.APIKey = apiKey
+	}
+	if cseID := os.Getenv("SEARCH_GOOGLE_CSE_ID"); cseID != "" {
+		searchCfg.Google.CSEID = cseID
+	}
+	if apiKey := os.Getenv("SEARCH_TAVILY_API_KEY"); apiKey != "" {
+		searchCfg.Tavily.APIKey = apiKey
+	}
+	if searxngURL := os.Getenv("SEARCH_SEARXNG_URL"); searxngURL != "" {
+		searchCfg.SearXNG.URL = searxngURL
+	}
+	if m.pg != nil {
+		if v, ok, _ := m.pg.GetSetting("search_google_api_key"); ok && strings.TrimSpace(v) != "" {
+			if parts := strings.SplitN(strings.TrimSpace(v), "|", 2); len(parts) == 2 {
+				searchCfg.Google.APIKey = strings.TrimSpace(parts[0])
+				searchCfg.Google.CSEID = strings.TrimSpace(parts[1])
+			} else if parts := strings.SplitN(strings.TrimSpace(v), ":", 2); len(parts) == 2 {
+				searchCfg.Google.APIKey = strings.TrimSpace(parts[0])
+				searchCfg.Google.CSEID = strings.TrimSpace(parts[1])
+			} else {
+				searchCfg.Google.APIKey = strings.TrimSpace(v)
+			}
+		}
+		if v, ok, _ := m.pg.GetSetting("search_google_cse_id"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.Google.CSEID = strings.TrimSpace(v)
+		}
+		if v, ok, _ := m.pg.GetSetting("search_tavily_api_key"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.Tavily.APIKey = strings.TrimSpace(v)
+		} else if v, ok, _ := m.pg.GetSetting("tavily_search_api_key"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.Tavily.APIKey = strings.TrimSpace(v)
+		}
+		if v, ok, _ := m.pg.GetSetting("search_searxng_url"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.SearXNG.URL = strings.TrimSpace(v)
+		}
+	}
+	searchCfg.Google.Enabled = searchCfg.Google.APIKey != "" && searchCfg.Google.CSEID != ""
+	searchCfg.Tavily.Enabled = searchCfg.Tavily.APIKey != ""
+	searchCfg.SearXNG.Enabled = searchCfg.SearXNG.URL != ""
+	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
+	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
+
+	// Initialize Browser Automation (Pentagi-inspired)
+	browserCfg := browser.DefaultConfig()
+	browserCfg.ScreenshotDir = filepath.Join(dataDir, "screenshots")
+	if envLocal := os.Getenv("BROWSER_USE_LOCAL_CHROME"); envLocal != "" {
+		browserCfg.UseLocalChrome = envLocal == "true" || envLocal == "1"
+	} else {
+		browserCfg.UseLocalChrome = true
+	}
+	if scraperURL := os.Getenv("BROWSER_SCRAPER_URL"); scraperURL != "" {
+		browserCfg.ScraperURL = scraperURL
+	}
+	if m.pg != nil {
+		if v, ok, _ := m.pg.GetSetting("browser_scraper_url"); ok {
+			browserCfg.ScraperURL = strings.TrimSpace(v)
+		}
+		if v, ok, _ := m.pg.GetSetting("browser_use_local_chrome"); ok && strings.TrimSpace(v) != "" {
+			browserCfg.UseLocalChrome = strings.TrimSpace(v) == "true" || strings.TrimSpace(v) == "1"
+		}
+	}
+	s.browserScraper = browser.NewScraper(browserCfg)
+	log.Printf("[browser] Browser automation initialized (local: %v, scraper: %v)",
+		browserCfg.UseLocalChrome, browserCfg.ScraperURL != "")
+
 	s.initSideQuestions()
 	if m.pg != nil {
 		if err := s.basicAuth.load(m.pg); err != nil {
 			log.Fatalf("[auth] load HTTP Basic Auth: %v", err)
 		}
 	}
-	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
-	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
+	// Circuit-breaker thresholds/cooldown are hot parameters on the failure path.
+	// Push global retry policy to Registry once at startup; re-push on each policy save (saveLLMRetryPolicy).
 	s.applyRetryPolicy()
 	// Every task uses a stable task router. An empty explicit chain is resolved by
 	// that router through Agent bindings and then the global provider, so adding a
@@ -215,8 +368,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.traffic != nil {
 		m.traffic.SetUpstreamFailureHandler(s.handleProxyTrafficFailure)
 	}
-	// Wire DB-stored prompt templates into the agents (新版方案 §3.3 / §5a). With no
-	// override row, agents keep their built-in defaults — behavior is unchanged.
+	// Wire DB-stored prompt templates into the agents (new approach S3.3 / S5a). With no
+	// override row, agents keep their built-in defaults -- behavior is unchanged.
 	if m.pg != nil {
 		agent.OpsecEnabled = func() bool { return m.pg.GetBool(settingOpsecEnabled, false) }
 		agent.PromptOverride = func(key string) (string, bool) {
@@ -231,8 +384,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			if key == "reporter" && m.pg.GetBool(settingBrowserScreenshot, false) {
 				t += `
 
-【报告步骤截图已开启】
-				报告撰写时，针对每个复现步骤中真实出现且仍可访问的 HTTP 页面，使用 browser MCP 的 browser_navigate 和 browser_take_screenshot 截取页面证据。只导航到漏洞证据中出现的目标 URL，不要自行扩大测试范围。将截图保存到当前工作目录下的 findings/screenshots/ 目录，文件名使用 finding-<finding_id>-step-<n>.png；确认文件存在后，在对应步骤中**统一使用工作区相对路径**加入 Markdown 图片：![步骤 <n> 截图](findings/screenshots/finding-<finding_id>-step-<n>.png)。禁止使用绝对路径、workspace://、file://，也不要混用相对路径和绝对路径；报告中所有截图都必须使用这一种格式。截图失败时如实写明，不要用占位图或把截图描述冒充图片。`
+[Report Step Screenshots Enabled]
+When writing reports, for each reproduction step with a real HTTP page that is still accessible, use browser MCP's browser_navigate and browser_take_screenshot to capture page evidence. Only navigate to target URLs that appear in vulnerability evidence; do not expand the test scope on your own. Save screenshots to findings/screenshots/ directory under the current working directory, using filename format finding-<finding_id>-step-<n>.png; after confirming the file exists, use **workspace-relative paths** uniformly in Markdown images for the corresponding step: ![Step <n> Screenshot](findings/screenshots/finding-<finding_id>-step-<n>.png). Do not use absolute paths, workspace://, file://, and do not mix relative and absolute paths; all screenshots in the report must use this one format. If screenshot fails, state it honestly; do not use placeholders or pass off screenshot descriptions as images.`
 			}
 			return t, true
 		}
@@ -639,13 +792,13 @@ func (s *Server) resolveChatAgent(c *db.Conversation) *agent.ChatAgent {
 func (s *Server) chatUnavailableReason() string {
 	if s.m.pg != nil {
 		if profiles, err := s.m.pg.ListProfiles(); err == nil && len(profiles) == 0 {
-			return "尚未配置 LLM：请到 系统 → LLM 配置 添加一个配置"
+			return "No LLM profile configured: please go to System -> LLM to add a model profile"
 		}
 		if active, err := s.m.pg.ActiveProfile(); err == nil && active == nil {
-			return "没有已激活的 LLM 配置：请到 系统 → LLM 配置 激活一个，或在本对话为该会话指定一个配置"
+			return "No active LLM profile: please go to System -> LLM to activate one, or select a profile for this conversation"
 		}
 	}
-	return "LLM 未就绪，无法对话：请检查 系统 → LLM 配置是否有可用且已激活的配置"
+	return "LLM not ready: please check System -> LLM to ensure an active model profile is configured"
 }
 
 // providerForProfile returns a cached provider+cfg for a profile id, so every agent
@@ -796,8 +949,50 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerSideRoutes(mux)
 
+	// Register Proxy Pool v2 API endpoints
+	s.registerProxyPoolV2Routes(mux)
+
+	// Tool Recipes API (CyberStrikeAI-style)
+	mux.HandleFunc("GET /api/v2/recipes", s.handleListRecipes)
+	mux.HandleFunc("GET /api/v2/recipes/{id}", s.handleGetRecipe)
+	mux.HandleFunc("GET /api/v2/recipes/categories", s.handleRecipeCategories)
+	mux.HandleFunc("POST /api/v2/recipes/search", s.handleSearchRecipes)
+
+	// Fact Graph API (sapper-v2 style)
+	mux.HandleFunc("GET /api/v2/facts", s.handleListFacts)
+	mux.HandleFunc("POST /api/v2/facts", s.handleCreateFact)
+	mux.HandleFunc("GET /api/v2/facts/{id}", s.handleGetFact)
+	mux.HandleFunc("PATCH /api/v2/facts/{id}", s.handleUpdateFact)
+	mux.HandleFunc("DELETE /api/v2/facts/{id}", s.handleDeleteFact)
+	mux.HandleFunc("POST /api/v2/facts/search", s.handleSearchFacts)
+	mux.HandleFunc("GET /api/v2/facts/stats", s.handleFactStats)
+	mux.HandleFunc("POST /api/v2/facts/link", s.handleLinkFacts)
+
+	// TLS Fingerprinting API
+	mux.HandleFunc("GET /api/v2/tls/specs", s.handleTLSSpecs)
+	mux.HandleFunc("GET /api/v2/tls/current", s.handleTLSCurrent)
+
+	// Tool Catalog & Execution API (HexStrike-inspired)
+	mux.HandleFunc("GET /api/v2/tools", s.handleListTools)
+	mux.HandleFunc("GET /api/v2/tools/{id}", s.handleGetTool)
+	mux.HandleFunc("GET /api/v2/tools/categories", s.handleToolCategories)
+	mux.HandleFunc("POST /api/v2/tools/search", s.handleSearchTools)
+	mux.HandleFunc("POST /api/v2/tools/execute", s.handleExecuteTool)
+	mux.HandleFunc("GET /api/v2/tools/execution/{id}", s.handleGetExecution)
+	mux.HandleFunc("GET /api/v2/tools/history", s.handleExecutionHistory)
+
+	// Target Connectors API (HackingBuddyGPT-inspired)
+	mux.HandleFunc("POST /api/v2/targets/connect/ssh", s.handleConnectSSH)
+	mux.HandleFunc("POST /api/v2/targets/connect/winrm", s.handleConnectWinRM)
+	mux.HandleFunc("DELETE /api/v2/targets/{id}", s.handleDisconnectTarget)
+	mux.HandleFunc("GET /api/v2/targets", s.handleListTargets)
+	mux.HandleFunc("POST /api/v2/targets/{id}/execute", s.handleTargetExecute)
+	mux.HandleFunc("POST /api/v2/targets/{id}/sftp/upload", s.handleSFTPUpload)
+	mux.HandleFunc("POST /api/v2/targets/{id}/sftp/download", s.handleSFTPDownload)
+
 	// Auth routes — exempt from JWT check (handled in requireAuth)
 	mux.HandleFunc("GET /api/auth/status", s.authStatus)
+	mux.HandleFunc("POST /api/auth/turnstile-verify", s.authTurnstileVerify)
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
@@ -816,8 +1011,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/logs/history", s.getLogsHistory)
 	mux.HandleFunc("GET /api/logs/stream", s.streamLogs)
 
-	// 页面一键更新。走的是默认的 JWT 鉴权（auth.go 只放行 /api/auth/* 和
-	// /api/health），所以这几个改动程序自身的接口天然需要登录。
+	// One-click in-app updates & automatic Git live-sync endpoints
+	mux.HandleFunc("GET /api/update/maintenance", s.handleMaintenanceStatus)
+	mux.HandleFunc("POST /api/update/webhook", s.handleTriggerGitSync)
+	mux.HandleFunc("POST /api/update/git-sync", s.handleTriggerGitSync)
 	mux.HandleFunc("GET /api/update/settings", s.getUpdateSettings)
 	mux.HandleFunc("PUT /api/update/settings", s.putUpdateSettings)
 	mux.HandleFunc("GET /api/update/check", s.updateCheck)
@@ -1158,10 +1355,32 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/intercept/judge", s.interceptSetJudgeConfig)
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // 兜底审批累计 token 用量
 
-	// /api/* goes through CORS + JWT; everything else is served by the embedded
+	// Security API endpoints (IOC, anti-bot, backdoor detection)
+	mux.HandleFunc("GET /api/v2/security/stats", s.handleSecurityStats)
+	mux.HandleFunc("GET /api/v2/security/iocs", s.handleListIOCs)
+	mux.HandleFunc("POST /api/v2/security/iocs", s.handleAddIOC)
+	mux.HandleFunc("DELETE /api/v2/security/iocs/{ip}", s.handleRemoveIOC)
+	mux.HandleFunc("POST /api/v2/security/check", s.handleSecurityCheck)
+	mux.HandleFunc("GET /api/v2/security/stealth/config", s.handleGetStealthConfig)
+	mux.HandleFunc("PUT /api/v2/security/stealth/config", s.handleUpdateStealthConfig)
+	mux.HandleFunc("POST /api/v2/security/stealth/config", s.handleUpdateStealthConfig)
+
+	// Multi-Engine Web Search API (Pentagi-inspired)
+	mux.HandleFunc("GET /api/v2/search/engines", s.handleSearchEngines)
+	mux.HandleFunc("POST /api/v2/search", s.handleSearch)
+	mux.HandleFunc("POST /api/v2/search/exploit", s.handleSearchExploit)
+	mux.HandleFunc("POST /api/v2/search/config", s.handleSearchConfig)
+
+	// Browser Automation API (Pentagi-inspired)
+	mux.HandleFunc("POST /api/v2/browser/screenshot", s.handleBrowserScreenshot)
+	mux.HandleFunc("POST /api/v2/browser/content", s.handleBrowserContent)
+	mux.HandleFunc("GET /api/v2/browser/config", s.handleGetBrowserConfig)
+	mux.HandleFunc("POST /api/v2/browser/config", s.handleBrowserConfig)
+
+	// /api/* goes through Security -> CORS + JWT; everything else is served by the embedded
 	// frontend (no JWT required; the optional Basic Auth gate wraps both). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
-	api := cors(s.requireAuth(mux))
+	api := cors(s.requireAuth(s.securityMiddleware(mux)))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
@@ -1176,10 +1395,12 @@ func (s *Server) Handler() http.Handler {
 
 // --- handlers ---
 
-// health requires the optional Basic Auth gate but no admin JWT, and exposes no application fingerprints.
+// health requires the optional Basic Auth gate but no admin JWT, and exposes maintenance state.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"ok": true})
+	snap := getMaintenanceSnapshot()
+	snap["ok"] = true
+	writeJSON(w, 200, snap)
 }
 
 // version is protected by the normal JWT middleware and optional Basic Auth gate.
@@ -1697,8 +1918,11 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 		cfg.APIKey = s.llmCfg.APIKey
 		s.cfgMu.Unlock()
 	}
+	if cfg.APIKey == "" && isLocalLLMEndpoint(cfg.BaseURL) {
+		cfg.APIKey = "ollama"
+	}
 	if cfg.APIKey == "" {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": "未提供 API Key"})
+		writeJSON(w, 200, map[string]any{"ok": false, "error": "API Key is required"})
 		return
 	}
 	// 重试参数【不】带进连接测试:测试有 30s 硬超时,把配置的重试次数/长间隔叠上去
@@ -3702,15 +3926,15 @@ func (s *Server) settingsPayload() map[string]any {
 	}
 	return map[string]any{
 		"traffic_capture":                      s.m.TrafficEnabled(),
-		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, false),
-		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, false),
-		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, false),
-		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, false),
-		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, false),
-		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, false),
-		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, false),
-		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, false),
-		db.SettingCredentialTraffic:            s.m.pg.GetBool(db.SettingCredentialAgent, false) && s.m.pg.GetBool(db.SettingCredentialTraffic, false),
+		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, true),
+		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, true),
+		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, true),
+		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, true),
+		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, true),
+		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, true),
+		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, true),
+		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, true),
+		db.SettingCredentialTraffic:            s.m.pg.GetBool(db.SettingCredentialAgent, true) && s.m.pg.GetBool(db.SettingCredentialTraffic, true),
 		"llm_record":                           s.m.LLMRecordEnabled(),
 		"web_search_enabled":                   on,
 		"web_search_backend":                   backend,
@@ -4142,6 +4366,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, err.Error())
 			return
 		}
+		if req.TavilyKey != nil && s.searchOrchestrator != nil {
+			s.searchOrchestrator.UpdateEngine("tavily", *req.TavilyKey)
+		}
 		changed = true
 	}
 	if req.DeepSeekSearchKey != nil {
@@ -4498,21 +4725,248 @@ func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "no active task")
 		return
 	}
-	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
-	counts := map[string]int{}
-	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
-		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
-		if len(ns) > 0 {
-			counts[ty] = len(ns)
+	taskID, _ := strconv.ParseInt(t.ID, 10, 64)
+	findings, _ := t.Store.ListByKind(db.KindFinding, 1000)
+	goals, _ := t.Store.ListByKind(db.KindGoal, 500)
+	hints, _ := t.Store.ListByKind(db.KindHint, 200)
+	facts, _ := t.Store.ListByKind(db.KindFact, 1000)
+	constraints, _ := t.Store.ListConstraints()
+	edges, _ := t.Store.Edges(5000)
+
+	dbFindings, _ := s.m.pg.ListFindingsForExport(db.FindingFilter{TaskID: t.ID}, nil)
+	for _, df := range dbFindings {
+		if df == nil {
+			continue
+		}
+		if tf, err := s.m.pg.GetFindingTraffic(r.Context(), df.ID); err == nil && tf != nil {
+			df.TrafficBindings = tf.Bindings
 		}
 	}
-	md := report.Markdown(report.Input{
-		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings,
-	})
+
+	findingChains := map[int64][]*db.Node{}
+	for _, fn := range findings {
+		if fn == nil {
+			continue
+		}
+		if chainNodes, _, err := t.Store.FindingLineage(fn.ID); err == nil && len(chainNodes) > 0 {
+			findingChains[fn.ID] = chainNodes
+		}
+	}
+
+	intentNodes, _ := t.Store.ListByKind(db.KindIntent, 500)
+	sort.Slice(intentNodes, func(i, j int) bool { return intentNodes[i].ID < intentNodes[j].ID })
+	derivedMap := map[int64][]int64{}
+	yieldedMap := map[int64][]int64{}
+	for _, e := range edges {
+		switch e.Rel {
+		case "derived_from":
+			derivedMap[e.From] = append(derivedMap[e.From], e.To)
+		case "yields":
+			yieldedMap[e.From] = append(yieldedMap[e.From], e.To)
+		}
+	}
+	intents := make([]report.IntentTrace, 0, len(intentNodes))
+	intentTitles := map[int64]string{}
+	for _, inNode := range intentNodes {
+		if inNode == nil || inNode.State == "deleted" {
+			continue
+		}
+		var ip struct {
+			Summary string `json:"summary"`
+			Title   string `json:"title"`
+		}
+		_ = json.Unmarshal(inNode.Payload, &ip)
+		if ip.Summary != "" {
+			intentTitles[inNode.ID] = ip.Summary
+		} else if ip.Title != "" {
+			intentTitles[inNode.ID] = ip.Title
+		}
+		steps, _ := t.Store.ActivityTraceWithSources(inNode.ID, 100)
+		intents = append(intents, report.IntentTrace{
+			Node:       inNode,
+			DerivedIDs: derivedMap[inNode.ID],
+			YieldedIDs: yieldedMap[inNode.ID],
+			Steps:      steps,
+		})
+	}
+
+	md := s.buildTaskReportMarkdown(r.Context(), t, taskID, findings, dbFindings, findingChains, goals, hints, facts, constraints, edges, intents, intentTitles)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(md))
+}
+
+func (s *Server) buildTaskReportMarkdown(
+	ctx context.Context,
+	t *Task,
+	taskID int64,
+	findings []*db.Node,
+	dbFindings []*db.DBFinding,
+	findingChains map[int64][]*db.Node,
+	goals []*db.Node,
+	hints []*db.Node,
+	facts []*db.Node,
+	constraints []db.Constraint,
+	edges []db.Edge,
+	intents []report.IntentTrace,
+	intentTitles map[int64]string,
+) string {
+	var scopeVals []string
+	if as := s.m.Assets(); as != nil && taskID > 0 {
+		if rows, err := as.ListTaskScopeWithSources(taskID); err == nil {
+			for _, sr := range rows {
+				if strings.TrimSpace(sr.Value) != "" {
+					scopeVals = append(scopeVals, fmt.Sprintf("%s:%s", sr.Kind, sr.Value))
+				}
+			}
+		}
+	}
+
+	counts := map[string]int{}
+	var assetEntries []report.AssetEntry
+	assetLabels := map[int64]string{}
+	if as := s.m.Assets(); as != nil {
+		for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
+			ns, _ := as.QueryByType(ty, 100000, 0)
+			if len(ns) > 0 {
+				counts[ty] = len(ns)
+			}
+			for _, a := range ns {
+				if a == nil {
+					continue
+				}
+				lbl := assetLabel(a)
+				assetLabels[a.ID] = lbl
+				if len(assetEntries) < 200 {
+					host := a.Domain
+					if host == "" {
+						host = a.IP
+					}
+					if host == "" {
+						host = a.RootDomain
+					}
+					extra := strings.Join(a.Technologies, ", ")
+					if a.ServiceName != "" && extra != "" {
+						extra = a.ServiceName + " (" + extra + ")"
+					} else if a.ServiceName != "" {
+						extra = a.ServiceName
+					}
+					assetEntries = append(assetEntries, report.AssetEntry{
+						ID:    a.ID,
+						Type:  a.Type,
+						Label: lbl,
+						Host:  host,
+						Extra: extra,
+					})
+				}
+			}
+		}
+	}
+
+	var intelItems []*db.Intelligence
+	if taskID > 0 {
+		if page, err := s.m.pg.ListIntelligence(ctx, db.IntelligenceFilter{TaskID: taskID, Limit: 100}); err == nil && page != nil {
+			intelItems = page.Items
+		}
+	}
+
+	artifacts := s.collectTaskReportArtifacts(t.ID, intentTitles)
+
+	title := strings.TrimSpace(t.Name)
+	if title == "" {
+		title = t.Description
+	}
+	var createdAt time.Time
+	if t.CreatedAt > 0 {
+		createdAt = time.Unix(t.CreatedAt, 0)
+	}
+	var completedAt *time.Time
+	if t.CompletedAt > 0 {
+		ct := time.Unix(t.CompletedAt, 0)
+		completedAt = &ct
+	}
+
+	return report.Markdown(report.Input{
+		TaskID:        t.ID,
+		Title:         title,
+		Goal:          t.Goal,
+		Status:        s.deriveTaskStatus(t),
+		Scope:         scopeVals,
+		CreatedAt:     createdAt,
+		CompletedAt:   completedAt,
+		GeneratedAt:   time.Now(),
+		AssetCounts:   counts,
+		Assets:        assetEntries,
+		AssetLabels:   assetLabels,
+		Constraints:   constraints,
+		Hints:         hints,
+		Goals:         goals,
+		Edges:         edges,
+		Intents:       intents,
+		Facts:         facts,
+		Findings:      findings,
+		DBFindings:    dbFindings,
+		FindingChains: findingChains,
+		Intelligence:  intelItems,
+		Artifacts:     artifacts,
+	})
+}
+
+func (s *Server) collectTaskReportArtifacts(taskID string, intentTitles map[int64]string) []report.ArtifactFile {
+	taskDir := filepath.Join(s.m.dir, "tasks", taskID)
+	info, err := os.Stat(taskDir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	var out []report.ArtifactFile
+	_ = filepath.WalkDir(taskDir, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return nil
+		}
+		if len(out) >= 100 {
+			return filepath.SkipAll
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(taskDir, p)
+		if err != nil {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		var intentID int64
+		parts := strings.Split(relSlash, "/")
+		if len(parts) > 0 && strings.HasPrefix(parts[0], "i") {
+			if id, err := strconv.ParseInt(strings.TrimPrefix(parts[0], "i"), 10, 64); err == nil && id > 0 {
+				intentID = id
+			}
+		}
+		var preview string
+		ext := strings.ToLower(filepath.Ext(relSlash))
+		switch ext {
+		case ".py", ".sh", ".txt", ".md", ".json", ".yaml", ".yml", ".http", ".sql", ".js", ".go", ".xml", ".conf":
+			if fi.Size() > 0 && fi.Size() <= 16384 {
+				if raw, err := os.ReadFile(p); err == nil {
+					text := strings.TrimSpace(string(raw))
+					if len(text) > 2000 {
+						text = text[:2000] + "\n...[truncated]..."
+					}
+					preview = text
+				}
+			}
+		}
+		out = append(out, report.ArtifactFile{
+			Path:        relSlash,
+			Size:        fi.Size(),
+			ModTime:     fi.ModTime(),
+			IntentID:    intentID,
+			IntentTitle: intentTitles[intentID],
+			Preview:     preview,
+		})
+		return nil
+	})
+	return out
 }
 
 func (s *Server) getAudit(w http.ResponseWriter, r *http.Request) {
@@ -4534,21 +4988,20 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		// Next dev and the Go SSE endpoint use different ports on the same
-		// loopback host. Allow the gate cookie only for that local pairing.
+		// Allow credentials when the Origin matches the request Host (custom domain or loopback).
 		origin := r.Header.Get("Origin")
 		u, err := url.Parse(origin)
 		host, _, hostErr := net.SplitHostPort(r.Host)
 		if hostErr != nil {
 			host = r.Host
 		}
-		if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() == host &&
-			(host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") &&
+			(strings.EqualFold(u.Hostname(), host) || host == "localhost" || host == "127.0.0.1" || host == "::1") {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		w.Header().Add("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
@@ -4556,6 +5009,199 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// === PROXY POOL V2 INTEGRATION ===
+
+// proxyPoolV2 holds the v2 proxy pool components (initialized once at startup).
+type proxyPoolV2 struct {
+	Pool       *proxyv2.Pool
+	Store      *proxyv2.PGStore
+	Handler    *proxyv2.Handler
+	Middleware *proxyv2.Middleware
+}
+
+// ppV2 is the global Proxy Pool v2 instance, nil until initialized.
+var ppV2 *proxyPoolV2
+
+// GetProxyPoolV2 returns the global Proxy Pool v2 instance (nil if not initialized).
+func GetProxyPoolV2() *proxyPoolV2 {
+	return ppV2
+}
+
+// initProxyPoolV2 initializes the Proxy Pool v2 system with PostgreSQL backend.
+// Called once during Server.New() if DB is available.
+func (s *Server) initProxyPoolV2(m *Manager) {
+	// db.DB embeds *sql.DB, so we can pass it directly
+	store := proxyv2.NewPGStore(m.pg.DB)
+	if err := store.InitTable(context.Background()); err != nil {
+		log.Printf("[proxy-v2] Warning: proxy pool table init error: %v", err)
+	}
+	pool := proxyv2.NewPool(store)
+	if err := pool.Initialize(); err != nil {
+		log.Printf("[proxy-v2] Warning: proxy pool init error: %v", err)
+	}
+	handler := proxyv2.NewHandler(pool)
+	middleware := proxyv2.NewMiddleware(pool)
+
+	ppV2 = &proxyPoolV2{
+		Pool:       pool,
+		Store:      store,
+		Handler:    handler,
+		Middleware: middleware,
+	}
+
+	rawV2, activeV2, cfgV2 := pool.GetRawState()
+	v1Entries := m.proxyPoolEntries()
+	if len(rawV2) > 0 && len(v1Entries) == 0 {
+		s.syncProxyPoolV2ToV1(rawV2, activeV2, cfgV2)
+	} else if len(v1Entries) > 0 && len(rawV2) == 0 {
+		s.syncV1ToProxyPoolV2()
+	}
+
+	pool.SetSyncHook(func(proxies []proxyv2.ProxyInfo, activeID string, cfg *proxyv2.ProxyPoolConfig) {
+		s.syncProxyPoolV2ToV1(proxies, activeID, cfg)
+	})
+
+	proxies := pool.GetProxies()
+	log.Printf("[proxy-v2] Proxy Pool v2 initialized and unified with core agent proxy engine (%d proxies)", len(proxies))
+}
+
+func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID string, cfg *proxyv2.ProxyPoolConfig) {
+	if s == nil || s.m == nil {
+		return
+	}
+	entries := make([]proxyPoolEntry, 0, len(proxies))
+	for _, px := range proxies {
+		rawURL := px.BuildProxyURL()
+		enabled := px.Active && px.Status != proxyv2.StatusDisabled
+		health := "unknown"
+		switch px.Status {
+		case proxyv2.StatusHealthy, proxyv2.StatusInUse:
+			health = "healthy"
+		case proxyv2.StatusUnhealthy, proxyv2.StatusUnhealthyCool:
+			health = "unhealthy-cooling"
+		case proxyv2.StatusDisabled:
+			health = "disabled"
+		}
+		entries = append(entries, proxyPoolEntry{
+			ProxyPoolEntry: ProxyPoolEntry{
+				ID:                  px.ID,
+				URL:                 maskSecrets(rawURL),
+				Name:                px.Name,
+				Remark:              px.Notes,
+				Enabled:             enabled,
+				EgressIP:            px.ResponseIP,
+				LatencyMS:           px.Latency.Milliseconds(),
+				LastCheckedAt:       px.LastChecked,
+				ConsecutiveFailures: px.ConsecutiveFailures,
+				Health:              health,
+			},
+			RawURL: rawURL,
+		})
+	}
+	effectiveActive := activeID
+	if cfg != nil && !cfg.Enabled {
+		effectiveActive = ""
+	}
+	_ = s.m.setProxyPoolEntries(entries, effectiveActive)
+	if cfg != nil {
+		strategy := "sequential"
+		if cfg.RotationMode == proxyv2.RotationRandom {
+			strategy = "random"
+		}
+		interval := cfg.RotationIntervalSeconds
+		if interval < minProxyRotateInterval {
+			interval = defaultProxyRotateInterval
+		}
+		threshold := cfg.MaxConsecutiveFailures
+		if threshold < 1 {
+			threshold = defaultProxyHealthThreshold
+		}
+		cooldown := cfg.CooldownSeconds
+		if cooldown < 1 {
+			cooldown = defaultProxyHealthCooldown
+		}
+		healthInt := cfg.HealthCheckIntervalSeconds
+		if healthInt < 1 {
+			healthInt = defaultProxyHealthInterval
+		}
+		_ = s.m.SetProxyPoolSettings(cfg.Enabled, interval, cfg.AutoRotateOnFailure || cfg.FailoverEnabled, strategy, threshold, cooldown, healthInt)
+	}
+}
+
+func (s *Server) syncV1ToProxyPoolV2() {
+	if s == nil || s.m == nil || ppV2 == nil || ppV2.Pool == nil {
+		return
+	}
+	existing, _, _ := ppV2.Pool.GetRawState()
+	byID := map[string]proxyv2.ProxyInfo{}
+	for _, px := range existing {
+		byID[px.ID] = px
+	}
+	v1Entries := s.m.proxyPoolEntries()
+	v2List := make([]proxyv2.ProxyInfo, 0, len(v1Entries))
+	for _, e := range v1Entries {
+		u, err := url.Parse(e.RawURL)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		host, portStr, splitErr := net.SplitHostPort(u.Host)
+		if splitErr != nil {
+			host = u.Hostname()
+			portStr = u.Port()
+		}
+		port, _ := strconv.Atoi(portStr)
+		if port <= 0 {
+			continue
+		}
+		pass, _ := u.User.Password()
+		prev := byID[e.ID]
+		status := proxyv2.StatusUntested
+		switch e.Health {
+		case "healthy":
+			status = proxyv2.StatusHealthy
+		case "unhealthy-cooling", "unhealthy":
+			status = proxyv2.StatusUnhealthy
+		case "disabled":
+			status = proxyv2.StatusDisabled
+		}
+		if !e.Enabled {
+			status = proxyv2.StatusDisabled
+		}
+		v2List = append(v2List, proxyv2.ProxyInfo{
+			ID:                  e.ID,
+			Type:                proxyv2.ProxyType(strings.ToLower(u.Scheme)),
+			Host:                host,
+			Port:                port,
+			Username:            u.User.Username(),
+			Password:            pass,
+			Country:             prev.Country,
+			City:                prev.City,
+			Status:              status,
+			Active:              e.Enabled,
+			LastChecked:         e.LastCheckedAt,
+			SuccessRate:         prev.SuccessRate,
+			Latency:             time.Duration(e.LatencyMS) * time.Millisecond,
+			LatencyMS:           e.LatencyMS,
+			ConsecutiveFailures: e.ConsecutiveFailures,
+			ResponseIP:          e.EgressIP,
+			Name:                e.Name,
+			Notes:               e.Remark,
+			CreatedAt:           prev.CreatedAt,
+			UpdatedAt:           time.Now(),
+		})
+	}
+	_ = ppV2.Pool.SyncFromExternal(v2List, s.m.proxyPoolActiveID())
+}
+
+// registerProxyPoolV2Routes registers all v2 API endpoints on the given mux.
+func (s *Server) registerProxyPoolV2Routes(mux *http.ServeMux) {
+	if ppV2 == nil || ppV2.Handler == nil {
+		return
+	}
+	ppV2.Handler.RegisterRoutes(mux)
+	log.Printf("[proxy-v2] Registered API endpoints under /api/v2/proxy-pool/")
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -4573,4 +5219,1075 @@ func atoiDefault(s string, d int) int {
 		return n
 	}
 	return d
+}
+
+// ============================================================
+// TOOL RECIPES API HANDLERS (CyberStrikeAI-style)
+// ============================================================
+
+func (s *Server) handleListRecipes(w http.ResponseWriter, r *http.Request) {
+	if s.recipeReg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "recipe registry not initialized")
+		return
+	}
+	recipes := s.recipeReg.List()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recipes": recipes,
+		"count":   len(recipes),
+	})
+}
+
+func (s *Server) handleGetRecipe(w http.ResponseWriter, r *http.Request) {
+	if s.recipeReg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "recipe registry not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	recipe, ok := s.recipeReg.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("recipe not found: %s", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, recipe)
+}
+
+func (s *Server) handleRecipeCategories(w http.ResponseWriter, r *http.Request) {
+	if s.recipeReg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "recipe registry not initialized")
+		return
+	}
+	categories := s.recipeReg.Categories()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"categories": categories,
+		"count":      len(categories),
+	})
+}
+
+func (s *Server) handleSearchRecipes(w http.ResponseWriter, r *http.Request) {
+	if s.recipeReg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "recipe registry not initialized")
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	results := s.recipeReg.Search(req.Query)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": results,
+		"query":   req.Query,
+		"count":   len(results),
+	})
+}
+
+// ============================================================
+// FACT GRAPH API HANDLERS (sapper-v2 style)
+// ============================================================
+
+func (s *Server) handleListFacts(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	facts := s.factGraph.List()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"facts": facts,
+		"count": len(facts),
+	})
+}
+
+func (s *Server) handleCreateFact(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	var req struct {
+		Kind       string            `json:"kind"`
+		Title      string            `json:"title"`
+		Content    string            `json:"content"`
+		TaskID     string            `json:"task_id,omitempty"`
+		SessionID  string            `json:"session_id,omitempty"`
+		Metadata   map[string]string `json:"metadata,omitempty"`
+		Tags       []string          `json:"tags,omitempty"`
+		Confidence float64           `json:"confidence"`
+		Agent      string            `json:"agent,omitempty"`
+		Method     string            `json:"method,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	fact := factgraph.NewFact(factgraph.FactKind(req.Kind), req.Title, req.Content)
+	fact.TaskID = req.TaskID
+	fact.SessionID = req.SessionID
+	if req.Metadata != nil {
+		fact.Metadata = req.Metadata
+	}
+	if req.Tags != nil {
+		fact.Tags = req.Tags
+	}
+	if req.Confidence > 0 {
+		fact.Confidence = req.Confidence
+	}
+	fact.Agent = req.Agent
+	fact.Method = req.Method
+
+	s.factGraph.Add(fact)
+	log.Printf("[factgraph] Created fact: %s (%s)", fact.ID, fact.Kind)
+	writeJSON(w, http.StatusCreated, fact)
+}
+
+func (s *Server) handleGetFact(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	fact, ok := s.factGraph.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, fmt.Sprintf("fact not found: %s", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, fact)
+}
+
+func (s *Server) handleUpdateFact(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	var req struct {
+		Title      *string           `json:"title,omitempty"`
+		Content    *string           `json:"content,omitempty"`
+		Tags       *[]string         `json:"tags,omitempty"`
+		Confidence *float64          `json:"confidence,omitempty"`
+		Verified   *bool             `json:"verified,omitempty"`
+		Active     *bool             `json:"active,omitempty"`
+		Metadata   map[string]string `json:"metadata,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	err := s.factGraph.Update(id, func(f *factgraph.Fact) {
+		if req.Title != nil {
+			f.Title = *req.Title
+		}
+		if req.Content != nil {
+			f.Content = *req.Content
+		}
+		if req.Tags != nil {
+			f.Tags = *req.Tags
+		}
+		if req.Confidence != nil {
+			f.Confidence = *req.Confidence
+		}
+		if req.Verified != nil {
+			f.Verified = *req.Verified
+		}
+		if req.Active != nil {
+			f.Active = *req.Active
+		}
+		if req.Metadata != nil {
+			f.Metadata = req.Metadata
+		}
+	})
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	fact, _ := s.factGraph.Get(id)
+	writeJSON(w, http.StatusOK, fact)
+}
+
+func (s *Server) handleDeleteFact(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	s.factGraph.Remove(id)
+	writeJSON(w, http.StatusOK, map[string]any{"message": "fact deleted", "id": id})
+}
+
+func (s *Server) handleSearchFacts(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	results := s.factGraph.Search(req.Query)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": results,
+		"query":   req.Query,
+		"count":   len(results),
+	})
+}
+
+func (s *Server) handleFactStats(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	stats := s.factGraph.Stats()
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) handleLinkFacts(w http.ResponseWriter, r *http.Request) {
+	if s.factGraph == nil {
+		writeErr(w, http.StatusServiceUnavailable, "fact graph not initialized")
+		return
+	}
+	var req struct {
+		SourceID string `json:"source_id"`
+		TargetID string `json:"target_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := s.factGraph.Link(req.SourceID, req.TargetID); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message":   "facts linked",
+		"source_id": req.SourceID,
+		"target_id": req.TargetID,
+	})
+}
+
+// ============================================================
+// TLS FINGERPRINTING API HANDLERS
+// ============================================================
+
+func (s *Server) handleTLSSpecs(w http.ResponseWriter, r *http.Request) {
+	specs := fingerprint.GetAllTLSSpecs()
+	result := make([]map[string]string, len(specs))
+	for i, spec := range specs {
+		result[i] = map[string]string{
+			"id":          spec.ID,
+			"name":        spec.Name,
+			"description": spec.Description,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"specs": result,
+		"count": len(result),
+	})
+}
+
+func (s *Server) handleTLSCurrent(w http.ResponseWriter, r *http.Request) {
+	spec := fingerprint.GetTLSSpec("chrome_120")
+	writeJSON(w, http.StatusOK, map[string]string{
+		"id":          spec.ID,
+		"name":        spec.Name,
+		"description": spec.Description,
+	})
+}
+
+// ============================================================
+// TOOL CATALOG & EXECUTION API HANDLERS
+// ============================================================
+
+func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
+	if s.toolCatalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool catalog not initialized")
+		return
+	}
+	tools := s.toolCatalog.List()
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "count": len(tools)})
+}
+
+func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
+	if s.toolCatalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool catalog not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	tool, ok := s.toolCatalog.Get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "tool not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, tool)
+}
+
+func (s *Server) handleToolCategories(w http.ResponseWriter, r *http.Request) {
+	if s.toolCatalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool catalog not initialized")
+		return
+	}
+	cats := s.toolCatalog.Categories()
+	writeJSON(w, http.StatusOK, map[string]any{"categories": cats, "count": len(cats)})
+}
+
+func (s *Server) handleSearchTools(w http.ResponseWriter, r *http.Request) {
+	if s.toolCatalog == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool catalog not initialized")
+		return
+	}
+	var req struct { Query string `json:"query"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	results := s.toolCatalog.Search(req.Query)
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results)})
+}
+
+func (s *Server) handleExecuteTool(w http.ResponseWriter, r *http.Request) {
+	if s.toolExecutor == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool executor not initialized")
+		return
+	}
+	var req struct {
+		ToolID    string            `json:"tool_id"`
+		Parameters map[string]string `json:"parameters"`
+		Timeout   int               `json:"timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	execution, err := s.toolExecutor.Execute(r.Context(), req.ToolID, req.Parameters)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	parsed := tools.ParseToolOutput(req.ToolID, execution.Output)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"execution_id": execution.ID,
+		"tool_id":      execution.ToolID,
+		"status":       execution.Status,
+		"output":       execution.Output,
+		"parsed":       parsed,
+		"duration":     execution.Duration.String(),
+		"exit_code":    execution.ExitCode,
+	})
+}
+
+func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
+	if s.toolExecutor == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool executor not initialized")
+		return
+	}
+	id := r.PathValue("id")
+	execution, ok := s.toolExecutor.GetExecution(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "execution not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, execution)
+}
+
+func (s *Server) handleExecutionHistory(w http.ResponseWriter, r *http.Request) {
+	if s.toolExecutor == nil {
+		writeErr(w, http.StatusServiceUnavailable, "tool executor not initialized")
+		return
+	}
+	history := s.toolExecutor.History(100)
+	writeJSON(w, http.StatusOK, map[string]any{"history": history, "count": len(history)})
+}
+
+// ============================================================
+// TARGET CONNECTORS API HANDLERS
+// ============================================================
+
+func (s *Server) handleConnectSSH(w http.ResponseWriter, r *http.Request) {
+	var req targets.SSHConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	connector, err := targets.NewSSHConnector(req)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := connector.Connect(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, "SSH connection failed: "+err.Error())
+		return
+	}
+	targetID := fmt.Sprintf("ssh-%s-%d", req.Host, req.Port)
+	s.targetMu.Lock()
+	s.targets[targetID] = connector
+	s.targetMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target_id": targetID, "type": "ssh",
+		"host": req.Host, "port": req.Port,
+		"user": req.User, "connected": true,
+	})
+}
+
+func (s *Server) handleConnectWinRM(w http.ResponseWriter, r *http.Request) {
+	var req targets.WinRMConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	connector, err := targets.NewWinRMConnector(req)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := connector.Connect(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, "WinRM connection failed: "+err.Error())
+		return
+	}
+	targetID := fmt.Sprintf("winrm-%s-%d", req.Host, req.Port)
+	s.targetMu.Lock()
+	s.targets[targetID] = connector
+	s.targetMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target_id": targetID, "type": "winrm",
+		"host": req.Host, "port": req.Port,
+		"user": req.User, "connected": true,
+	})
+}
+
+func (s *Server) handleDisconnectTarget(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.targetMu.Lock()
+	connector, ok := s.targets[id]
+	if !ok {
+		s.targetMu.Unlock()
+		writeErr(w, http.StatusNotFound, "target not connected")
+		return
+	}
+	delete(s.targets, id)
+	s.targetMu.Unlock()
+	connector.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"message": "disconnected", "target_id": id})
+}
+
+func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
+	s.targetMu.Lock()
+	defer s.targetMu.Unlock()
+	result := make([]map[string]interface{}, 0, len(s.targets))
+	for id, conn := range s.targets {
+		t := conn.Target()
+		result = append(result, map[string]interface{}{
+			"id": id, "type": t.Type, "host": t.Host,
+			"port": t.Port, "user": t.User,
+			"connected": conn.IsConnected(), "labels": t.Labels,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"targets": result, "count": len(result)})
+}
+
+func (s *Server) handleTargetExecute(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.targetMu.Lock()
+	connector, ok := s.targets[id]
+	s.targetMu.Unlock()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "target not connected")
+		return
+	}
+	var req struct { Command string `json:"command"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := connector.Execute(r.Context(), req.Command)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "execution failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target_id": id, "command": req.Command,
+		"stdout": result.Stdout, "stderr": result.Stderr,
+		"exit_code": result.ExitCode, "duration": result.Duration.String(),
+	})
+}
+
+func (s *Server) handleSFTPUpload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.targetMu.Lock()
+	connector, ok := s.targets[id]
+	s.targetMu.Unlock()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "target not connected")
+		return
+	}
+	sshConn, ok := connector.(*targets.SSHConnector)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "SFTP only available for SSH targets")
+		return
+	}
+	var req struct { LocalPath string `json:"local_path"`; RemotePath string `json:"remote_path"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := sshConn.NewSFTPSession()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "SFTP error: "+err.Error())
+		return
+	}
+	defer session.Close()
+	if err := session.UploadFile(req.LocalPath, req.RemotePath); err != nil {
+		writeErr(w, http.StatusInternalServerError, "upload failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "uploaded", "local": req.LocalPath, "remote": req.RemotePath})
+}
+
+func (s *Server) handleSFTPDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.targetMu.Lock()
+	connector, ok := s.targets[id]
+	s.targetMu.Unlock()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "target not connected")
+		return
+	}
+	sshConn, ok := connector.(*targets.SSHConnector)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "SFTP only available for SSH targets")
+		return
+	}
+	var req struct { RemotePath string `json:"remote_path"`; LocalPath string `json:"local_path"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := sshConn.NewSFTPSession()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "SFTP error: "+err.Error())
+		return
+	}
+	defer session.Close()
+	if err := session.DownloadFile(req.RemotePath, req.LocalPath); err != nil {
+		writeErr(w, http.StatusInternalServerError, "download failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": "downloaded", "remote": req.RemotePath, "local": req.LocalPath})
+}
+
+// ============================================================
+// SECURITY MIDDLEWARE & HANDLERS
+// ============================================================
+
+// securityMiddleware applies IOC blocking, anti-bot checks, and backdoor detection
+func (s *Server) securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip security check for health/version/auth endpoints (they're public)
+		path := r.URL.Path
+		if path == "/api/health" || path == "/api/version" ||
+			strings.HasPrefix(path, "/api/auth/") || path == "/api/basic-auth/check" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		clientIP := getClientIP(r)
+		isLoopback := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
+		hasAuth := r.Header.Get("Authorization") != ""
+		if !hasAuth {
+			for _, c := range r.Cookies() {
+				if strings.TrimSpace(c.Value) != "" {
+					hasAuth = true
+					break
+				}
+			}
+		}
+
+		// 1. IOC Blocklist Check
+		// Always block known malicious IOC IPs; only apply heuristic URL/UA scanner scoring
+		// to unauthenticated requests so authenticated operators using Repeater/Search/Chat
+		// with exploit payloads are never falsely blocked.
+		if s.iocBlocklist != nil && !isLoopback {
+			if hasAuth {
+				if blocked, ip := s.iocBlocklist.IsBlockedIP(r); blocked {
+					log.Printf("[security] BLOCKED by IOC IP: IP=%s", ip)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":  "request blocked",
+						"reason": "IOC_IP_BLOCKED",
+						"score":  100,
+					})
+					return
+				}
+			} else {
+				result := s.iocBlocklist.CheckRequest(r)
+				if !result.Allowed {
+					log.Printf("[security] BLOCKED by IOC/Scanner filter: IP=%s Flags=%v Score=%d",
+						clientIP, result.Flags, result.ThreatScore)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					json.NewEncoder(w).Encode(map[string]any{
+						"error":  "request blocked",
+						"reason": result.BlockReason,
+						"score":  result.ThreatScore,
+					})
+					return
+				}
+			}
+		}
+
+		// 2. Rate Limit Check (Anti-Detect)
+		if s.antiDetect != nil && !isLoopback && !hasAuth {
+			allowed, wait := s.antiDetect.CheckRateLimit(clientIP)
+			if !allowed {
+				log.Printf("[security] RATE LIMITED: IP=%s Wait=%v", clientIP, wait)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", fmt.Sprintf("%.0f", wait.Seconds()))
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":       "rate limited",
+					"retry_after": wait.Seconds(),
+				})
+				return
+			}
+		}
+
+		// 3. Backdoor Detection (for POST requests)
+		if s.backdoorDetector != nil && r.Method == "POST" {
+			bdResult := s.backdoorDetector.CheckRequest(r)
+			if bdResult.Suspicious {
+				log.Printf("[security] BACKDOOR PATTERN DETECTED: IP=%s Patterns=%v",
+					getClientIP(r), bdResult.Patterns)
+				// Log but don't block - could be false positive
+				// In production, you might want to block or require CAPTCHA
+			}
+
+			// Also check body for backdoor patterns
+			body, err := security.ReadBody(r)
+			if err == nil && len(body) > 0 {
+				bodyResult := s.backdoorDetector.CheckBody(body, r.URL.Path)
+				if bodyResult.Suspicious {
+					log.Printf("[security] SUSPICIOUS BODY: IP=%s Path=%s Patterns=%v",
+						getClientIP(r), r.URL.Path, bodyResult.Patterns)
+				}
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// getClientIP extracts client IP from request (supports X-Forwarded-For, X-Real-IP)
+func getClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// handleSecurityStats returns security statistics
+func (s *Server) handleSecurityStats(w http.ResponseWriter, r *http.Request) {
+	stats := map[string]any{
+		"ioc_blocklist":              s.iocBlocklist.GetStats(),
+		"stealth_enabled":            s.antiDetect != nil,
+		"backdoor_detection_enabled": s.backdoorDetector != nil,
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleListIOCs returns list of blocked IPs
+func (s *Server) handleListIOCs(w http.ResponseWriter, r *http.Request) {
+	stats := s.iocBlocklist.GetStats()
+	blocked := stats.BlockedIPs
+	if blocked == nil {
+		blocked = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"blocked_ips":   blocked,
+		"total_blocked": len(blocked),
+	})
+}
+
+// handleAddIOC adds an IP to the blocklist
+func (s *Server) handleAddIOC(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IP     string `json:"ip"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.IP == "" {
+		writeErr(w, http.StatusBadRequest, "ip is required")
+		return
+	}
+	s.iocBlocklist.AddBlockedIP(req.IP, req.Reason)
+	if s.m != nil && s.m.pg != nil {
+		if b, err := json.Marshal(s.iocBlocklist.GetStats().BlockedIPs); err == nil {
+			_ = s.m.pg.SetSetting("security_ioc_blocked_ips", string(b))
+		}
+	}
+	log.Printf("[security] IOC added: IP=%s Reason=%s", req.IP, req.Reason)
+	writeJSON(w, http.StatusOK, map[string]any{"message": "ip blocked", "ip": req.IP})
+}
+
+// handleRemoveIOC removes an IP from the blocklist
+func (s *Server) handleRemoveIOC(w http.ResponseWriter, r *http.Request) {
+	ip := r.PathValue("ip")
+	if ip == "" {
+		writeErr(w, http.StatusBadRequest, "ip is required")
+		return
+	}
+	s.iocBlocklist.RemoveBlockedIP(ip)
+	if s.m != nil && s.m.pg != nil {
+		if b, err := json.Marshal(s.iocBlocklist.GetStats().BlockedIPs); err == nil {
+			_ = s.m.pg.SetSetting("security_ioc_blocked_ips", string(b))
+		}
+	}
+	log.Printf("[security] IOC removed: IP=%s", ip)
+	writeJSON(w, http.StatusOK, map[string]any{"message": "ip unblocked", "ip": ip})
+}
+
+// handleSecurityCheck performs a full security check on a request
+func (s *Server) handleSecurityCheck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL       string            `json:"url"`
+		Method    string            `json:"method"`
+		Headers   map[string]string `json:"headers"`
+		Body      string            `json:"body"`
+		UA        string            `json:"user_agent"`
+		ClientIP  string            `json:"client_ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Create mock request for testing
+	testURL, _ := url.Parse(req.URL)
+	testReq := &http.Request{
+		Method: req.Method,
+		URL:    testURL,
+		Header: make(http.Header),
+	}
+	for k, v := range req.Headers {
+		testReq.Header.Set(k, v)
+	}
+	if req.UA != "" {
+		testReq.Header.Set("User-Agent", req.UA)
+	}
+	if req.ClientIP != "" {
+		testReq.RemoteAddr = req.ClientIP + ":12345"
+	}
+
+	results := map[string]any{}
+
+	// Run IOC check
+	iocResult := s.iocBlocklist.CheckRequest(testReq)
+	results["ioc_check"] = iocResult
+
+	// Run backdoor check
+	bdResult := s.backdoorDetector.CheckRequest(testReq)
+	if req.Body != "" && req.Method == "POST" {
+		bodyResult := s.backdoorDetector.CheckBody([]byte(req.Body), req.URL)
+		results["backdoor_body_check"] = bodyResult
+	}
+	results["backdoor_check"] = bdResult
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+// handleGetStealthConfig returns current stealth/anti-detect configuration
+func (s *Server) handleGetStealthConfig(w http.ResponseWriter, r *http.Request) {
+	if s.antiDetect == nil {
+		writeErr(w, http.StatusServiceUnavailable, "anti-detect not initialized")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.antiDetect.GetConfig())
+}
+
+// handleUpdateStealthConfig updates stealth/anti-detect configuration
+func (s *Server) handleUpdateStealthConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg security.StealthConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if cfg.RateLimit <= 0 {
+		cfg.RateLimit = 120
+	}
+	// Reinitialize anti-detect with new config
+	s.antiDetect = security.NewAntiDetect(cfg)
+	if s.m != nil && s.m.pg != nil {
+		if b, err := json.Marshal(cfg); err == nil {
+			_ = s.m.pg.SetSetting("security_stealth_config", string(b))
+		}
+	}
+	log.Printf("[security] Stealth config updated: enabled=%v", cfg.Enabled)
+	writeJSON(w, http.StatusOK, map[string]any{"message": "config updated", "config": cfg})
+}
+
+// ==================== Multi-Engine Web Search Handlers (Pentagi-inspired) ====================
+
+// SearchRequest is the JSON request for search API.
+type SearchRequest struct {
+	Query      string `json:"query"`
+	Mode       string `json:"mode,omitempty"`   // general, news, exploit, technical, osint
+	Engine     string `json:"engine,omitempty"` // optional specific engine to test/query
+	MaxResults int    `json:"max_results,omitempty"`
+	SiteFilter string `json:"site_filter,omitempty"`
+}
+
+// handleSearchEngines returns available search engines and their status.
+func (s *Server) handleSearchEngines(w http.ResponseWriter, r *http.Request) {
+	if s.searchOrchestrator == nil {
+		writeErr(w, http.StatusServiceUnavailable, "search not initialized")
+		return
+	}
+	stats := s.searchOrchestrator.GetStats()
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleSearch performs a multi-engine web search.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if s.searchOrchestrator == nil {
+		writeErr(w, http.StatusServiceUnavailable, "search not initialized")
+		return
+	}
+
+	var req SearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Query == "" {
+		writeErr(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	// Convert mode string to SearchMode
+	mode := search.ModeGeneral
+	switch req.Mode {
+	case "news":
+		mode = search.ModeNews
+	case "exploit":
+		mode = search.ModeExploit
+	case "technical":
+		mode = search.ModeTechnical
+	case "osint":
+		mode = search.ModeOSINT
+	}
+
+	searchReq := search.NewRequest(req.Query, mode)
+	if req.Engine != "" {
+		searchReq.Engine = req.Engine
+	}
+	if req.MaxResults > 0 {
+		searchReq.MaxResults = req.MaxResults
+	}
+	if req.SiteFilter != "" {
+		searchReq.SiteFilter = req.SiteFilter
+	}
+
+	result, err := s.searchOrchestrator.Search(r.Context(), searchReq)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "search failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleSearchExploit performs an exploit-specific search.
+func (s *Server) handleSearchExploit(w http.ResponseWriter, r *http.Request) {
+	if s.searchOrchestrator == nil {
+		writeErr(w, http.StatusServiceUnavailable, "search not initialized")
+		return
+	}
+
+	var req SearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Query == "" {
+		writeErr(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	result, err := s.searchOrchestrator.SearchExploit(r.Context(), req.Query)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "exploit search failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ==================== Browser Automation Handlers (Pentagi-inspired) ====================
+
+// BrowserRequest is the JSON request for browser API.
+type BrowserAPIRequest struct {
+	URL      string `json:"url"`
+	Action   string `json:"action,omitempty"` // screenshot, content, both
+	FullPage bool   `json:"full_page,omitempty"`
+}
+
+// handleBrowserScreenshot captures a screenshot of a URL.
+func (s *Server) handleBrowserScreenshot(w http.ResponseWriter, r *http.Request) {
+	if s.browserScraper == nil || !s.browserScraper.IsAvailable() {
+		writeErr(w, http.StatusServiceUnavailable, "browser not available")
+		return
+	}
+
+	var req BrowserAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.URL == "" {
+		writeErr(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	browserReq := browser.BrowserRequest{
+		URL:      req.URL,
+		Action:   browser.ActionScreenshot,
+		FullPage: req.FullPage,
+	}
+
+	result, err := s.browserScraper.Handle(r.Context(), browserReq)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "screenshot failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleBrowserContent extracts page content as markdown.
+func (s *Server) handleBrowserContent(w http.ResponseWriter, r *http.Request) {
+	if s.browserScraper == nil || !s.browserScraper.IsAvailable() {
+		writeErr(w, http.StatusServiceUnavailable, "browser not available")
+		return
+	}
+
+	var req BrowserAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.URL == "" {
+		writeErr(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	browserReq := browser.BrowserRequest{
+		URL:    req.URL,
+		Action: browser.ActionContent,
+	}
+
+	result, err := s.browserScraper.Handle(r.Context(), browserReq)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "content extraction failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ==================== Search & Browser Config Handlers ====================
+
+// SearchConfigRequest is the request to update search engine config.
+type SearchConfigRequest struct {
+	Engine string `json:"engine"`
+	APIKey string `json:"api_key"`
+}
+
+// BrowserConfigRequest is the request to update browser config.
+type BrowserConfigRequest struct {
+	ScraperURL    string `json:"scraper_url"`
+	UseLocalChrome bool   `json:"use_local_chrome"`
+}
+
+// handleSearchConfig saves search engine configuration and hot-reloads the engine.
+func (s *Server) handleSearchConfig(w http.ResponseWriter, r *http.Request) {
+	var req SearchConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	eng := strings.ToLower(strings.TrimSpace(req.Engine))
+	val := strings.TrimSpace(req.APIKey)
+	if s.searchOrchestrator != nil {
+		s.searchOrchestrator.UpdateEngine(eng, val)
+	}
+	if s.m != nil && s.m.pg != nil {
+		switch eng {
+		case "google":
+			_ = s.m.pg.SetSetting("search_google_api_key", val)
+		case "tavily":
+			_ = s.m.pg.SetSetting("search_tavily_api_key", val)
+			on, backend, _, _, _ := s.m.WebSearch()
+			_ = s.m.SetWebSearch(on, backend, nil, &val, nil)
+		case "searxng":
+			_ = s.m.pg.SetSetting("search_searxng_url", val)
+		}
+	}
+	log.Printf("[search] Config updated for engine: %s", req.Engine)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleGetBrowserConfig returns the current browser automation configuration.
+func (s *Server) handleGetBrowserConfig(w http.ResponseWriter, r *http.Request) {
+	if s.browserScraper == nil {
+		writeErr(w, http.StatusServiceUnavailable, "browser not initialized")
+		return
+	}
+	cfg := s.browserScraper.GetConfig()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scraper_url":      cfg.ScraperURL,
+		"use_local_chrome": cfg.UseLocalChrome,
+		"chrome_path":      cfg.ChromePath,
+		"available":        s.browserScraper.IsAvailable(),
+	})
+}
+
+// handleBrowserConfig saves browser configuration and hot-updates the scraper.
+func (s *Server) handleBrowserConfig(w http.ResponseWriter, r *http.Request) {
+	var req BrowserConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.ScraperURL = strings.TrimSpace(req.ScraperURL)
+	if s.browserScraper != nil {
+		s.browserScraper.UpdateConfig(req.ScraperURL, req.UseLocalChrome)
+	}
+	if s.m != nil && s.m.pg != nil {
+		_ = s.m.pg.SetSetting("browser_scraper_url", req.ScraperURL)
+		_ = s.m.pg.SetBool("browser_use_local_chrome", req.UseLocalChrome)
+	}
+	log.Printf("[browser] Config updated: scraper=%s local=%v", req.ScraperURL, req.UseLocalChrome)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -11,7 +11,7 @@ export function useDateLocale() {
   const locale = resolveLocale(i18n.resolvedLanguage);
   return {
     locale,
-    dateLocale: locale === "en" ? enUS : zhCN,
-    datePattern: locale === "en" ? "MMM d, yyyy" : "yyyy年M月d日",
+    dateLocale: locale === "zh-CN" ? zhCN : enUS,
+    datePattern: locale === "zh-CN" ? "yyyy年M月d日" : "MMM d, yyyy",
   };
 }

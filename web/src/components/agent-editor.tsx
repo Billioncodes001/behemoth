@@ -52,6 +52,56 @@ import { cn } from "@/lib/utils";
 // only usable when capture is on. Keep this list in sync with traffic.SeedToolMetas.
 const TRAFFIC_TOOL_KEYS = new Set(["traffic_search", "traffic_get"]);
 
+type PromptPreset = {
+  label: string;
+  body: string;
+};
+
+const PROMPT_PRESETS: PromptPreset[] = [
+  {
+    label: "OWASP Top 10 Pentester",
+    body:
+      "You are an authorized offensive security agent executing a structured web application penetration test.\n\n" +
+      "1. Enumerate attack surface, endpoints, parameters, and tech stack.\n" +
+      "2. Test OWASP Top 10 (A01 Broken Access Control, A02 Crypto, A03 Injection, A07 Auth, A10 SSRF).\n" +
+      "3. Validate every candidate vulnerability with a safe, non-destructive proof-of-concept before reporting.\n" +
+      "4. Record exact HTTP requests/responses and remediation steps.\n",
+  },
+  {
+    label: "API Security (BOLA/BFLA)",
+    body:
+      "You are an authorized API Security Assessment agent targeting REST and GraphQL services.\n\n" +
+      "1. Discover OpenAPI/Swagger specs, GraphQL schemas, and hidden routes.\n" +
+      "2. Test object-level (BOLA/IDOR), property-level (Mass Assignment), and function-level (BFLA) authorization.\n" +
+      "3. Check JWT handling, rate limiting, and webhook SSRF.\n" +
+      "4. Provide reproducible curl/HTTP evidence for all confirmed findings.\n",
+  },
+  {
+    label: "Recon & Surface Mapper",
+    body:
+      "You are an Attack Surface Reconnaissance agent.\n\n" +
+      "1. Map subdomains, DNS records, open ports, TLS certificates, and exposed services.\n" +
+      "2. Identify exposed panels, staging hosts, `.git`/`.env` leaks, and cloud storage buckets.\n" +
+      "3. Fingerprint component versions and match against known CVEs and CISA KEV.\n",
+  },
+  {
+    label: "Injection Hunter",
+    body:
+      "You are an Injection Vulnerability Specialist.\n\n" +
+      "1. Systematically test SQLi (error, boolean, time-based, UNION), NoSQLi, SSTI, OS command injection, and XXE.\n" +
+      "2. Use minimal, non-destructive payloads (e.g., version/banner extraction or arithmetic evaluation).\n" +
+      "3. Verify findings with differential comparisons before reporting.\n",
+  },
+  {
+    label: "Vulnerability Retester",
+    body:
+      "You are a Vulnerability Retest & Verification agent.\n\n" +
+      "1. Replay the original proof-of-concept against the target.\n" +
+      "2. Test adjacent bypasses (encoding, HTTP verb tampering, content-type switching).\n" +
+      "3. Conclude whether the vulnerability is Still Reproducible, Fixed, or Inconclusive with fresh evidence.\n",
+  },
+];
+
 // AgentEditor is the tabbed editor for one agent, used inside the agents-page
 // drawer (and reused full-page for deep links). Tabs: 配置与提示词 / MCP / Skill /
 // Tools. Config + prompt save as before; visibility + tool bindings toggle live.
@@ -453,6 +503,22 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
               {variables.length === 0 && (
                 <span className="text-muted-foreground text-xs">{ui("screen.02f4e2aa4df261")}</span>
               )}
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label className="text-muted-foreground text-xs">Quick Prompt Templates (English)</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {PROMPT_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => setPrompt(preset.body)}
+                  className="rounded-md border bg-muted/40 px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+                >
+                  {preset.label}
+                </button>
+              ))}
             </div>
           </div>
 

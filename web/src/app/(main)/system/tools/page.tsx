@@ -16,6 +16,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { agentDisplayName } from "@/i18n/agent-display";
 import { useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import type { Agent, Tool } from "@/lib/types";
@@ -204,7 +205,7 @@ function ToolEditor({
                     disabled={trafficGated}
                     onCheckedChange={() => toggleAgent(ag.key)}
                   />
-                  {ag.name}
+                  {agentDisplayName(ag, ui)}
                   <span className="text-muted-foreground font-mono text-xs">{ag.key}</span>
                 </label>
               ))}
@@ -535,6 +536,82 @@ type ExecState = {
   use_recording_proxy: boolean;
 };
 
+type CustomToolPreset = {
+  label: string;
+  key: string;
+  description: string;
+  kind: "command" | "script" | "http";
+  command?: string;
+  code?: string;
+  method?: string;
+  url?: string;
+  schema: Record<string, unknown>;
+  sampleParams: Record<string, unknown>;
+};
+
+const CUSTOM_TOOL_PRESETS: CustomToolPreset[] = [
+  {
+    label: "Nmap Fast Scan",
+    key: "nmap_fast_scan",
+    description: "Run a fast service/version scan on top ports of an authorized target host or IP.",
+    kind: "command",
+    command: "nmap -sV -T4 -F {{.target}}",
+    schema: {
+      type: "object",
+      properties: {
+        target: { type: "string", description: "Target hostname or IP address" },
+      },
+      required: ["target"],
+    },
+    sampleParams: { target: "127.0.0.1" },
+  },
+  {
+    label: "Nuclei CVE Scan",
+    key: "nuclei_cve_scan",
+    description: "Run Nuclei critical/high/medium CVE & misconfiguration templates against a target URL.",
+    kind: "command",
+    command: "nuclei -u {{.url}} -severity critical,high,medium -silent",
+    schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Target URL (e.g. https://example.com)" },
+      },
+      required: ["url"],
+    },
+    sampleParams: { url: "https://example.com" },
+  },
+  {
+    label: "Subfinder Recon",
+    key: "subfinder_enum",
+    description: "Passive subdomain enumeration for an authorized root domain.",
+    kind: "command",
+    command: "subfinder -d {{.domain}} -silent",
+    schema: {
+      type: "object",
+      properties: {
+        domain: { type: "string", description: "Root domain (e.g. example.com)" },
+      },
+      required: ["domain"],
+    },
+    sampleParams: { domain: "example.com" },
+  },
+  {
+    label: "HTTP Security Headers",
+    key: "http_headers_audit",
+    description: "Inspect HTTP response headers (CSP, HSTS, X-Frame-Options, CORS, Server) of a target URL.",
+    kind: "command",
+    command: "curl -sS -I -L --max-time 15 {{.url}}",
+    schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Target URL to inspect" },
+      },
+      required: ["url"],
+    },
+    sampleParams: { url: "https://example.com" },
+  },
+];
+
 function CustomToolDialog({
   edit,
   agents,
@@ -753,6 +830,39 @@ function CustomToolDialog({
         </SheetHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
+          {isNew && (
+            <div className="grid gap-1.5">
+              <Label className="text-muted-foreground text-xs">Quick Template</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {CUSTOM_TOOL_PRESETS.map((preset) => (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    onClick={() => {
+                      setKey(preset.key);
+                      setDescription(preset.description);
+                      setKind(preset.kind);
+                      setEx((prev) => ({
+                        ...prev,
+                        command: preset.command ?? "",
+                        code: preset.code ?? "",
+                        method: preset.method ?? "GET",
+                        url: preset.url ?? "",
+                        timeout_ms: "60000",
+                      }));
+                      setSchemaText(JSON.stringify(preset.schema, null, 2));
+                      setParamsText(JSON.stringify(preset.sampleParams, null, 2));
+                    }}
+                    className={`rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent hover:text-accent-foreground ${
+                      key === preset.key ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label className="text-xs">Key</Label>
             <Input
@@ -920,7 +1030,7 @@ function CustomToolDialog({
               {agents.map((a) => (
                 <label key={a.key} className="flex items-center gap-2 text-sm">
                   <Checkbox checked={bound.includes(a.key)} onCheckedChange={() => toggleAgent(a.key)} />
-                  {a.name}
+                  {agentDisplayName(a, ui)}
                   <span className="text-muted-foreground font-mono text-xs">{a.key}</span>
                 </label>
               ))}

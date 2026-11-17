@@ -16,3 +16,8 @@ export function translateFixedUIText(text: string, ui: UITranslate): string {
 export function repeaterGroupLabel(group: { id: string; name: string }, ui: UITranslate): string {
   return group.id === "default" && group.name === "默认" ? translateFixedUIText(group.name, ui) : group.name;
 }
+
+export function conversationTitleLabel(title: string | undefined, translate: (key: string) => string): string {
+  const trimmed = title?.trim() ?? "";
+  return !trimmed || trimmed === "新对话" ? translate("overview.newConversation") : trimmed;
+}

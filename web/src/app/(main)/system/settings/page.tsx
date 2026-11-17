@@ -2,6 +2,8 @@
 
 import * as React from "react";
 
+import Link from "next/link";
+
 import {
   CameraIcon,
   CpuIcon,
@@ -33,6 +35,9 @@ import { useEgressIp } from "../../_components/egress-ip-banner";
 import { BasicAuthCard } from "./_components/basic-auth-card";
 import { McpServerCard } from "./_components/mcp-server-card";
 import { UpdateCard } from "./_components/update-card";
+import { SearchConfigCard } from "./_components/search-config-card";
+import { BrowserConfigCard } from "./_components/browser-config-card";
+import { SecurityConfigCard } from "./_components/security-config-card";
 
 export default function SystemSettingsPage() {
   const { t, liveT, i18n } = useLiveTranslation();
@@ -118,6 +123,20 @@ export default function SystemSettingsPage() {
     setEnabled: setShowEgressIp,
     probeEgress,
   } = useEgressIp();
+
+  // Search & Browser config state
+  const [enginesStatus, setEnginesStatus] = React.useState<import("@/lib/types").SearchEnginesStatus | null>(null);
+
+  const refreshEngines = React.useCallback(() => {
+    api.search.engines()
+      .then(setEnginesStatus)
+      .catch(() => {});
+  }, []);
+
+  // Load engine status on mount
+  React.useEffect(() => {
+    refreshEngines();
+  }, [refreshEngines]);
 
   const apply = React.useCallback((s: Settings) => {
     setCredentialAgent(!!s.credential_agent_enabled);
@@ -768,6 +787,9 @@ export default function SystemSettingsPage() {
             {isSettingVisible("system", "settings.keywords.update") ? <UpdateCard /> : null}
             {isSettingVisible("system", "settings.keywords.basicAuth") ? <BasicAuthCard /> : null}
             {isSettingVisible("system", "settings.keywords.mcpServer") ? <McpServerCard /> : null}
+            {isSettingVisible("network", "settings.keywords.search") ? <SearchConfigCard enginesStatus={enginesStatus} onRefresh={refreshEngines} /> : null}
+            {isSettingVisible("traffic", "settings.keywords.browser") ? <BrowserConfigCard /> : null}
+            {isSettingVisible("traffic", "settings.keywords.security") ? <SecurityConfigCard /> : null}
 
             <Card
               className={`${isSettingVisible("traffic", "settings.keywords.trafficCapture") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}
@@ -1111,9 +1133,14 @@ export default function SystemSettingsPage() {
                           (proxyPoolActiveId ? t("settings.selectedProxy") : t("settings.direct"))}
                       </p>
                     </div>
-                    <Button type="button" variant="outline" size="sm" onClick={testAllProxyPool}>
-                      {t("settings.testAll")}
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href="/system/proxy">Open Proxy Pool v2 →</Link>
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" onClick={testAllProxyPool}>
+                        {t("settings.testAll")}
+                      </Button>
+                    </div>
                   </div>
                   <details className="rounded-md border px-3 py-2 text-xs">
                     <summary className="text-muted-foreground cursor-pointer select-none">
