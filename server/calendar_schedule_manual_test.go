@@ -132,6 +132,7 @@ func TestCalendarManualResumePreservesFIFO(t *testing.T) {
 	s, sc := manualScheduleTestServer(t)
 	holder, task := manualScheduleTask(t, s), manualScheduleTask(t, s)
 	manualSchedulePlan(t, s, task)
+	t.Cleanup(restoreConcurrencySetting(t, s.m))
 	if err := s.m.SetConcurrency(true, 1); err != nil {
 		t.Fatal(err)
 	}

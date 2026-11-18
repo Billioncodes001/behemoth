@@ -25,9 +25,10 @@ export function ScreenshotViewer({ className }: ScreenshotViewerProps) {
     setLoading(true);
     try {
       const res = await api.browser.screenshot(url);
-      if (res.screenshot) {
+      const imgData = res.screenshot || res.screenshot_path;
+      if (imgData) {
         // If it's a base64 string or URL
-        setScreenshot(res.screenshot);
+        setScreenshot(imgData);
         toast.success("Screenshot captured!");
       } else if (res.success) {
         toast.success("Screenshot saved successfully");

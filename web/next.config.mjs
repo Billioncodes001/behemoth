@@ -19,7 +19,7 @@ const nextConfig = {
     removeConsole: process.env.NODE_ENV === "production",
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   ...(isExport
     ? {
@@ -34,9 +34,12 @@ const nextConfig = {
           images: { unoptimized: true },
         }
       : {
-          // 开发：把 /api/* 反代到 Go 后端（默认 :8787，可用 AUTOPENTEST_API 覆盖）。
+          // 开发 / Next Server：把 /api/* 反代到 Go 后端（默认 127.0.0.1:8787，可用 AUTOPENTEST_API 覆盖）。
+          httpAgentOptions: {
+            keepAlive: true,
+          },
           async rewrites() {
-            const backend = process.env.AUTOPENTEST_API ?? "http://localhost:8787";
+            const backend = process.env.AUTOPENTEST_API ?? "http://127.0.0.1:8787";
             return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
           },
         }),

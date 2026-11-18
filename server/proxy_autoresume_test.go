@@ -103,6 +103,7 @@ func TestProxyAdmissionRechecksReasonAfterSnapshot(t *testing.T) {
 
 func TestProxyQueuedAdmissionDoesNotResumeEngine(t *testing.T) {
 	m := proxyTestManager(t)
+	t.Cleanup(restoreConcurrencySetting(t, m))
 	if err := m.SetConcurrency(true, 1); err != nil {
 		t.Fatal(err)
 	}

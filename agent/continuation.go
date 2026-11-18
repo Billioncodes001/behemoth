@@ -195,3 +195,110 @@ func (c *continuationHooks) Stop(ctx context.Context, messages []llm.Message) (b
 	log.Printf("[continuation %s] Detected premature stop without tool call, injecting continuation nudge (%d/%d)", c.label, n, c.maxNudges)
 	return false, []string{nudgeMsg}, ""
 }
+
+// WrapWorkerContinuationHooks ensures that autonomous task Workers never stop
+// mid-intent after a status sentence ("Let me check..."), thinking-only turn, or
+// tool error without completing their probing and recording results.
+func WrapWorkerContinuationHooks(inner harness.HookRunner, intentID int64, workerName string, maxNudges int) harness.HookRunner {
+	if maxNudges <= 0 {
+		maxNudges = 6
+	}
+	return &workerContinuationHooks{
+		inner:     inner,
+		label:     fmt.Sprintf("%s-intent-%d", workerName, intentID),
+		maxNudges: maxNudges,
+	}
+}
+
+type workerContinuationHooks struct {
+	inner     harness.HookRunner
+	label     string
+	nudges    atomic.Int64
+	maxNudges int
+}
+
+func (w *workerContinuationHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
+	if w.inner != nil {
+		return w.inner.PreToolUse(ctx, name, input)
+	}
+	return false, "", nil
+}
+
+func (w *workerContinuationHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
+	if w.inner != nil {
+		w.inner.PostToolUse(ctx, name, input, result, isErr)
+	}
+}
+
+func (w *workerContinuationHooks) Stop(ctx context.Context, messages []llm.Message) (bool, []string, string) {
+	if w.inner != nil {
+		prevent, blocking, msg := w.inner.Stop(ctx, messages)
+		if prevent || len(blocking) > 0 {
+			return prevent, blocking, msg
+		}
+	}
+	var lastAsst *llm.Message
+	lastAsstIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == llm.RoleAssistant {
+			lastAsst = &messages[i]
+			lastAsstIdx = i
+			break
+		}
+	}
+	if lastAsst == nil || len(lastAsst.ToolUses()) > 0 {
+		return false, nil, ""
+	}
+	text := strings.TrimSpace(lastAsst.Text())
+	var nudge string
+	if text == "" {
+		nudge = continuationThinkingNudge
+	} else {
+		prevWasToolError := false
+		if lastAsstIdx > 0 {
+			prev := messages[lastAsstIdx-1]
+			if prev.Role == llm.RoleUser && len(prev.Content) > 0 {
+				allErr, hasToolRes := true, false
+				for _, b := range prev.Content {
+					if b.Type == llm.BlockToolResult {
+						hasToolRes = true
+						if !b.IsError {
+							allErr = false
+						}
+					}
+				}
+				if hasToolRes && allErr {
+					prevWasToolError = true
+				}
+			}
+		}
+		if prevWasToolError && len(text) < 400 {
+			nudge = continuationToolErrorNudge
+		} else if len(text) <= 350 && !strings.Contains(text, "## ") && (reActionIntentAnnouncement.MatchString(text) || strings.HasSuffix(text, ":") || strings.HasSuffix(text, "...") || strings.HasSuffix(text, "…")) {
+			nudge = continuationPrematureIntentNudge
+		}
+	}
+	if nudge == "" {
+		return false, nil, ""
+	}
+	n := w.nudges.Add(1)
+	if int(n) > w.maxNudges {
+		return false, nil, ""
+	}
+	log.Printf("[continuation %s] Worker premature stop detected, injecting continuation nudge (%d/%d)", w.label, n, w.maxNudges)
+	return false, []string{nudge}, ""
+}
+
+// WrapPlannerContinuationHooks ensures the Planner does not exit prematurely after
+// a thinking-only turn, a tool error, or an action announcement without calling
+// its planning tools (add_intent, prove_goal, etc.).
+func WrapPlannerContinuationHooks(inner harness.HookRunner, label string, maxNudges int) harness.HookRunner {
+	if maxNudges <= 0 {
+		maxNudges = 4
+	}
+	return &workerContinuationHooks{
+		inner:     inner,
+		label:     label,
+		maxNudges: maxNudges,
+	}
+}

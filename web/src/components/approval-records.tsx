@@ -149,7 +149,7 @@ function StatusBadge({ status }: { status: string }) {
 function MatchCell({ row, showReason = true }: { row: InterceptApprovalRow; showReason?: boolean }) {
   const { ui } = useUITranslation();
 
-  const reason = row.reason?.replace(/^\[模型\]\s*/, "");
+  const reason = row.reason?.replace(/^\[(?:模型|Model)\]\s*/, "");
   const decisionSource = source(row, ui);
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -534,10 +534,10 @@ export function ApprovalDetail({
       noSnapshotHint={ui("screen.8197d17084a3a9")}
       emptyDescription={ui("screen.80b1b3f5232e2e")}
       suggestions={[
-        { label: ui("chatUI.approval.scriptPurpose"), question: "此脚本的作用是什么？" },
-        { label: ui("chatUI.approval.scriptChanges"), question: "脚本会修改哪些文件或数据？" },
-        { label: ui("chatUI.approval.decisionReason"), question: "为什么这次被放行或拦截？" },
-        { label: ui("chatUI.approval.uncertainBehavior"), question: "脚本中有哪些未确定行为？" },
+        { label: ui("chatUI.approval.scriptPurpose"), question: ui("chatUI.approval.scriptPurpose") },
+        { label: ui("chatUI.approval.scriptChanges"), question: ui("chatUI.approval.scriptChanges") },
+        { label: ui("chatUI.approval.decisionReason"), question: ui("chatUI.approval.decisionReason") },
+        { label: ui("chatUI.approval.uncertainBehavior"), question: ui("chatUI.approval.uncertainBehavior") },
       ]}
       className={cn(side.open ? "min-h-[460px]" : "min-h-0")}
       mainClassName="overflow-visible"
@@ -581,7 +581,7 @@ export function ApprovalDetail({
               <MatchCell row={current} showReason={false} />
             </div>
             <p className="whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">
-              {current.reason?.replace(/^\[模型\]\s*/, "") || ui("screen.fb73cc98cf22dc")}
+              {current.reason?.replace(/^\[(?:模型|Model)\]\s*/, "") || ui("screen.fb73cc98cf22dc")}
             </p>
             {audit?.decision_reason ? <p className="text-sm">{audit.decision_reason}</p> : null}
             {audit?.effective_action ? (
@@ -702,7 +702,7 @@ export function ApprovalDetail({
                 ) : null}
                 <CodeBlock
                   label={`${initialLabel}：${actionLabels(ui)[audit.initial_action] ?? audit.initial_action}`}
-                  text={audit.initial_reason.replace(/^\[模型\]\s*/, "")}
+                  text={audit.initial_reason.replace(/^\[(?:模型|Model)\]\s*/, "")}
                 />
                 <CodeBlock
                   label={ui("screen.185191e9e003e7")}

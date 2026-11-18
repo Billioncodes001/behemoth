@@ -76,7 +76,9 @@ export function flush() {
       // response bodies. Never shrink the request drafts, even if they exceed quota.
       window.localStorage.setItem(STORAGE_KEY, serializeWorkspace(workspace, 0));
     } catch {
-      toast.error(formatMessage("工作区保存失败，浏览器存储空间不足或不可用，请备份请求草稿"));
+      toast.error(
+        formatMessage("Could not save workspace. Browser storage is full or unavailable. Back up your request drafts"),
+      );
     }
   }
 }
@@ -184,7 +186,7 @@ export const useRepeaterStore = create<Store>((set, get) => {
       const workspace = current();
       change({
         ...workspace,
-        groups: [...workspace.groups, { id: newId(), name: name?.trim() || `分组 ${workspace.groups.length + 1}` }],
+        groups: [...workspace.groups, { id: newId(), name: name?.trim() || `Group ${workspace.groups.length + 1}` }],
       });
     },
     renameGroup: (id, name) => {

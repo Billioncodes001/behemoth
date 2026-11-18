@@ -63,7 +63,7 @@ export async function copyText(text: string): Promise<boolean> {
   const textarea = document.createElement("textarea");
   try {
     textarea.value = text;
-    textarea.setAttribute("aria-label", "复制内容");
+    textarea.setAttribute("aria-label", "Copy content");
     textarea.style.position = "fixed";
     textarea.style.opacity = "0";
     textarea.style.pointerEvents = "none";

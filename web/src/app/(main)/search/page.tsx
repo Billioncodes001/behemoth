@@ -173,7 +173,9 @@ export default function SearchPage() {
           {results.results?.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">{t("search.noResults")}</CardContent></Card>
           ) : (
-            results.results?.map((item, i) => <ResultCard key={i} item={item} index={i} t={t} />)
+            results.results?.map((item, i) => (
+              <ResultCard key={i} item={item} index={i} t={(k, opts) => String(t(k, opts ?? {}))} />
+            ))
           )}
         </div>
       )}

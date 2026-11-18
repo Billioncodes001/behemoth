@@ -100,7 +100,7 @@ test("real preview transport returns the complete empty task and asset intellige
         settings.credential_agent_enabled && settings.credential_traffic_binding,
       );
     }
-    await assert.rejects(api.intelligenceDetail(scope, id, 999), /情报不存在/);
+    await assert.rejects(api.intelligenceDetail(scope, id, 999), /Intelligence record not found/);
   }
-  await assert.rejects(api.intelligence("tasks", "missing-task", new URLSearchParams()), /任务或资产不存在/);
+  await assert.rejects(api.intelligence("tasks", "missing-task", new URLSearchParams()), /Task or asset not found/);
 });

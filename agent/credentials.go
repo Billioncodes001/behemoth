@@ -51,7 +51,7 @@ func CredentialSourceText(raw string) string {
 }
 func ValidateCredentialAccounts(raw string, accounts []db.CredentialAccount) ([]db.CredentialAccount, error) {
 	if len(accounts) > 100 {
-		return nil, errors.New("单条情报最多整理 100 组凭据")
+		return nil, errors.New("at most 100 credential entries can be extracted per intelligence record")
 	}
 	source := CredentialSourceText(raw)
 	out := []db.CredentialAccount{}
@@ -62,10 +62,10 @@ func ValidateCredentialAccounts(raw string, accounts []db.CredentialAccount) ([]
 		}
 		for _, v := range []string{a.Username, a.Password, a.Token, a.Cookie, a.Endpoint, a.Protocol} {
 			if len(v) > 8192 {
-				return nil, errors.New("凭据字段过长")
+				return nil, errors.New("credential field is too long")
 			}
 			if v != "" && !strings.Contains(source, v) {
-				return nil, errors.New("整理结果含原文中不存在的字段，未保存")
+				return nil, errors.New("extracted result contains fields absent from the raw text; not saved")
 			}
 		}
 		if len(a.Label) > 200 {
@@ -142,10 +142,10 @@ func ParseCredentialJSON(raw string) ([]db.CredentialAccount, bool) {
 // history. The provider decorator records this run in the normal usage ledger.
 func ExtractCredentials(ctx context.Context, prov llm.Provider, prompt, raw string, maxTokens int) ([]db.CredentialAccount, llm.Usage, error) {
 	if prov == nil {
-		return nil, llm.Usage{}, errors.New("未配置可用的整理模型")
+		return nil, llm.Usage{}, errors.New("no credential processor model is configured")
 	}
 	if len(raw) > 32768 {
-		return nil, llm.Usage{}, errors.New("原始凭据内容过长")
+		return nil, llm.Usage{}, errors.New("raw credential content is too long")
 	}
 	if maxTokens <= 0 || maxTokens > 6000 {
 		maxTokens = 6000
@@ -156,10 +156,10 @@ func ExtractCredentials(ctx context.Context, prov llm.Provider, prompt, raw stri
 	data, _ := json.Marshal(map[string]string{"raw_content": raw})
 	msg, stop, usage, err := prov.Complete(ctx, llm.CompletionRequest{System: []string{prompt}, Messages: []llm.Message{llm.UserText(string(data))}, MaxTokens: maxTokens, Thinking: "disabled"})
 	if err != nil {
-		return nil, usage, errors.New("模型调用未完成，请检查模型配置后手动重试")
+		return nil, usage, errors.New("model call did not complete; check the model configuration and retry")
 	}
 	if stop == "max_tokens" || stop == "length" {
-		return nil, usage, errors.New("模型输出达到上限，保留原文，请检查配置后重试")
+		return nil, usage, errors.New("model output hit the token limit; original text retained, check configuration and retry")
 	}
 	text := strings.TrimSpace(msg.Text())
 	if strings.HasPrefix(text, "```") {
@@ -172,7 +172,7 @@ func ExtractCredentials(ctx context.Context, prov llm.Provider, prompt, raw stri
 		Accounts []db.CredentialAccount `json:"accounts"`
 	}
 	if json.Unmarshal([]byte(text), &response) != nil || response.Accounts == nil {
-		return nil, usage, fmt.Errorf("模型未返回有效的凭据 JSON，原文已保留")
+		return nil, usage, fmt.Errorf("model did not return valid credential JSON; original text retained")
 	}
 	out, err := ValidateCredentialAccounts(raw, response.Accounts)
 	return out, usage, err

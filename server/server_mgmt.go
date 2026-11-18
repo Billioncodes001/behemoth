@@ -923,11 +923,6 @@ func (s *Server) pgSaveMCP(w http.ResponseWriter, r *http.Request) {
 	// plain updates (e.g. enable toggles) to avoid re-spawning the server each time.
 	if isNew && m.Enabled {
 		m.ID = id
-		for _, agKey := range []string{"auto", "pentest", "worker", "mainagent", "reporter"} {
-			if ag, err := pg.GetAgentByKey(agKey); err == nil && ag != nil {
-				_, _ = pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, ag.ID, id)
-			}
-		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		if derr := s.discoverAndCacheMCP(ctx, &m); derr != nil {
 			log.Printf("[mcp] %s tool discovery warning after creation: %v", m.Name, derr)

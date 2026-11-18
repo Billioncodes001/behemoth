@@ -54,6 +54,7 @@ type Server struct {
 	m          *Manager
 	engine     *Engine
 	ctx        context.Context
+	cancel     context.CancelFunc
 	dataDir    string
 	metricsMu  sync.Mutex
 	lastCPUUse uint64
@@ -213,13 +214,15 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, dataDir: dataDir, jwtKey: key, chatBusy: map[string]bool{},
+	srvCtx, srvCancel := context.WithCancel(ctx)
+	s := &Server{m: m, engine: NewEngine(m), ctx: srvCtx, cancel: srvCancel, skillDir: skillDir, dataDir: dataDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{}, proxyPoolWake: make(chan struct{}, 1), proxyPoolProbeSem: make(chan struct{}, proxyPoolMaxProbeConcurrency),
 		profChatAgents: map[int64]*agent.ChatAgent{},
 		provByProfile:  map[int64]*provEntry{}, llmHealth: newLLMHealthRegistry(m.pg),
 		taskAgents: map[string]*taskAgentBundle{}, archiveWake: make(chan struct{}, 1), credentialWake: make(chan struct{}, 1)}
 	m.SetTaskControlMutex(&s.concMu)
+	m.RegisterOnClose(s.Close)
 
 	// Initialize dynamic fingerprint system (randomizes cookies, headers, UAs per startup)
 	fingerprint.Initialize()
@@ -233,7 +236,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.pg != nil {
 		s.initProxyPoolV2(m)
 	}
-	s.startGitAutoSync(ctx)
+	s.startGitAutoSync(s.ctx)
 
 	// Initialize Recipe Registry (tool definitions)
 	s.recipeReg = recipes.NewRecipeRegistry(filepath.Join(dataDir, "recipes", "tools"))
@@ -474,7 +477,7 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 		// Fill the tool cache for any enabled MCP that has none yet (notably the
 		// seeded browser MCP on first run). Async so it never blocks startup.
 		go s.discoverEmptyMCPsOnStartup()
-		logSink.SetDB(ctx, m.pg) // restore last 100 log rows and enable async persistence
+		logSink.SetDB(s.ctx, m.pg) // restore last 100 log rows and enable async persistence
 	}
 	// precedence: persisted DB config > env.
 	if cfg, ok := s.loadLLMConfig(); ok {
@@ -512,9 +515,21 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 	return s
 }
 
-// Close waits for proxy pool supervision to stop before Manager closes the DB.
+// Close cancels server background workers and waits for task runtimes and proxy
+// pool supervision to stop before Manager closes the DB.
 func (s *Server) Close() {
 	if s != nil {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.chatMu.Lock()
+		for _, cancel := range s.chatCancel {
+			if cancel != nil {
+				cancel(context.Canceled)
+			}
+		}
+		s.chatMu.Unlock()
+		s.engine.Shutdown()
 		s.proxyPoolWG.Wait()
 	}
 }
@@ -1451,12 +1466,10 @@ func (s *Server) Handler() http.Handler {
 
 // --- handlers ---
 
-// health requires the optional Basic Auth gate but no admin JWT, and exposes maintenance state.
+// health requires the optional Basic Auth gate but no admin JWT.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	snap := getMaintenanceSnapshot()
-	snap["ok"] = true
-	writeJSON(w, 200, snap)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // version is protected by the normal JWT middleware and optional Basic Auth gate.
@@ -3982,15 +3995,15 @@ func (s *Server) settingsPayload() map[string]any {
 	}
 	return map[string]any{
 		"traffic_capture":                      s.m.TrafficEnabled(),
-		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, true),
-		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, true),
+		"browser_screenshot_enabled":           s.m.pg.GetBool(settingBrowserScreenshot, false),
+		"browser_screenshot_timestamp_enabled": s.m.pg.GetBool(settingScreenshotTimestamp, false),
 		"opsec_enabled":                        s.m.pg.GetBool(settingOpsecEnabled, true),
-		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, true),
-		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, true),
-		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, true),
-		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, true),
-		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, true),
-		db.SettingCredentialTraffic:            s.m.pg.GetBool(db.SettingCredentialAgent, true) && s.m.pg.GetBool(db.SettingCredentialTraffic, true),
+		"agent_traffic_binding":                s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"task_intelligence_enabled":            s.m.pg.GetBool(db.SettingTaskIntelligence, false),
+		db.SettingTaskAutoTitle:                s.m.pg.GetBool(db.SettingTaskAutoTitle, false),
+		db.SettingChatAutoTitle:                s.m.pg.GetBool(db.SettingChatAutoTitle, false),
+		db.SettingCredentialAgent:              s.m.pg.GetBool(db.SettingCredentialAgent, false),
+		db.SettingCredentialTraffic:            s.m.pg.GetBool(db.SettingCredentialAgent, false) && s.m.pg.GetBool(db.SettingCredentialTraffic, false),
 		"llm_record":                           s.m.LLMRecordEnabled(),
 		"web_search_enabled":                   on,
 		"web_search_backend":                   backend,
@@ -5078,24 +5091,34 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 
 // --- utils ---
 
+func isLoopbackHost(h string) bool {
+	return strings.EqualFold(h, "localhost") || h == "127.0.0.1" || h == "::1"
+}
+
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		// Allow credentials when the Origin matches the request Host (custom domain or loopback).
+		// Allow credentials only when the Origin matches the request Host, or when BOTH
+		// Origin and Host are loopback addresses (e.g. localhost:3000 -> 127.0.0.1:8787).
 		origin := r.Header.Get("Origin")
 		u, err := url.Parse(origin)
 		host, _, hostErr := net.SplitHostPort(r.Host)
 		if hostErr != nil {
 			host = r.Host
 		}
-		if err == nil && (u.Scheme == "http" || u.Scheme == "https") &&
-			(strings.EqualFold(u.Hostname(), host) || host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" &&
+			(strings.EqualFold(u.Hostname(), host) || (isLoopbackHost(u.Hostname()) && isLoopbackHost(host))) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		exposeHeaders := "X-Artex-Auth"
+		if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Artex-Auth") {
+			exposeHeaders += ", " + dynamicAuthHeaderName
+		}
+		w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
 			return

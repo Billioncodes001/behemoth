@@ -309,6 +309,35 @@ func (e *Engine) StopTask(taskID string) {
 	e.deleteMu.Unlock()
 }
 
+// Shutdown stops all task execution contexts and waits for every task runtime
+// goroutine to exit cleanly before database/filesystem teardown.
+func (e *Engine) Shutdown() {
+	if e == nil {
+		return
+	}
+	e.execMu.Lock()
+	for _, cancel := range e.execCancel {
+		if cancel != nil {
+			cancel(context.Canceled)
+		}
+	}
+	e.execMu.Unlock()
+
+	e.runtimeMu.Lock()
+	rts := make([]*taskRuntime, 0, len(e.runtimes))
+	for _, rt := range e.runtimes {
+		if rt != nil {
+			rt.cancel()
+			rts = append(rts, rt)
+		}
+	}
+	e.runtimeMu.Unlock()
+
+	for _, rt := range rts {
+		rt.wg.Wait()
+	}
+}
+
 // cancelExec cancels a task's current per-task exec context (any in-flight
 // planner.Plan / worker.Execute), if present. Shared by Pause and the settle
 // sequence's hard-drain backstop.
@@ -967,6 +996,16 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		e.BeginLLMCall(t.ID)
 		met, reason, err := planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
 		e.EndLLMCall(t.ID)
+		maxPlanRetries, planBackoff := e.modelErrorRetryPolicy()
+		for attempt := 1; attempt <= maxPlanRetries && err != nil && ectx.Err() == nil && !e.IsPaused(t.ID) && !e.isSettling(t.ID) && isRetryableStreamError(err); attempt++ {
+			log.Printf("[planner] task %s planning error, retrying round (%d/%d) after %v: %v", t.ID, attempt, maxPlanRetries, planBackoff, err)
+			if sleepCtx(ectx, planBackoff) {
+				break
+			}
+			e.BeginLLMCall(t.ID)
+			met, reason, err = planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
+			e.EndLLMCall(t.ID)
+		}
 		switch {
 		case err != nil && ectx.Err() == nil:
 			log.Printf("[planner] task %s 规划出错: %v", t.ID, err)

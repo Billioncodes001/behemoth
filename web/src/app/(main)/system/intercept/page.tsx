@@ -1009,7 +1009,7 @@ export default function InterceptPage() {
             {form.action !== "allow" && (
               <Field label={form.action === "deny" ? ui("screen.88193186c599c2") : ui("screen.bcbc584d0ac2b1")}>
                 <Textarea
-                  placeholder={form.action === "deny" ? "操作被安全策略阻止" : ""}
+                  placeholder={form.action === "deny" ? ui("screen.denyPlaceholder") : ""}
                   value={form.message}
                   onChange={(e) => set({ message: e.target.value })}
                   rows={2}

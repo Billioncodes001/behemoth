@@ -91,7 +91,7 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 				rec(activityWithUsage(db.Activity{Kind: "result", Summary: firstLine(sum, 400), Detail: detail}, lastUsage))
 				return finalText, reason, ctx.Err()
 			}
-			rec(activityWithUsage(db.Activity{Kind: "result", IsError: true, Summary: "执行出错: " + err.Error(), Detail: err.Error()}, lastUsage))
+			rec(activityWithUsage(db.Activity{Kind: "result", IsError: true, Summary: "Execution error: " + err.Error(), Detail: err.Error()}, lastUsage))
 			return finalText, reason, err
 		}
 		switch ev.Kind {
@@ -140,13 +140,23 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 				if ev.Terminal.Reason != harness.ReasonAbortedStreaming {
 					sidequestion.Finish(ctx, ev.Terminal.Messages)
 				}
+				// Clean any residual <think> tags or [Called tool ...] markers from the final
+				// terminal text so the user-visible result bubble never displays raw tags or
+				// unexecuted pseudo-tool strings.
+				_, cleanedTerm := extractThinkingFromText(ev.Terminal.Text)
+				cleanedTerm, _ = extractBracketToolCalls(cleanedTerm, nil)
+				ev.Terminal.Text = cleanedTerm
 				finalText = ev.Terminal.Text
 				reason = ev.Terminal.Reason
 				// the buffered tail text usually equals Terminal.Text (final answer);
 				// drop it to avoid a duplicate record, the result row carries it.
-				if tkind == "text" && strings.TrimSpace(tbuf.String()) == strings.TrimSpace(ev.Terminal.Text) {
-					tbuf.Reset()
-					tkind = ""
+				if tkind == "text" {
+					_, bufCleaned := extractThinkingFromText(tbuf.String())
+					bufCleaned, _ = extractBracketToolCalls(bufCleaned, nil)
+					if strings.TrimSpace(bufCleaned) == strings.TrimSpace(ev.Terminal.Text) {
+						tbuf.Reset()
+						tkind = ""
+					}
 				}
 				flush() // flush any trailing thinking / non-final text
 				sum, detail := ev.Terminal.Text, ev.Terminal.Text

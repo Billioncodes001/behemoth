@@ -151,7 +151,11 @@ test("migrated pages reference existing keys and contain no hardcoded Chinese di
     const visit = (node) => {
       // Upload manifests are Agent-facing protocol text, outside UI translation.
       if (ts.isFunctionDeclaration(node) && node.name?.text === "appendUploads") return;
-      if (ts.isVariableDeclaration(node) && node.name.getText(tree) === "UPLOAD_MARKER") return;
+      if (
+        ts.isVariableDeclaration(node) &&
+        ["UPLOAD_MARKER", "LEGACY_UPLOAD_MARKER"].includes(node.name.getText(tree))
+      )
+        return;
       if (
         ts.isCallExpression(node) &&
         ["t", "liveT", "translate"].includes(node.expression.getText(tree)) &&
@@ -446,7 +450,7 @@ test("task summaries, archive eligibility and category scope labels switch witho
   for (const kind of ["exact_domain", "exact_ip", "exact_url", "fuzzy_domain", "fuzzy_ip", "fuzzy_url", "cidr"])
     assert.ok(Object.hasOwn(resources.en.translation, `taskUI.assetRule.${kind}`));
   const upload = tree.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "appendUploads");
-  assert.ok(upload.getText(tree).includes("worker 可用 Read/Bash 按路径打开"));
+  assert.ok(upload.getText(tree).includes("Workers can open them by path via Read/Bash"));
 });
 
 test("task runtime validation preserves unknown details and schedule validation remains bilingual", async () => {

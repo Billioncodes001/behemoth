@@ -102,9 +102,10 @@ function groupSteps(steps: Activity[], chat: boolean): Group[] {
       out.push({ type: "user", key: s.seq, step: s, intent: s.kind === "intent" });
       continue;
     }
-    // In a chat (main agent) the assistant's text/result IS the answer — render it
-    // full (markdown), never collapsed. thinking still folds into a compact block.
-    if (s.kind === "result" || (chat && s.kind === "text")) {
+    // In a chat (main agent), only the final result step (kind="result") is rendered
+    // as a full uncollapsed AnswerBlock. Intermediate status/reasoning text emitted
+    // alongside tool calls or thinking folds into the compact collapsible MessageBlock.
+    if (s.kind === "result") {
       out.push({ type: "answer", key: s.seq, step: s });
       continue;
     }
@@ -165,7 +166,7 @@ function InterceptCard({ step, getDetail }: { step: Activity; getDetail: (seq: n
   }, [step.summary]);
 
   const toolName = React.useMemo(() => {
-    const m = /工具\s+(\S+)\s+请求/.exec(step.summary);
+    const m = /(?:Tool|工具)\s+(\S+)\s+(?:requested approval|请求)/i.exec(step.summary);
     return m ? m[1] : step.summary;
   }, [step.summary]);
 
@@ -644,6 +645,19 @@ function UserRow({
 // AnswerBlock renders the agent's FINAL answer (kind="result") in full — never
 // collapsed. The summary is a truncated first line, so the full text is pulled
 // from the detail and shown inline.
+function cleanAnswerMarkdown(raw: string): string {
+  if (!raw.includes("[Called tool ")) return raw;
+  const stripped = raw.replace(/\[Called tool [^\]]*(?:\]|$)/g, "").trim();
+  const lines = stripped.split("\n");
+  const deduped: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && deduped.length > 0 && deduped[deduped.length - 1].trim() === trimmed) continue;
+    deduped.push(line);
+  }
+  return deduped.join("\n").trim() || raw;
+}
+
 function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: number) => Promise<string> }) {
   const [ref, inView] = useInView();
   const [full, setFull] = React.useState<string | null>(null);
@@ -661,6 +675,7 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
       live = false;
     };
   }, [inView, step.seq, getDetail, step.summary]);
+  const displayBody = cleanAnswerMarkdown(full ?? step.summary);
   return (
     <div ref={ref} className="mb-2 mt-1 flex min-w-0 max-w-full flex-col gap-1 overflow-hidden">
       <div
@@ -670,9 +685,9 @@ function AnswerBlock({ step, getDetail }: { step: Activity; getDetail: (seq: num
         }
       >
         {step.is_error ? (
-          <span className="whitespace-pre-wrap">{full ?? step.summary}</span>
+          <span className="whitespace-pre-wrap">{displayBody}</span>
         ) : (
-          <Markdown text={full ?? step.summary} />
+          <Markdown text={displayBody} />
         )}
       </div>
       <ActivityTime ts={step.ts} />

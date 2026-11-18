@@ -149,7 +149,7 @@ func (s *Server) agentFindingTrafficAccess(ctx context.Context, id int64, write 
 
 func (s *Server) toolBindFindingTraffic() actool.CoreTool {
 	return wrTool("bind_finding_traffic", "Bind verified real HTTP traffic to a registered vulnerability. finding_id uses the independent vulnerability record ID; do not pass exploration node ID. All references in batch succeed or fail together; duplicate references do not overwrite existing descriptions. Binding marks existing reports as pending update; do not re-probe or recreate vulnerabilities just to bind traffic.",
-		objSchema(map[string]any{"finding_id": strParam("Standalone vulnerability record ID, read from the finding_id field of list_task_findings / get_task_node_detail"), "traffic_refs": agent.HintTrafficSchema()}, "finding_id", "traffic_refs"),
+		objSchema(map[string]any{"finding_id": idParam("Standalone vulnerability record ID, read from the finding_id field of list_task_findings / get_task_node_detail"), "traffic_refs": agent.HintTrafficSchema()}, "finding_id", "traffic_refs"),
 		func(ctx context.Context, raw json.RawMessage) (actool.Result, error) {
 			if !s.m.pg.GetBool(settingAgentTrafficBinding, false) {
 				return actool.Errorf("Automatic Agent traffic binding is disabled; enable it in system settings or bind manually on the page."), nil

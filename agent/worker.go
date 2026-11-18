@@ -383,7 +383,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		if ids := intentAssetIDs(intent); len(ids) > 0 {
 			if assets, err := as.GetByIDsInScope(taskID, ids); err == nil && len(assets) > 0 {
 				if b, err := json.Marshal(assets); err == nil {
-					sysBody += "\n\n本意图 asset_ids 对应的目标资产：\n" + string(b)
+					sysBody += "\n\nTarget assets corresponding to asset_ids of this intent:\n" + string(b)
 				}
 				// 意图明确针对的这些资产 → 自动纳入任务测试范围（与 insertAssets 同一套
 				// 保守粒度）。upsertTaskScope 的 ON CONFLICT DO NOTHING + uq_task_scope
@@ -397,7 +397,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 			}
 		}
 	}
-	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
+	sysBody += "\n\nBegin executing the intent above: focus solely on it, produce only facts, assets, and findings, and stop immediately once done."
 	system, boundary := deferredSystem(sysBody, def)
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
 	tc := taskClockFrom(ctx)
@@ -448,6 +448,11 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		opts.Hooks = hooks
 	}
+	// Wire premature-stop continuation across all worker runs so that if a worker
+	// outputs a status announcement ("Let me probe the endpoint...") or stops right
+	// after a tool error without calling mark_done/insert_assets/report_finding,
+	// it is automatically nudged to continue executing its assigned intent.
+	opts.Hooks = WrapWorkerContinuationHooks(opts.Hooks, intent.ID, name, 6)
 	if w.tx != nil { // persist raw LLM conversation; one file per worked intent
 		opts.Transcript = w.tx
 		opts.SessionID = WorkerSessionID(ts.ID(), intent.ID)
@@ -464,7 +469,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// overview 罕见地 marshal 失败为空时，回退一句启动词，避免首轮出现空 user 消息。
 	input := overview
 	if strings.TrimSpace(input) == "" {
-		input = "开始执行 system 里领到的意图：只做它、只产生事实、assets、finding、做完即停。"
+		input = "Begin executing the intent claimed in the system prompt: focus solely on it, produce only facts, assets, and findings, and stop immediately once done."
 	}
 
 	// 实验功能:开启后由 noa 接管上下文压缩(归档集中在 <workDir>/noa/<SessionID> 下,持久)。
@@ -484,20 +489,20 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		alreadyRecorded = requestID != "" && hasWorkerChatMessage(s.Messages(), requestID)
 		if len(s.Messages()) > 0 && message == "" {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
-			input = "继续执行。"
+			input = "Continue execution."
 		} else if len(s.Messages()) > 0 {
 			seedUnlockFromHistory(s.Messages(), def.UnlockSkill)
 		}
 	}
 	if message != "" {
 		if alreadyRecorded {
-			input = "继续执行上一次人工对话输入的新意图。不要重复已经完成的动作。"
+			input = "Continue executing the new intent from the previous operator message. Do not repeat already completed actions."
 		} else if len(s.Messages()) > 0 {
-			input = workerChatMarker(requestID) + "\n【人工对话输入的新意图】\n" + message +
-				"\n\n请立即按这条人工输入执行，完成后再根据上下文决定原任务是否需要继续。"
+			input = workerChatMarker(requestID) + "\n[New Intent From Operator Chat]\n" + message +
+				"\n\nExecute this operator instruction immediately, then decide based on context whether the original task needs to continue."
 		} else {
-			input += "\n\n" + workerChatMarker(requestID) + "\n【人工对话输入的新意图】\n" + message +
-				"\n\n请优先执行这条人工输入。"
+			input += "\n\n" + workerChatMarker(requestID) + "\n[New Intent From Operator Chat]\n" + message +
+				"\n\nPrioritize executing this operator instruction."
 		}
 	}
 

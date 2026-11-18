@@ -184,7 +184,7 @@ test("intelligence renders real preview responses, populated records and localiz
   assert.notEqual(output(fixture), english);
 });
 
-test("approval suggestions translate their buttons and keep the original submitted questions", async () => {
+test("approval suggestions translate their buttons and submitted questions follow the active language", async () => {
   const hooks = load(base + "/src/hooks/use-side-questions.ts");
   const workspace = load(base + "/src/components/side-question-workspace.tsx");
   const buttons = load(base + "/src/components/ui/button.tsx");
@@ -192,11 +192,17 @@ test("approval suggestions translate their buttons and keep the original submitt
   const saved = [hooks.useSideQuestions, workspace.SideQuestionWorkspace, buttons.Button];
   const sent = [],
     handlers = new Map();
-  const questions = [
+  const zhQuestions = [
     "此脚本的作用是什么？",
     "脚本会修改哪些文件或数据？",
     "为什么这次被放行或拦截？",
     "脚本中有哪些未确定行为？",
+  ];
+  const enQuestions = [
+    "What does this script do?",
+    "Which files or data will this script change?",
+    "Why was this execution allowed or blocked?",
+    "Which script behaviors are uncertain?",
   ];
   hooks.useSideQuestions = () => ({
     enabled: true,
@@ -233,11 +239,11 @@ test("approval suggestions translate their buttons and keep the original submitt
       assert.ok(handlers.has(label), label);
       handlers.get(label)();
     }
-    assert.deepEqual(sent, questions);
-    for (const question of questions) assert.ok(!english.includes(question));
+    assert.deepEqual(sent, enQuestions);
+    for (const question of zhQuestions) assert.ok(!english.includes(question));
     await i18n.changeLanguage("zh-CN");
     const chinese = visible(render(ApprovalDetail, { row, busy: false, decide: noop, revision: 0 }));
-    for (const question of questions) assert.ok(chinese.includes(question), question);
+    for (const question of zhQuestions) assert.ok(chinese.includes(question), question);
   } finally {
     [hooks.useSideQuestions, workspace.SideQuestionWorkspace, buttons.Button] = saved;
   }
@@ -363,7 +369,7 @@ test("Repeater renders persisted drafts with translated default group and preser
   assert.match(english, /Repeater/);
   assert.match(english, /Default/);
   assert.match(english, /Send/);
-  assert.equal(workspace.groups[0].name, "默认");
+  assert.equal(workspace.groups[0].name, "Default");
   assert.equal(useRepeaterStore.getState().workspace.tabs[0].rawRequest, "GET / HTTP/1.1\nHost: example.test\n\n");
   useRepeaterStore.setState({ workspace: null });
 });

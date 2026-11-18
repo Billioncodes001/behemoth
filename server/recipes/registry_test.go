@@ -28,13 +28,19 @@ func TestRecipeRegistry_Load(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	baseReg := NewRecipeRegistry("")
+	if err := baseReg.Load(); err != nil {
+		t.Fatalf("base Load() error = %v", err)
+	}
+	builtinCount := baseReg.Count()
+
 	reg := NewRecipeRegistry(tmpDir)
 	if err := reg.Load(); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if reg.Count() != 1 {
-		t.Errorf("Count() = %d, want 1", reg.Count())
+	if reg.Count() != builtinCount+1 {
+		t.Errorf("Count() = %d, want %d", reg.Count(), builtinCount+1)
 	}
 }
 
@@ -114,7 +120,16 @@ func TestRecipeRegistry_Categories(t *testing.T) {
 	reg.Load()
 	
 	cats := reg.Categories()
-	if len(cats) != 2 {
-		t.Errorf("Categories() = %v, want 2 categories", cats)
+	hasRecon, hasExploit := false, false
+	for _, c := range cats {
+		if c == "recon" {
+			hasRecon = true
+		}
+		if c == "exploit" {
+			hasExploit = true
+		}
+	}
+	if !hasRecon || !hasExploit {
+		t.Errorf("Categories() = %v, expected custom categories 'recon' and 'exploit'", cats)
 	}
 }

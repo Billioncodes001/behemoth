@@ -298,6 +298,7 @@ func (s *Server) startAdmittedTask(t *Task, mode string) {
 		if s.engine.IsPaused(t.ID) {
 			s.engine.Resume(t)
 		}
+		s.engine.startDeadlineCoordinator(s.ctx, t)
 		go func() {
 			defer s.engine.decInflight(t.ID)
 			s.startTaskEngine(t)

@@ -16,7 +16,7 @@ func TestChatUnavailableReasonDistinguishesStates(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer m.Close()
+	t.Cleanup(func() { _ = m.Close() })
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
 
@@ -30,8 +30,8 @@ func TestChatUnavailableReasonDistinguishesStates(t *testing.T) {
 		_ = m.pg.DeleteProfile(p.ID)
 	}
 
-	if reason := s.chatUnavailableReason(); !strings.Contains(reason, "尚未配置") {
-		t.Fatalf("no-profile reason=%q, want 尚未配置", reason)
+	if reason := s.chatUnavailableReason(); !strings.Contains(reason, "No LLM profile configured") && !strings.Contains(reason, "尚未配置") {
+		t.Fatalf("no-profile reason=%q, want 'No LLM profile configured'", reason)
 	}
 
 	id, err := m.pg.SaveProfile(&db.LLMProfile{Name: "p1", Format: "anthropic", Model: "claude-x", APIKey: "sk-test"})
@@ -44,15 +44,15 @@ func TestChatUnavailableReasonDistinguishesStates(t *testing.T) {
 	})
 
 	// Profile exists but is not activated.
-	if reason := s.chatUnavailableReason(); !strings.Contains(reason, "没有已激活") {
-		t.Fatalf("inactive reason=%q, want 没有已激活", reason)
+	if reason := s.chatUnavailableReason(); !strings.Contains(reason, "No active LLM profile") && !strings.Contains(reason, "没有已激活") {
+		t.Fatalf("inactive reason=%q, want 'No active LLM profile'", reason)
 	}
 
 	// Once activated, the reason no longer claims a missing/inactive config.
 	if err := m.pg.SetActiveProfile(id); err != nil {
 		t.Fatal(err)
 	}
-	if reason := s.chatUnavailableReason(); strings.Contains(reason, "尚未配置") || strings.Contains(reason, "没有已激活") {
+	if reason := s.chatUnavailableReason(); strings.Contains(reason, "No LLM profile configured") || strings.Contains(reason, "No active LLM profile") || strings.Contains(reason, "尚未配置") || strings.Contains(reason, "没有已激活") {
 		t.Fatalf("active reason=%q should not report missing/inactive", reason)
 	}
 }
@@ -66,7 +66,7 @@ func TestResolveChatAgentHonoursConversationProfile(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer m.Close()
+	t.Cleanup(func() { _ = m.Close() })
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
 

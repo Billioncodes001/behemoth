@@ -417,14 +417,22 @@ func TestSideTaskContextModelUnavailableIsDistinct(t *testing.T) {
 	t.Cleanup(func() { _ = f.m.pg.DeleteTask(id) })
 	var profileID int64
 	var originalAPIKey string
-	if err := f.m.pg.QueryRow(`SELECT id, COALESCE(api_key, '') FROM llm_profiles WHERE is_default=true ORDER BY id LIMIT 1`).Scan(&profileID, &originalAPIKey); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = f.m.pg.Exec(`UPDATE llm_profiles SET api_key=$1 WHERE id=$2`, originalAPIKey, profileID)
-	})
-	if _, err := f.m.pg.Exec(`UPDATE llm_profiles SET api_key='' WHERE id=$1`, profileID); err != nil {
-		t.Fatal(err)
+	if err := f.m.pg.QueryRow(`SELECT id, COALESCE(api_key, '') FROM llm_profiles WHERE is_default=true ORDER BY id LIMIT 1`).Scan(&profileID, &originalAPIKey); err == nil {
+		t.Cleanup(func() {
+			_, _ = f.m.pg.Exec(`UPDATE llm_profiles SET api_key=$1 WHERE id=$2`, originalAPIKey, profileID)
+		})
+		if _, err := f.m.pg.Exec(`UPDATE llm_profiles SET api_key='' WHERE id=$1`, profileID); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		pid, saveErr := f.m.pg.SaveProfile(&db.LLMProfile{Name: "side-unavail-fixture", Format: "openai", Model: "fixture", APIKey: "", IsDefault: true})
+		if saveErr != nil {
+			t.Fatal(saveErr)
+		}
+		t.Cleanup(func() {
+			_, _ = f.m.pg.Exec(`UPDATE llm_profiles SET is_default=false WHERE id=$1`, pid)
+			_ = f.m.pg.DeleteProfile(pid)
+		})
 	}
 	f.s.cfgMu.Lock()
 	f.s.llmOn = false

@@ -40,7 +40,7 @@ type Member struct {
 const RankActive = int(^uint(0)>>1) - 1
 
 // ErrExhausted is returned when every member of the chain failed.
-var ErrExhausted = errors.New("LLM 轮询：所有配置均不可用")
+var ErrExhausted = errors.New("LLM pool: all profiles are unavailable")
 
 // Pool is an llm.Provider that fails over across an ordered chain of members.
 // It is safe for concurrent use: members are immutable after construction and
@@ -106,27 +106,22 @@ func (p *Pool) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[
 			lastErr = failed
 			hard := isHardFailure(failed)
 			if p.health.Trip(m.ID, trimErr(failed), hard) {
-				log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(failed))
+				log.Printf("[llmpool] profile %q(%s) circuit breaker tripped: %s", m.Name, m.Model, trimErr(failed))
 			}
 			if i+1 < len(order) {
 				n := order[i+1]
-				log.Printf("[llmpool] LLM 故障转移：%q(%s) → %q(%s)，原因：%s",
+				log.Printf("[llmpool] LLM failover: %q(%s) -> %q(%s), reason: %s",
 					m.Name, m.Model, n.Name, n.Model, trimErr(failed))
 			}
 		}
 		if lastErr == nil {
 			lastErr = ErrExhausted
 		}
-		log.Printf("[llmpool] 轮询链已耗尽(%d 个配置全部失败)，最后错误：%s", len(order), trimErr(lastErr))
-		yield(llm.StreamEvent{}, fmt.Errorf("%w：%v", ErrExhausted, lastErr))
+		log.Printf("[llmpool] pool chain exhausted (%d profiles failed), last error: %s", len(order), trimErr(lastErr))
+		yield(llm.StreamEvent{}, fmt.Errorf("%w: %v", ErrExhausted, lastErr))
 	}
 }
 
-// Complete implements llm.Provider with failover for non-streaming calls. A
-// non-streaming request is atomic — it never delivers partial output — so every
-// failover-eligible failure lands in the safe window and the next member can be
-// tried without risk of duplicated output. Mirrors Stream's health-tripping and
-// chain-exhaustion behavior.
 func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	order := p.order(req)
 	var lastErr error
@@ -137,27 +132,25 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 			return msg, sr, usage, nil
 		}
 		if !shouldFailover(ctx, err) {
-			// Non-failover error (e.g. ctx cancel, deterministic 4xx): surface as-is
-			// without tripping health, matching Stream's non-failover path.
 			p.health.Pass(m.ID)
 			return llm.Message{}, "", llm.Usage{}, err
 		}
 		lastErr = err
 		hard := isHardFailure(err)
 		if p.health.Trip(m.ID, trimErr(err), hard) {
-			log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(err))
+			log.Printf("[llmpool] profile %q(%s) circuit breaker tripped: %s", m.Name, m.Model, trimErr(err))
 		}
 		if i+1 < len(order) {
 			n := order[i+1]
-			log.Printf("[llmpool] LLM 故障转移：%q(%s) → %q(%s)，原因：%s",
+			log.Printf("[llmpool] LLM failover: %q(%s) -> %q(%s), reason: %s",
 				m.Name, m.Model, n.Name, n.Model, trimErr(err))
 		}
 	}
 	if lastErr == nil {
 		lastErr = ErrExhausted
 	}
-	log.Printf("[llmpool] 轮询链已耗尽(%d 个配置全部失败)，最后错误：%s", len(order), trimErr(lastErr))
-	return llm.Message{}, "", llm.Usage{}, fmt.Errorf("%w：%v", ErrExhausted, lastErr)
+	log.Printf("[llmpool] pool chain exhausted (%d profiles failed), last error: %s", len(order), trimErr(lastErr))
+	return llm.Message{}, "", llm.Usage{}, fmt.Errorf("%w: %v", ErrExhausted, lastErr)
 }
 
 // order picks the members to try, in order: skip those in a cooling-off window

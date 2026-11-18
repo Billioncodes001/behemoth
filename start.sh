@@ -31,6 +31,23 @@ TMUX_SESSION="artex"
 ARTEX_PORT="${ARTEX_PORT:-8787}"
 WEB_PORT="${WEB_PORT:-3000}"
 
+validate_port() {
+  local name="$1" val="$2"
+  case "$val" in
+    ''|*[!0-9]*)
+      printf "[-] Invalid %s=%q: must be a numeric port between 1 and 65535\n" "$name" "$val" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$val" -lt 1 ] || [ "$val" -gt 65535 ]; then
+    printf "[-] Invalid %s=%s: must be between 1 and 65535\n" "$name" "$val" >&2
+    exit 1
+  fi
+}
+
+validate_port "ARTEX_PORT" "$ARTEX_PORT"
+validate_port "WEB_PORT" "$WEB_PORT"
+
 info() { printf "${BLUE}[*]${NC} %s\n" "$*"; }
 ok()   { printf "${GREEN}[+]${NC} %s\n" "$*"; }
 warn() { printf "${YELLOW}[!]${NC} %s\n" "$*" >&2; }
@@ -57,23 +74,43 @@ start_chrome_headless() {
 }
 
 start_tmux_all() {
-  command -v tmux >/dev/null 2>&1 || die "tmux is not installed. Run: sudo ./setup.sh full (or apt install tmux)"
   [ -x ./artex ] || die "./artex binary not found. Run: ./setup.sh build"
 
   start_chrome_headless
-  tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+  if command -v tmux >/dev/null 2>&1; then
+    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+  fi
+  if [ -f /tmp/artex-backend.pid ]; then
+    kill "$(cat /tmp/artex-backend.pid)" 2>/dev/null || true
+    rm -f /tmp/artex-backend.pid
+  fi
+  if [ -f /tmp/artex-web.pid ]; then
+    kill "$(cat /tmp/artex-web.pid)" 2>/dev/null || true
+    rm -f /tmp/artex-web.pid
+  fi
   pkill -f "./artex -addr" 2>/dev/null || true
   pkill -f "next start -p ${WEB_PORT}" 2>/dev/null || true
   sleep 1
 
-  tmux new-session -d -s "$TMUX_SESSION" -n "backend" "cd '$SCRIPT_DIR' && ./start.sh -addr :${ARTEX_PORT} 2>&1 | tee -a /tmp/artex-server.log"
-  if [ -d "$SCRIPT_DIR/web/.next" ]; then
-    tmux new-window -t "$TMUX_SESSION:1" -n "frontend" "cd '$SCRIPT_DIR/web' && while :; do npx next start -p ${WEB_PORT} 2>&1 | tee -a /tmp/artex-web.log; sleep 2; done"
-  fi
-  tmux new-window -t "$TMUX_SESSION:2" -n "logs" "tail -f /tmp/artex-server.log"
+  if command -v tmux >/dev/null 2>&1; then
+    tmux new-session -d -s "$TMUX_SESSION" -n "backend" "cd '$SCRIPT_DIR' && ./start.sh -addr :${ARTEX_PORT} 2>&1 | tee -a /tmp/artex-server.log"
+    if [ -d "$SCRIPT_DIR/web/.next" ]; then
+      tmux new-window -t "$TMUX_SESSION:1" -n "frontend" "cd '$SCRIPT_DIR/web' && while :; do NODE_OPTIONS='--max-http-header-size=65536' npx next start -p ${WEB_PORT} 2>&1 | tee -a /tmp/artex-web.log; sleep 2; done"
+    fi
+    tmux new-window -t "$TMUX_SESSION:2" -n "logs" "tail -f /tmp/artex-server.log"
 
-  ok "Started all ARTEX services in tmux session '$TMUX_SESSION'"
-  info "Attach to tmux session: tmux attach -t $TMUX_SESSION"
+    ok "Started all ARTEX services in tmux session '$TMUX_SESSION'"
+    info "Attach to tmux session: tmux attach -t $TMUX_SESSION"
+  else
+    warn "tmux not installed; starting ARTEX services as background daemons"
+    nohup "$SCRIPT_DIR/start.sh" -addr ":${ARTEX_PORT}" >>/tmp/artex-server.log 2>&1 &
+    echo $! >/tmp/artex-backend.pid
+    if [ -d "$SCRIPT_DIR/web/.next" ]; then
+      ( cd "$SCRIPT_DIR/web" && NODE_OPTIONS="--max-http-header-size=65536" nohup npx next start -p "${WEB_PORT}" >>/tmp/artex-web.log 2>&1 & echo $! >/tmp/artex-web.pid )
+    fi
+    sleep 1
+    ok "Started ARTEX background services (logs: /tmp/artex-server.log, /tmp/artex-web.log)"
+  fi
   show_status
 }
 
@@ -233,7 +270,17 @@ case "${1:-}" in
     ;;
   stop)
     info "Stopping ARTEX services..."
-    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    if command -v tmux >/dev/null 2>&1; then
+      tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    fi
+    if [ -f /tmp/artex-backend.pid ]; then
+      kill "$(cat /tmp/artex-backend.pid)" 2>/dev/null || true
+      rm -f /tmp/artex-backend.pid
+    fi
+    if [ -f /tmp/artex-web.pid ]; then
+      kill "$(cat /tmp/artex-web.pid)" 2>/dev/null || true
+      rm -f /tmp/artex-web.pid
+    fi
     pkill -f "./artex" 2>/dev/null || true
     pkill -f "next start -p ${WEB_PORT}" 2>/dev/null || true
     pkill -f "remote-debugging-port=9222" 2>/dev/null || true

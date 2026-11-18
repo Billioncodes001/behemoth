@@ -17,6 +17,8 @@ var (
 	reXMLParamBlock    = regexp.MustCompile(`(?is)<parameter=([a-zA-Z0-9_.-]+)>\s*(.*?)\s*(?:</parameter>|$)`)
 	reXMLFuncCall      = regexp.MustCompile(`(?is)<function=([a-zA-Z0-9_.-]+)>(.*?)</function>`)
 	reXMLToolCall      = regexp.MustCompile(`(?is)<tool_call>\s*(.*?)\s*</tool_call>`)
+	reTextCalledTool   = regexp.MustCompile(`(?s)\[Called tool ([a-zA-Z0-9_.-]+)(?:\s+with:|\()\s*(\{.*?\})\s*\)?\]`)
+	reThinkTagBlock    = regexp.MustCompile(`(?is)<think>\s*(.*?)\s*</think>`)
 )
 
 var knownToolParamAliases = map[string]map[string][]string{
@@ -260,7 +262,9 @@ func findToolSchema(name string, tools []llm.ToolSchema) map[string]any {
 }
 
 func extractEmbeddedToolCalls(text string, tools []llm.ToolSchema) (cleanText string, calls []llm.ContentBlock) {
-	if !strings.Contains(text, "<function=") && !strings.Contains(text, "<tool_call>") {
+	hasXML := strings.Contains(text, "<function=") || strings.Contains(text, "<tool_call>")
+	hasBracketCall := strings.Contains(text, "[Called tool ")
+	if !hasXML && !hasBracketCall {
 		return text, nil
 	}
 	cleanText = text
@@ -271,7 +275,7 @@ func extractEmbeddedToolCalls(text string, tools []llm.ToolSchema) (cleanText st
 		rawIn := SanitizeToolInput(tName, json.RawMessage(fm[2]), findToolSchema(tName, tools))
 		calls = append(calls, llm.ContentBlock{
 			Type:  llm.BlockToolUse,
-			ID:    "xmlcall_" + strings.ToLower(tName) + "_" + string(rune('a'+i)),
+			ID:    fmt.Sprintf("xmlcall_%s_%d", strings.ToLower(tName), i+1),
 			Name:  tName,
 			Input: rawIn,
 		})
@@ -302,7 +306,7 @@ func extractEmbeddedToolCalls(text string, tools []llm.ToolSchema) (cleanText st
 			rawIn := SanitizeToolInput(parsed.Name, argBytes, findToolSchema(parsed.Name, tools))
 			calls = append(calls, llm.ContentBlock{
 				Type:  llm.BlockToolUse,
-				ID:    "xmltc_" + strings.ToLower(parsed.Name) + "_" + string(rune('a'+i)),
+				ID:    fmt.Sprintf("xmltc_%s_%d", strings.ToLower(parsed.Name), i+1),
 				Name:  parsed.Name,
 				Input: rawIn,
 			})
@@ -310,8 +314,149 @@ func extractEmbeddedToolCalls(text string, tools []llm.ToolSchema) (cleanText st
 	}
 	if len(calls) > 0 {
 		cleanText = reXMLToolCall.ReplaceAllString(cleanText, "")
+		return strings.TrimSpace(cleanText), calls
+	}
+
+	if hasBracketCall {
+		cleanText, calls = extractBracketToolCalls(cleanText, tools)
 	}
 	return strings.TrimSpace(cleanText), calls
+}
+
+// extractBracketToolCalls recovers tool calls when an OpenAI-compatible model
+// outputs `[Called tool Name({...})]` or `[Called tool Name with: {...}]` in text
+// instead of emitting native delta.tool_calls. It caps extraction at 4 unique
+// calls per turn and strips any `[Called tool ...]` text from cleanText.
+func extractBracketToolCalls(text string, tools []llm.ToolSchema) (string, []llm.ContentBlock) {
+	seen := make(map[string]bool)
+	var calls []llm.ContentBlock
+	var cleaned strings.Builder
+	idx := 0
+	for idx < len(text) {
+		pos := strings.Index(text[idx:], "[Called tool ")
+		if pos < 0 {
+			cleaned.WriteString(text[idx:])
+			break
+		}
+		cleaned.WriteString(text[idx : idx+pos])
+		start := idx + pos
+		rest := text[start+len("[Called tool "):]
+
+		// Parse tool name up to '(' or ' with:'
+		nameEnd := -1
+		jsonStartOffset := -1
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == '(' {
+				nameEnd = i
+				jsonStartOffset = i + 1
+				break
+			}
+			if strings.HasPrefix(rest[i:], " with:") {
+				nameEnd = i
+				jsonStartOffset = i + len(" with:")
+				break
+			}
+			if rest[i] == '\n' || rest[i] == ']' {
+				break
+			}
+		}
+		if nameEnd <= 0 {
+			// Truncated or malformed `[Called tool ...` — strip to end of line
+			nl := strings.IndexByte(rest, '\n')
+			if nl < 0 {
+				break
+			}
+			idx = start + len("[Called tool ") + nl + 1
+			continue
+		}
+		toolName := strings.TrimSpace(rest[:nameEnd])
+		afterName := rest[jsonStartOffset:]
+		braceIdx := strings.IndexByte(afterName, '{')
+		if braceIdx < 0 {
+			nl := strings.IndexByte(afterName, '\n')
+			if nl < 0 {
+				break
+			}
+			idx = start + len("[Called tool ") + jsonStartOffset + nl + 1
+			continue
+		}
+		jsonStr, consumed, ok := extractBalancedJSONObject(afterName[braceIdx:])
+		if !ok {
+			// Truncated JSON object at end of stream — strip the rest of the truncated call
+			break
+		}
+		endPos := start + len("[Called tool ") + jsonStartOffset + braceIdx + consumed
+		// Skip trailing ')' and ']'
+		for endPos < len(text) && (text[endPos] == ' ' || text[endPos] == '\t') {
+			endPos++
+		}
+		if endPos < len(text) && text[endPos] == ')' {
+			endPos++
+		}
+		for endPos < len(text) && (text[endPos] == ' ' || text[endPos] == '\t') {
+			endPos++
+		}
+		if endPos < len(text) && text[endPos] == ']' {
+			endPos++
+		}
+		idx = endPos
+
+		schema := findToolSchema(toolName, tools)
+		if schema == nil && !primaryChatTools[toolName] {
+			continue
+		}
+		sanitized := SanitizeToolInput(toolName, json.RawMessage(jsonStr), schema)
+		dedupKey := strings.ToLower(toolName) + ":" + string(sanitized)
+		if seen[dedupKey] || len(calls) >= 4 {
+			continue
+		}
+		seen[dedupKey] = true
+		calls = append(calls, llm.ContentBlock{
+			Type:  llm.BlockToolUse,
+			ID:    fmt.Sprintf("txtcall_%s_%d", strings.ToLower(toolName), len(calls)+1),
+			Name:  toolName,
+			Input: sanitized,
+		})
+	}
+	return dedupRepeatedLines(cleaned.String()), calls
+}
+
+func extractBalancedJSONObject(s string) (string, int, bool) {
+	if len(s) == 0 || s[0] != '{' {
+		return "", 0, false
+	}
+	depth := 0
+	inStr := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inStr {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[:i+1], i + 1, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 type toolSanitizingProvider struct {
@@ -467,6 +612,38 @@ func mirrorToolBlocksToText(msgs []llm.Message) []llm.Message {
 	}
 	return out
 }
+func extractThinkingFromText(text string) (thinking string, cleanText string) {
+	if !strings.Contains(strings.ToLower(text), "<think>") {
+		return "", text
+	}
+	matches := reThinkTagBlock.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		// Unclosed <think> tag
+		lower := strings.ToLower(text)
+		idx := strings.Index(lower, "<think>")
+		if idx >= 0 {
+			return strings.TrimSpace(text[idx+7:]), strings.TrimSpace(text[:idx])
+		}
+		return "", text
+	}
+	var thinkParts []string
+	for _, m := range matches {
+		if t := strings.TrimSpace(m[1]); t != "" {
+			thinkParts = append(thinkParts, t)
+		}
+	}
+	cleaned := strings.TrimSpace(reThinkTagBlock.ReplaceAllString(text, ""))
+	return strings.Join(thinkParts, "\n\n"), cleaned
+}
+
+func isResumeTokenLimitMsg(m llm.Message) bool {
+	if m.Role != llm.RoleUser {
+		return false
+	}
+	t := strings.TrimSpace(m.Text())
+	return strings.HasPrefix(t, "Output token limit hit.")
+}
+
 func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
 	if req.MaxTokens > 4096 {
 		req.MaxTokens = 4096
@@ -488,17 +665,43 @@ func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
 			if i+1 < len(req.Messages) &&
 				req.Messages[i].Role == llm.RoleAssistant &&
 				len(req.Messages[i].ToolUses()) == 0 &&
-				isContinuationUserMsg(req.Messages[i+1]) {
-				if i+1 < len(req.Messages)-1 {
+				(isContinuationUserMsg(req.Messages[i+1]) || isResumeTokenLimitMsg(req.Messages[i+1])) {
+				if isResumeTokenLimitMsg(req.Messages[i+1]) && strings.Contains(req.Messages[i].Text(), "[Called tool ") {
+					// Drop degenerate "[Called tool ...]" assistant loop + "Output token limit hit" user prompt
 					i++
+					continue
 				}
-				continue
+				if isContinuationUserMsg(req.Messages[i+1]) {
+					if i+1 < len(req.Messages)-1 {
+						i++
+					}
+					continue
+				}
 			}
-			cleaned = append(cleaned, req.Messages[i])
+			// Strip any leftover `[Called tool ...]` text from prior assistant messages so the
+			// model is never conditioned by its own history to write tool calls as plain text.
+			msg := req.Messages[i]
+			if msg.Role == llm.RoleAssistant {
+				var newBlocks []llm.ContentBlock
+				for _, b := range msg.Content {
+					if b.Type == llm.BlockText && strings.Contains(b.Text, "[Called tool ") {
+						cleanedTxt, _ := extractBracketToolCalls(b.Text, req.Tools)
+						if strings.TrimSpace(cleanedTxt) != "" {
+							b.Text = cleanedTxt
+							newBlocks = append(newBlocks, b)
+						}
+						continue
+					}
+					newBlocks = append(newBlocks, b)
+				}
+				if len(newBlocks) > 0 {
+					msg.Content = newBlocks
+				}
+			}
+			cleaned = append(cleaned, msg)
 		}
 		req.Messages = cleaned
 	}
-	req.Messages = mirrorToolBlocksToText(req.Messages)
 	return req
 }
 
@@ -511,7 +714,25 @@ func isMaxTokensContextError(err error) bool {
 		(strings.Contains(msg, "max_tokens") || strings.Contains(msg, "completion"))
 }
 
+// hasDegenerateRepetition detects when a model gets stuck in an autoregressive
+// repetition loop (either repeating lines, repeating "[Called tool ...]" patterns,
+// or repeating shell commands inside a single huge line).
 func hasDegenerateRepetition(s string) bool {
+	if strings.Count(s, "[Called tool ") >= 3 {
+		return true
+	}
+	if len(s) >= 600 {
+		tail := s[len(s)-600:]
+		// Check if any 60-character substring in the tail appears 3+ times in the last 1200 chars
+		window := s
+		if len(window) > 1200 {
+			window = window[len(window)-1200:]
+		}
+		probe := tail[len(tail)-80 : len(tail)-20]
+		if len(strings.TrimSpace(probe)) >= 30 && strings.Count(window, probe) >= 3 {
+			return true
+		}
+	}
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	var nonEmpty []string
 	for _, l := range lines {
@@ -548,9 +769,27 @@ func dedupRepeatedLines(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
+func isTransientStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsQuotaExhaustedMessage(err.Error()) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
+		return false
+	}
+	for _, code := range []string{"status 400", "status 401", "status 403", "status 404", "status 422"} {
+		if strings.Contains(msg, code) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	req = prepareRequest(req)
-	isContTurn := len(req.Messages) > 0 && isContinuationUserMsg(req.Messages[len(req.Messages)-1])
 	return func(yield func(llm.StreamEvent, error) bool) {
 		for attempt := 0; attempt < 3; attempt++ {
 			var (
@@ -560,7 +799,7 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 				sawNativeTool bool
 				textBuf       strings.Builder
 				bufferedEvs   []llm.StreamEvent
-				buffering     = isContTurn && attempt < 2
+				buffering     = true
 				emittedAny    bool
 				retryAttempt  bool
 			)
@@ -618,6 +857,24 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 				switch ev.Type {
 				case llm.SEToolUseStart:
 					sawNativeTool = true
+					if buffering {
+						txt := textBuf.String()
+						thinkTxt, cleanedTxt := extractThinkingFromText(txt)
+						cleanedTxt, _ = extractBracketToolCalls(cleanedTxt, req.Tools)
+						var nonTextEvs []llm.StreamEvent
+						for _, bev := range bufferedEvs {
+							if bev.Type != llm.SETextDelta {
+								nonTextEvs = append(nonTextEvs, bev)
+							}
+						}
+						if thinkTxt != "" {
+							nonTextEvs = append(nonTextEvs, llm.StreamEvent{Type: llm.SEThinkingDelta, Text: thinkTxt})
+						}
+						if cleanedTxt != "" {
+							nonTextEvs = append(nonTextEvs, llm.StreamEvent{Type: llm.SETextDelta, Text: cleanedTxt})
+						}
+						bufferedEvs = nonTextEvs
+					}
 					if !flushBuffered() {
 						cancelStream()
 						return
@@ -629,6 +886,23 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 					textBuf.WriteString(ev.Text)
 					if !sawNativeTool && hasDegenerateRepetition(textBuf.String()) {
 						cancelStream()
+						_, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
+						if len(embedded) > 0 {
+							sawNativeTool = true
+							buffering = false
+							bufferedEvs = nil
+							for _, tc := range embedded {
+								emittedAny = true
+								if !yield(llm.StreamEvent{Type: llm.SEToolUseStart, ToolID: tc.ID, ToolName: tc.Name}, nil) {
+									return
+								}
+								if !yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(tc.Input)}, nil) {
+									return
+								}
+							}
+							_ = yield(llm.StreamEvent{Type: llm.SEMessageDelta, StopReason: "tool_use"}, nil)
+							return
+						}
 						if attempt < 2 && len(req.Messages) > 0 {
 							lastIdx := len(req.Messages) - 1
 							req.Messages[lastIdx] = llm.UserText(req.Messages[lastIdx].Text() + "\n\nCRITICAL: Do not repeat sentences—invoke a tool (such as Bash or insert_assets) immediately, or output your final structured markdown report.")
@@ -637,8 +911,18 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						break
 					}
 					if buffering {
-						bufferedEvs = append(bufferedEvs, ev)
-						continue
+						// Once text clearly represents a long structured final answer without pseudo-tool syntax,
+						// start streaming it live to the user.
+						curTxt := textBuf.String()
+						if len(curTxt) >= 350 && !strings.Contains(curTxt, "[Called tool ") && !strings.Contains(curTxt, "<tool_call>") && !strings.Contains(curTxt, "<function=") && !strings.Contains(strings.ToLower(curTxt), "<think>") {
+							if !flushBuffered() {
+								cancelStream()
+								return
+							}
+						} else {
+							bufferedEvs = append(bufferedEvs, ev)
+							continue
+						}
 					}
 				case llm.SEThinkingDelta, llm.SEThinkingSignature, llm.SEMessageStart:
 					if buffering {
@@ -646,10 +930,27 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						continue
 					}
 				case llm.SEMessageDelta:
+					isContTurn := len(req.Messages) > 0 && isContinuationUserMsg(req.Messages[len(req.Messages)-1])
 					if !sawNativeTool && textBuf.Len() > 0 {
-						_, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
+						cleanedTxt, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
+						thinkTxt, cleanedTxt := extractThinkingFromText(cleanedTxt)
 						if len(embedded) > 0 {
 							sawNativeTool = true
+							if buffering {
+								var nonTextEvs []llm.StreamEvent
+								for _, bev := range bufferedEvs {
+									if bev.Type != llm.SETextDelta {
+										nonTextEvs = append(nonTextEvs, bev)
+									}
+								}
+								if thinkTxt != "" {
+									nonTextEvs = append(nonTextEvs, llm.StreamEvent{Type: llm.SEThinkingDelta, Text: thinkTxt})
+								}
+								if cleanedTxt != "" {
+									nonTextEvs = append(nonTextEvs, llm.StreamEvent{Type: llm.SETextDelta, Text: cleanedTxt})
+								}
+								bufferedEvs = nonTextEvs
+							}
 							if !flushBuffered() {
 								cancelStream()
 								return
@@ -666,9 +967,21 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 								}
 							}
 							ev.StopReason = "tool_use"
+						} else if thinkTxt != "" && buffering {
+							var rebuiltEvs []llm.StreamEvent
+							for _, bev := range bufferedEvs {
+								if bev.Type != llm.SETextDelta {
+									rebuiltEvs = append(rebuiltEvs, bev)
+								}
+							}
+							rebuiltEvs = append(rebuiltEvs, llm.StreamEvent{Type: llm.SEThinkingDelta, Text: thinkTxt})
+							if cleanedTxt != "" {
+								rebuiltEvs = append(rebuiltEvs, llm.StreamEvent{Type: llm.SETextDelta, Text: cleanedTxt})
+							}
+							bufferedEvs = rebuiltEvs
 						}
 					}
-					if buffering && !sawNativeTool && attempt < 2 {
+					if buffering && isContTurn && !sawNativeTool && attempt < 2 {
 						txt := strings.TrimSpace(textBuf.String())
 						// On a continuation turn (where Hooks.Stop already demanded a tool call),
 						// any response without a tool call that is not a comprehensive multi-section
@@ -733,11 +1046,21 @@ func (p *toolSanitizingProvider) Complete(ctx context.Context, req llm.Completio
 		for _, b := range msg.Content {
 			if b.Type == llm.BlockText {
 				cleaned, calls := extractEmbeddedToolCalls(b.Text, req.Tools)
+				thinkTxt, cleaned := extractThinkingFromText(cleaned)
+				if thinkTxt != "" {
+					newBlocks = append(newBlocks, llm.ContentBlock{Type: llm.BlockThinking, Thinking: thinkTxt})
+				}
 				if len(calls) > 0 {
 					if cleaned != "" {
 						newBlocks = append(newBlocks, llm.TextBlock(cleaned))
 					}
 					extracted = append(extracted, calls...)
+					continue
+				}
+				if thinkTxt != "" {
+					if cleaned != "" {
+						newBlocks = append(newBlocks, llm.TextBlock(cleaned))
+					}
 					continue
 				}
 			}
@@ -746,6 +1069,8 @@ func (p *toolSanitizingProvider) Complete(ctx context.Context, req llm.Completio
 		if len(extracted) > 0 {
 			msg.Content = append(newBlocks, extracted...)
 			stop = "tool_use"
+		} else if len(newBlocks) > 0 {
+			msg.Content = newBlocks
 		}
 	}
 	return msg, stop, usage, nil

@@ -118,9 +118,11 @@ func (s *Server) toolCreateSkill() actool.CoreTool {
 				_ = os.RemoveAll(path)
 				return actool.Errorf(err.Error()), nil
 			}
-			for _, agKey := range []string{"auto", "pentest", "worker"} {
-				if ag, err := s.m.pg.GetAgentByKey(agKey); err == nil && ag != nil {
-					_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, ag.ID, a.Name)
+			if s.m != nil && s.m.pg != nil {
+				for _, agKey := range []string{"auto", "pentest", "worker"} {
+					if ag, err := s.m.pg.GetAgentByKey(agKey); err == nil && ag != nil {
+						_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, ag.ID, a.Name)
+					}
 				}
 			}
 			log.Printf("[skills] Created and enabled skill %q for auto, pentest, and worker", a.Name)

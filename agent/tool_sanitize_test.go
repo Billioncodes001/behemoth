@@ -149,6 +149,50 @@ func TestIsPrematureActionTurn(t *testing.T) {
 	}
 }
 
+func TestExtractBracketToolCalls_AndThinking(t *testing.T) {
+	tools := []llm.ToolSchema{
+		{
+			Name: "Bash",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{"type": "string"},
+				},
+				"required": []any{"command"},
+			},
+		},
+		{
+			Name: "WebFetch",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{"type": "string"},
+				},
+				"required": []any{"url"},
+			},
+		},
+	}
+
+	raw := "<think>\nLet me check the site first.\n</think>\nStarting the scan of prankshitstudio.com.\n[Called tool Bash({\"command\":\"dig +short prankshitstudio.com A\"})]\n[Called tool WebFetch with: {\"url\":\"http://prankshitstudio.com/\"}]"
+	cleanTxt, calls := extractEmbeddedToolCalls(raw, tools)
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 extracted tool calls, got %d", len(calls))
+	}
+	if calls[0].Name != "Bash" || string(calls[0].Input) != `{"command":"dig +short prankshitstudio.com A"}` {
+		t.Fatalf("unexpected call[0]: %+v (%s)", calls[0], string(calls[0].Input))
+	}
+	if calls[1].Name != "WebFetch" || string(calls[1].Input) != `{"url":"http://prankshitstudio.com/"}` {
+		t.Fatalf("unexpected call[1]: %+v (%s)", calls[1], string(calls[1].Input))
+	}
+	thinkTxt, finalClean := extractThinkingFromText(cleanTxt)
+	if thinkTxt != "Let me check the site first." {
+		t.Fatalf("expected thinking extracted, got %q", thinkTxt)
+	}
+	if finalClean != "Starting the scan of prankshitstudio.com." {
+		t.Fatalf("expected clean text without tool calls or think tags, got %q", finalClean)
+	}
+}
+
 func TestPayloadGenerators_NoFormatErrors(t *testing.T) {
 	cc, err := payloads.GenerateCCSkimmer(payloads.CCSkimmerConfig{ExfilURL: "https://example.com/collect"})
 	if err != nil || strings.Contains(cc, "%!") {

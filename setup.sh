@@ -30,7 +30,7 @@ ok()   { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*" >&2; }
 die()  { echo -e "${RED}[-]${NC} $*" >&2; exit 1; }
 ask()  { local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
-rand_secret() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+rand_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c 256 /dev/urandom) | cut -c1-24; }
 
 banner() {
   echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
@@ -76,12 +76,12 @@ install_system_deps() {
 }
 
 install_golang() {
-  local req_ver="1.26.2"
+  local req_ver="1.26.10"
   export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
   if command -v go >/dev/null 2>&1; then
     local cur_ver
     cur_ver="$(go version | awk '{print $3}' | sed 's/go//')"
-    if [[ "$cur_ver" == 1.26* ]]; then
+    if [[ "$cur_ver" == "${req_ver}"* ]]; then
       ok "Go already installed: $(go version)"
       return
     fi
@@ -91,10 +91,15 @@ install_golang() {
   case "$(uname -m)" in
     aarch64|arm64) arch="arm64" ;;
   esac
-  curl -fsSL "https://go.dev/dl/go${req_ver}.linux-${arch}.tar.gz" -o /tmp/go.tar.gz
+  local os_name="linux"
+  case "$(uname -s)" in
+    Darwin|darwin) os_name="darwin" ;;
+  esac
+  curl -fsSL "https://go.dev/dl/go${req_ver}.${os_name}-${arch}.tar.gz" -o /tmp/go.tar.gz
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tar.gz
   rm -f /tmp/go.tar.gz
+  mkdir -p /usr/local/bin
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
   ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
   ok "Installed $(go version)"
@@ -182,9 +187,46 @@ reset_admin_password() {
   fi
   [[ "${#newpass}" -ge 8 ]] || die "Password must be at least 8 characters"
   export ARTEX_RESET_NEWPASS="$newpass"
-  psql --no-psqlrc -d artex -v ON_ERROR_STOP=1 <<'SQL'
+
+  local psql_cmd=(psql --no-psqlrc -v ON_ERROR_STOP=1)
+  if [[ -n "${ARTEX_PG_DSN:-}" ]]; then
+    psql_cmd+=("$ARTEX_PG_DSN")
+  elif [[ -f config.json ]] && command -v python3 >/dev/null 2>&1; then
+    local db_dsn
+    db_dsn="$(python3 -c '
+import json, urllib.parse
+c = json.load(open("config.json")).get("database", {})
+if c.get("dsn"):
+    print(c["dsn"])
+elif c.get("user") and c.get("dbname"):
+    u = urllib.parse.quote(str(c.get("user", "")), safe="")
+    pw = urllib.parse.quote(str(c.get("password", "")), safe="")
+    h = c.get("host") or "127.0.0.1"
+    pt = c.get("port") or 5432
+    db = urllib.parse.quote(str(c.get("dbname", "artex")), safe="")
+    ssl = c.get("sslmode") or "disable"
+    auth = f"{u}:{pw}@" if pw else f"{u}@"
+    print(f"postgres://{auth}{h}:{pt}/{db}?sslmode={ssl}")
+' 2>/dev/null || true)"
+    if [[ -n "$db_dsn" ]]; then
+      psql_cmd+=("$db_dsn")
+    else
+      psql_cmd+=(-d artex)
+    fi
+  elif [[ "${EUID:-$(id -u)}" -eq 0 ]] && id -u postgres >/dev/null 2>&1; then
+    psql_cmd=(sudo -E -u postgres psql --no-psqlrc -d artex -v ON_ERROR_STOP=1)
+  else
+    psql_cmd+=(-d artex)
+  fi
+
+  "${psql_cmd[@]}" <<'SQL'
 \getenv newpw ARTEX_RESET_NEWPASS
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 INSERT INTO settings(key, value)
 VALUES ('auth.password_hash', crypt(:'newpw', gen_salt('bf', 10)))
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
@@ -237,6 +279,17 @@ case "$CMD" in
     ;;
   docker)
     banner
+    if [[ ! -f .env ]]; then
+      local gen_pass
+      gen_pass="$(rand_secret)"
+      if [[ -f .env.example ]]; then
+        sed "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${gen_pass}/" .env.example > .env
+      else
+        printf "POSTGRES_USER=artex\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=artex\n" "$gen_pass" > .env
+      fi
+      chmod 600 .env
+      ok "Initialized .env with generated PostgreSQL password"
+    fi
     docker compose pull && docker compose up -d
     ok "Docker Compose deployment active -> http://localhost:8787"
     ;;

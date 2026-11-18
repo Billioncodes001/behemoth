@@ -538,13 +538,16 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 					m["denominator"] = cov.Denominator
 					m["tested"] = cov.Tested
 					m["by_type"] = cov.ByType
-					m["note"] = "coverage资产测试覆盖度（包括接口等各种相关资产），粗略估计、仅供参考：包含当前任务与直接关联任务的 scope、事实锚点；关联 scope 只读。容器型资产/大量枚举会让它偏低，勿据此认为已测完；可用 add_task_scope 增补本任务范围、list_untested_assets 看未测资产【通常不调用list_untested_assets，按照任务推进即可】；"
+					m["note"] = "Asset testing coverage (including endpoints and related assets) — rough estimate for reference only: includes scope and fact anchors from the current task and directly linked tasks; linked scope is read-only. Container-style assets or large enumerations may lower the percentage, so do not assume testing is complete based solely on this; use add_task_scope to expand scope and list_untested_assets to inspect untested assets (normally proceed per task objectives without calling list_untested_assets)."
 					if cov.Denominator == 0 {
 						m["pct"] = nil
-						m["status"] = "范围未锚定"
+						m["status"] = "scope_unanchored"
 					} else {
 						m["pct"] = cov.Pct
 					}
+				}
+				if scopeRows := t.taskScopeOverview(); len(scopeRows) > 0 {
+					m["scope"] = scopeRows
 				}
 			}
 			if hosts, err := t.as.HostsByTaskWithSources(t.taskID); err == nil {
@@ -564,6 +567,78 @@ func inheritedMap(m map[string]any, sourceTaskID int64) map[string]any {
 	m["source_task_id"] = sourceTaskID
 	m["inherited"] = true
 	return m
+}
+
+func (t *ToolSet) taskScopeOverview() []map[string]any {
+	if t.as == nil || t.taskID <= 0 {
+		return nil
+	}
+	scopes, err := t.as.ListTaskScopeWithSources(t.taskID)
+	if err != nil || len(scopes) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(scopes))
+	for _, sc := range scopes {
+		row := map[string]any{
+			"id":     sc.ID,
+			"kind":   sc.Kind,
+			"source": sc.Source,
+		}
+		if sc.Reason != "" {
+			row["reason"] = sc.Reason
+		}
+		switch sc.Kind {
+		case "company":
+			if sc.CompanyID != nil && *sc.CompanyID > 0 {
+				row["company_id"] = *sc.CompanyID
+				if sc.CompanyName != "" {
+					row["company_name"] = sc.CompanyName
+				}
+				if t.cs != nil {
+					if rules, err := t.cs.GetScope(*sc.CompanyID); err == nil {
+						cScope := make([]map[string]any, 0, len(rules))
+						var keywords []string
+						for _, r := range rules {
+							val := strings.TrimSpace(r.Raw)
+							if val == "" {
+								switch {
+								case r.Domain != "":
+									val = r.Domain
+								case r.Net != "":
+									val = r.Net
+								default:
+									val = r.Value
+								}
+							}
+							item := map[string]any{"kind": r.Kind, "value": val}
+							if r.Reason != "" {
+								item["reason"] = r.Reason
+							}
+							cScope = append(cScope, item)
+							if r.Kind == "keyword" && val != "" {
+								keywords = append(keywords, val)
+							}
+						}
+						row["company_scope"] = cScope
+						if len(keywords) > 0 {
+							row["company_keywords"] = keywords
+						}
+					}
+				}
+			}
+		case "root_domain", "subdomain":
+			row["value"] = sc.Domain
+		case "ip", "cidr":
+			row["value"] = sc.Net
+		default:
+			row["value"] = sc.Value
+		}
+		if sc.TaskID != t.taskID {
+			inheritedMap(row, sc.TaskID)
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 const (

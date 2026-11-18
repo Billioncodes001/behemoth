@@ -1,17 +1,24 @@
 package proxyv2
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
+
 // Middleware provides HTTP client middleware for automatic proxy rotation.
 // Integrates the proxy pool with Go's http.Client for transparent proxy usage.
 type Middleware struct {
 	pool       *Pool
 	httpClient *http.Client
+	transport  *http.Transport
 	mu         sync.RWMutex
 	enabled    bool
 }
@@ -39,8 +46,19 @@ func (m *Middleware) IsEnabled() bool {
 	return m.enabled
 }
 
+// CloseIdleConnections closes any idle keep-alive connections in the shared transport.
+func (m *Middleware) CloseIdleConnections() {
+	m.mu.RLock()
+	tr := m.transport
+	m.mu.RUnlock()
+	if tr != nil {
+		tr.CloseIdleConnections()
+	}
+}
+
 // GetHTTPClient returns an *http.Client that automatically routes through
-// the proxy pool. The client is reused across calls (thread-safe).
+// the proxy pool. Both the client and its underlying connection-pooled
+// *http.Transport are reused across calls (thread-safe, zero socket leaks).
 func (m *Middleware) GetHTTPClient() *http.Client {
 	m.mu.RLock()
 	if m.httpClient != nil {
@@ -50,16 +68,37 @@ func (m *Middleware) GetHTTPClient() *http.Client {
 	}
 	m.mu.RUnlock()
 
-	// Create client on first use
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.httpClient != nil {
 		return m.httpClient
 	}
 
+	m.transport = &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if !m.IsEnabled() || m.pool == nil {
+				return nil, nil
+			}
+			proxyURL, err := m.pool.GetProxyForRequest(req)
+			if err != nil {
+				// No proxy available or pool disabled — fall back to direct connection.
+				return nil, nil
+			}
+			return proxyURL, nil
+		},
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+	}
 	m.httpClient = &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &proxyTransport{middleware: m},
+		Timeout:   30 * time.Second,
+		Transport: m.transport,
 	}
 	return m.httpClient
 }
@@ -75,55 +114,42 @@ func (m *Middleware) Do(req *http.Request) (*http.Response, error) {
 }
 
 // Get performs a GET request through the proxy pool.
-func (m *Middleware) Get(url string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func (m *Middleware) Get(urlStr string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
 	}
 	return m.Do(req)
 }
 
-// Post performs a POST request through the proxy pool.
-func (m *Middleware) Post(url string, contentType string, body interface{}) (*http.Response, error) {
-	// TODO: Implement POST with body serialization
-	return nil, fmt.Errorf("not yet implemented")
-}
-
-// === INTERNAL TRANSPORT ===
-
-// proxyTransport implements http.RoundTripper with automatic proxy selection.
-type proxyTransport struct {
-	middleware *Middleware
-}
-
-// RoundTrip executes a single HTTP transaction using a proxy from the pool.
-func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Get proxy URL from pool
-	proxyURL, err := t.middleware.pool.GetProxyForRequest(req)
+// Post performs a POST request through the proxy pool, serializing body as needed.
+func (m *Middleware) Post(urlStr string, contentType string, body interface{}) (*http.Response, error) {
+	var reader io.Reader
+	switch v := body.(type) {
+	case nil:
+		reader = nil
+	case io.Reader:
+		reader = v
+	case []byte:
+		reader = bytes.NewReader(v)
+	case string:
+		reader = strings.NewReader(v)
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("marshal POST body: %w", err)
+		}
+		reader = bytes.NewReader(encoded)
+		if contentType == "" {
+			contentType = "application/json"
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, urlStr, reader)
 	if err != nil {
-		// No proxy available or pool disabled - go direct
-		transport := &http.Transport{}
-		return transport.RoundTrip(req)
+		return nil, err
 	}
-	if proxyURL == nil {
-		// Pool enabled but returning nil means direct connection
-		transport := &http.Transport{}
-		return transport.RoundTrip(req)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
-
-	// Create transport with proxy
-	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
-		DialContext: (&net.Dialer{
-			Timeout:   15 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-	}
-
-	return transport.RoundTrip(req)
+	return m.Do(req)
 }

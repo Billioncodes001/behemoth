@@ -25,14 +25,14 @@ func TestProductErrorPreservesLegacyMessage(t *testing.T) {
 
 func TestPasswordValidationCodes(t *testing.T) {
 	for _, item := range []struct {
-		password, code, param string
-		value                 int
+		password, code, param, message string
+		value                          int
 	}{
-		{"短密码", "password_too_short", "min", 8},
-		{"这是一个超过七十二字节上限的密码这是一个超过七十二字节上限的密码", "password_too_long", "max", 72},
+		{"短密码", "password_too_short", "min", "Password must contain at least 8 characters", 8},
+		{"这是一个超过七十二字节上限的密码这是一个超过七十二字节上限的密码", "password_too_long", "max", "Password must not exceed 72 bytes", 72},
 	} {
-		if validatePassword(item.password) == "" {
-			t.Fatalf("expected invalid password for %s", item.code)
+		if got := validatePassword(item.password); got != item.message {
+			t.Fatalf("%s: got %q; want %q", item.code, got, item.message)
 		}
 		code, params := passwordValidationCode(item.password)
 		if code != item.code || params[item.param] != item.value {

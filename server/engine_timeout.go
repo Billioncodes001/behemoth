@@ -152,8 +152,8 @@ func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
 	runTaskRoutine(rt, func(loopCtx context.Context) {
 		defer func() {
 			// A terminal task may be revived while this routine is returning. Only
-			// remove our own marker, then ensure that revival has a coordinator.
-			if e.coordStarted.CompareAndDelete(t.ID, token) && loopCtx.Err() == nil && !e.isSettling(t.ID) && !isTerminalStatus(e.m.TaskStatus(t.ID)) {
+			// remove our own marker on non-cancelled exit, then ensure revival has a coordinator.
+			if loopCtx.Err() == nil && e.coordStarted.CompareAndDelete(t.ID, token) && !e.isSettling(t.ID) && !isTerminalStatus(e.m.TaskStatus(t.ID)) {
 				e.startDeadlineCoordinator(ctx, t)
 			}
 		}()

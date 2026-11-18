@@ -27,7 +27,7 @@ const shippedDescriptions = new Map(
     .map(([key, pair]) => [pair[0], key]),
 );
 
-export function agentDisplayDescription(agent: { key: string; description?: string }, ui: UITranslate): string {
+export function agentDisplayDescription(agent: { key: string; description?: string }, ui: (key: string) => string): string {
   const text = agent.description ?? "";
   const key = shippedNames[agent.key] ? shippedDescriptions.get(text) : undefined;
   return key ? ui(key) : text;

@@ -106,9 +106,12 @@ import type {
   TaskSchedule,
   TaskScopeRow,
   TaskTemplate,
+  TLSSpec,
   TokenTotal,
   TokenUsage,
   Tool,
+  CatalogTool,
+  ToolCategory,
   ToolStat,
   TrafficDetail,
   TrafficEvidenceRef,
@@ -116,10 +119,30 @@ import type {
   TrafficHost,
   TrafficResp,
   UpdateCheck,
+  UpdateFactRequest,
   UpdateSettings,
   UsageStats,
+  WinRMConfig,
   WorkspaceFile,
   WorkspaceListing,
+  // Proxy Pool V2, Recipes, Facts, Execution, Targets & Security types
+  CreateFactRequest,
+  ExecutionResult,
+  Fact,
+  ProxyV2Config,
+  ProxyV2Entry,
+  ProxyV2ImportResult,
+  ProxyV2Stats,
+  ProxyV2SwitchLog,
+  ProxyV2TestResult,
+  Recipe,
+  SecurityCheckRequest,
+  SecurityCheckResponse,
+  SecurityStats,
+  SSHConfig,
+  StealthConfig,
+  Target,
+  TargetExecResult,
   // Search & Browser types (Pentagi-inspired)
   BrowserRequest,
   BrowserResult,
@@ -159,48 +182,58 @@ let basicAuthProbe: Promise<void> | null = null;
 // Keep the admin token and collapse concurrent failures into one reload.
 
 // Dynamic auth header name - detected from first response or defaulted
-let detectedAuthHeader = "X-Artex-Auth";  // Will be updated on first 401 response
+let detectedAuthHeader = "X-Artex-Auth"; // Will be updated on first 401 response
+let directLoopbackUnavailable = false;
 
-function directBackendOrigin(): string {
-  if (typeof window === "undefined") return "";
-  const port = window.location.port;
-  if (port === "3000" || port === "5173") {
-    return `${window.location.protocol}//${window.location.hostname}:8787`;
+function localDirectOrigin(): string {
+  if (typeof window === "undefined" || directLoopbackUnavailable) return "";
+  const { protocol, hostname, port } = window.location;
+  const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  if (isLoopback && (port === "3000" || port === "5173")) {
+    return `${protocol}//${hostname}:8787`;
   }
   return "";
 }
 
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  if (basicAuthReloading) throw new Error("Auth expired, revalidating...");
-  const directBase = input.startsWith("/api") ? directBackendOrigin() : "";
-  const targetUrl = directBase ? `${directBase}${input}` : input;
+  if (basicAuthReloading) throw basicAuthExpired();
+  const explicitBase = typeof process !== "undefined" ? (process.env?.NEXT_PUBLIC_API_BASE ?? "") : "";
+  const directBase = !explicitBase && input.startsWith("/api") ? localDirectOrigin() : "";
+  const primaryBase = explicitBase || directBase;
+  const targetUrl = primaryBase && input.startsWith("/api") ? `${primaryBase}${input}` : input;
+  const method = (init?.method ?? "GET").toUpperCase();
+  const idempotent = method === "GET" || method === "HEAD";
+
   let response: Response;
   try {
     response = await fetch(targetUrl, init);
   } catch (err) {
-    // Fallback to same-origin proxy or retry once after brief delay on transient socket reset
     if (directBase) {
+      // Direct :8787 unreachable (e.g. custom AUTOPENTEST_API or port tunnel) — fall back to Next same-origin proxy
+      directLoopbackUnavailable = true;
       response = await fetch(input, init);
+    } else if (idempotent && typeof setTimeout === "function") {
+      // Retry idempotent GET/HEAD once on transient HTTP keep-alive socket reset
+      await new Promise((r) => setTimeout(r, 120));
+      response = await fetch(targetUrl, init);
     } else {
-      await new Promise((r) => setTimeout(r, 250));
-      response = await fetch(input, init);
+      throw err;
     }
   }
-  if (basicAuthReloading) throw new Error("Auth expired, revalidating...");
-  
+  if (basicAuthReloading) throw basicAuthExpired();
+
   // Check for basic auth challenge - support both static and dynamic header names
-  const authHeader = response.headers?.get("X-Artex-Auth") || 
-                     response.headers?.get(detectedAuthHeader) || '';
+  const authHeader = response.headers?.get("X-Artex-Auth") || response.headers?.get(detectedAuthHeader) || "";
   if (response.status === 401 && authHeader === "basic") {
     // Remember the actual header name for future requests
-    const headerName = response.headers ? [...response.headers.keys()].find(k => 
-      k.toLowerCase().includes('auth') && k !== 'authorization'
-    ) : undefined;
+    const headerName = response.headers
+      ? [...response.headers.keys()].find((k) => k.toLowerCase().includes("auth") && k !== "authorization")
+      : undefined;
     if (headerName) detectedAuthHeader = headerName;
-    
+
     basicAuthReloading = true;
     window.location.reload();
-    throw new Error("Auth expired, revalidating...");
+    throw basicAuthExpired();
   }
   return response;
 }
@@ -264,6 +297,10 @@ export class ApiError extends Error {
   }
 }
 
+function basicAuthExpired() {
+  return new ApiError("Auth expired, revalidating...", "basic_auth_expired");
+}
+
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
@@ -276,7 +313,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!r.ok) {
-    const fallback = r.status === 401 ? "未授权" : `${init?.method ?? "GET"} ${path}: ${r.status}`;
+    const fallback = r.status === 401 ? "Unauthorized" : `${init?.method ?? "GET"} ${path}: ${r.status}`;
     let message = fallback;
     let code: string | undefined = r.status === 401 ? "unauthorized" : undefined;
     let params: Record<string, unknown> | undefined;
@@ -321,31 +358,31 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
 // mockReport returns a canned Markdown report for the demo.
 function mockReport(_task?: string): string {
-  return `# ARTEX 渗透测试报告 — Acme Corp
+  return `# ARTEX Penetration Test Report — Acme Corp
 
-## 概览
-- 范围：acme.com（含 www / admin / api / shop / vpn 子域）
-- 已确认发现：6 项（高危 3 · 中危 3 · 低危 2）
-- 引擎模式：exploring
+## Overview
+- Scope: acme.com (including www / admin / api / shop / vpn subdomains)
+- Confirmed findings: 6 (High 3 · Medium 3 · Low 2)
+- Engine mode: exploring
 
-## 关键发现
-1. **[高] 后台默认口令** admin.acme.com admin/admin123 → 可完全接管后台。
-2. **[高] SQL 注入** www.acme.com/search?q= → 可读取 acme_prod 库。
-3. **[高] IDOR** api.acme.com/v1/orders?id= → 可越权读取他人订单（含手机号/地址）。
-4. **[中] 反射型 XSS**、**暴露 .git 源码**、**登录无速率限制**。
+## Key Findings
+1. **[High] Default Admin Credentials** admin.acme.com admin/admin123 → Full admin panel takeover.
+2. **[High] SQL Injection** www.acme.com/search?q= → Read access to acme_prod database.
+3. **[High] IDOR** api.acme.com/v1/orders?id= → Unauthorized access to other users' orders (phone/address).
+4. **[Medium] Reflected XSS**, **Exposed .git Source**, **Missing Login Rate Limit**.
 
-## 建议
-- 后台强制改密 + 启用 MFA、封禁默认口令。
-- search 接口参数化查询、输出编码。
-- API 增加对象级授权校验（IDOR）、更换强 JWT 密钥。
+## Recommendations
+- Enforce admin password rotation + enable MFA and block default credentials.
+- Use parameterized queries and output encoding on the search endpoint.
+- Add object-level authorization checks on APIs (IDOR) and rotate to a strong JWT secret.
 
-> （demo）本报告由 mock 数据生成，仅用于界面演示。`;
+> (demo) This report is generated from mock data for UI demonstration only.`;
 }
 
 export function sseUrl(path: string): string {
   const base =
     process.env.NEXT_PUBLIC_SSE_BASE ??
-    (directBackendOrigin() ||
+    (localDirectOrigin() ||
       (process.env.NODE_ENV !== "production" && typeof window !== "undefined"
         ? `${window.location.protocol}//${window.location.hostname}:8787`
         : ""));
@@ -726,6 +763,7 @@ export const api = {
   },
   taskFilePreview: (id: string, path: string) =>
     MOCK ? mockTaskFileURL(path, "preview") : `/api/tasks/${id}/files/preview?path=${encodeURIComponent(path)}`,
+  taskFilesArchiveAll: (id: string) => api.taskFileDownload(id, "", true),
 
   // ---- workspace file manager (workDir) ----
   workspaceList: (path = "") => get<WorkspaceListing>(`/workspace/list?path=${encodeURIComponent(path)}`),
@@ -744,20 +782,20 @@ export const api = {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: fd,
     });
-    if (!r.ok) throw new Error(`上传失败: ${r.status}`);
+    if (!r.ok) throw new Error(`Upload failed: ${r.status}`);
     return r.json() as Promise<{ uploaded: number }>;
   },
   workspaceDownload: async (path: string) => {
     let blob: Blob;
     let contentDisposition = "";
     if (MOCK) {
-      blob = new Blob([`（demo）${path} 的下载内容示例。`], { type: "text/plain" });
+      blob = new Blob([`(demo) Sample download content for ${path}.`], { type: "text/plain" });
     } else {
       const token = getToken();
       const r = await apiFetch(`/api/workspace/download?path=${encodeURIComponent(path)}`, {
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
-      if (!r.ok) throw new Error(`下载失败: ${r.status}`);
+      if (!r.ok) throw new Error(`Download failed: ${r.status}`);
       contentDisposition = r.headers.get("Content-Disposition") ?? "";
       blob = await r.blob();
     }
@@ -997,8 +1035,8 @@ export const api = {
       { headers: token ? { Authorization: `Bearer ${token}` } : {} },
     );
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "下载失败" }));
-      throw new Error(error.error ?? "下载失败");
+      const error = await response.json().catch(() => ({ error: "Download failed" }));
+      throw new Error(error.error ?? "Download failed");
     }
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
@@ -1178,7 +1216,7 @@ export const api = {
         page.total < 0 ||
         typeof page.enabled !== "boolean"
       ) {
-        throw new ApiError("情报数据响应不完整，请刷新后重试", "intelligence_response_invalid");
+        throw new ApiError("The intelligence response is incomplete. Refresh to try again.", "intelligence_response_invalid");
       }
       return page;
     }),
@@ -1293,7 +1331,7 @@ export const api = {
       // An empty demo/proxy response must enter the page's load-error path,
       // rather than crash the render when it reads kinds.find or stats.
       if (!meta || !Array.isArray(meta.kinds) || !meta.stats || !meta.defaults) {
-        throw new Error("通知配置响应不完整，请刷新后重试");
+        throw new Error("The notification configuration response is incomplete. Refresh to try again.");
       }
       return meta;
     }),
@@ -1370,7 +1408,7 @@ export const api = {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: fd,
     });
-    if (!r.ok) throw new Error(`上传失败: ${r.status} ${await r.text()}`);
+    if (!r.ok) throw new Error(`Upload failed: ${r.status} ${await r.text()}`);
     return r.json() as Promise<{ attachments: ChatAttachment[] }>;
   },
   stopChat: (taskId: string) => post<{ status: string }>(`/tasks/${taskId}/chat/stop`, {}),
@@ -1558,10 +1596,10 @@ export const api = {
   tools: Object.assign(
     () => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)),
     {
-      list: () => get<{ tools: Tool[]; count: number }>("/v2/tools"),
-      get: (id: string) => get<Tool>(`/v2/tools/${id}`),
+      list: () => get<{ tools: CatalogTool[]; count: number }>("/v2/tools"),
+      get: (id: string) => get<CatalogTool>(`/v2/tools/${id}`),
       categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
-      search: (query: string) => post<{ results: Tool[]; count: number }>("/v2/tools/search", { query }),
+      search: (query: string) => post<{ results: CatalogTool[]; count: number }>("/v2/tools/search", { query }),
       execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
         post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
       getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),
@@ -1643,7 +1681,7 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body?.error || `上传失败(${r.status})`);
+    if (!r.ok) throw new Error(body?.error || `Upload failed (${r.status})`);
     return body;
   },
   deleteSkill: (name: string) => del<{ deleted: string }>(`/skills/${name}`),
@@ -1836,10 +1874,10 @@ export const api = {
   // TOOL CATALOG & EXECUTION API (HexStrike-inspired)
   // ============================================================
   toolCatalog: {
-    list: () => get<{ tools: Tool[]; count: number }>("/v2/tools"),
-    get: (id: string) => get<Tool>(`/v2/tools/${id}`),
+    list: () => get<{ tools: CatalogTool[]; count: number }>("/v2/tools"),
+    get: (id: string) => get<CatalogTool>(`/v2/tools/${id}`),
     categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
-    search: (query: string) => post<{ results: Tool[]; count: number }>("/v2/tools/search", { query }),
+    search: (query: string) => post<{ results: CatalogTool[]; count: number }>("/v2/tools/search", { query }),
     execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
       post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
     getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),

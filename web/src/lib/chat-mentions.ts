@@ -1,13 +1,13 @@
 export const mentionKinds = [
-  { kind: "finding", label: "漏洞", alias: "finding", english: "Finding" },
-  { kind: "asset", label: "资产", alias: "asset", english: "Asset" },
-  { kind: "company", label: "企业", alias: "company", english: "Company" },
-  { kind: "endpoint", label: "接口", alias: "api", english: "Endpoint" },
-  { kind: "ip", label: "IP", alias: "ip", english: "IP" },
-  { kind: "app", label: "应用", alias: "app", english: "Application" },
-  { kind: "root_domain", label: "域名", alias: "domain", english: "Root domain" },
-  { kind: "subdomain", label: "子域名", alias: "subdomain", english: "Subdomain" },
-  { kind: "service", label: "服务", alias: "service", english: "Service" },
+  { kind: "finding", label: "Finding", zhLabel: "漏洞", alias: "finding", english: "Finding" },
+  { kind: "asset", label: "Asset", zhLabel: "资产", alias: "asset", english: "Asset" },
+  { kind: "company", label: "Company", zhLabel: "企业", alias: "company", english: "Company" },
+  { kind: "endpoint", label: "Endpoint", zhLabel: "接口", alias: "api", english: "Endpoint" },
+  { kind: "ip", label: "IP", zhLabel: "IP", alias: "ip", english: "IP" },
+  { kind: "app", label: "Application", zhLabel: "应用", alias: "app", english: "Application" },
+  { kind: "root_domain", label: "Root domain", zhLabel: "域名", alias: "domain", english: "Root domain" },
+  { kind: "subdomain", label: "Subdomain", zhLabel: "子域名", alias: "subdomain", english: "Subdomain" },
+  { kind: "service", label: "Service", zhLabel: "服务", alias: "service", english: "Service" },
 ] as const;
 
 export type MentionKind = (typeof mentionKinds)[number]["kind"];
@@ -31,7 +31,7 @@ export function mentionSearch(query: string) {
   const text = query.trimStart().toLowerCase();
   const aliases = mentionKinds
     .flatMap((item) =>
-      [...new Set([item.label.toLowerCase(), item.alias, item.kind, item.english.toLowerCase()])].map((alias) => ({
+      [...new Set([item.label.toLowerCase(), item.zhLabel.toLowerCase(), item.alias, item.kind, item.english.toLowerCase()])].map((alias) => ({
         item,
         alias,
       })),
@@ -43,7 +43,7 @@ export function mentionSearch(query: string) {
     }
   }
   const categories = mentionKinds.filter((item) =>
-    [item.label.toLowerCase(), item.alias, item.kind, item.english.toLowerCase()].some((alias) =>
+    [item.label.toLowerCase(), item.zhLabel.toLowerCase(), item.alias, item.kind, item.english.toLowerCase()].some((alias) =>
       alias.startsWith(text),
     ),
   );
@@ -52,7 +52,7 @@ export function mentionSearch(query: string) {
 
 export function mentionToken(item: ChatMention) {
   const label = item.label
-    .replace(/[[\]]/g, (char) => (char === "[" ? "（" : "）"))
+    .replace(/[[\]]/g, (char) => (char === "[" ? "(" : ")"))
     .replace(/\s+/g, " ")
     .slice(0, 100);
   // Stored message syntax is independent of the selected display language.
@@ -66,7 +66,9 @@ export function selectedMentions(value: string, translate?: (key: string) => str
       /@\[(finding|asset|company|endpoint|ip|app|root_domain|subdomain|service|漏洞|资产|企业|接口|IP|应用|域名|子域名|服务)#([0-9]+)(?: ([^\]\r\n]*))?\]/g,
     ),
   ].map((match) => {
-    const entry = mentionKinds.find((item) => item.kind === match[1] || item.label === match[1]);
+    const entry = mentionKinds.find(
+      (item) => item.kind === match[1] || item.label === match[1] || item.zhLabel === match[1],
+    );
     const label = translate ? translate(`mention.${entry?.kind ?? "asset"}`) : (entry?.label ?? match[1]);
     return {
       token: match[0],

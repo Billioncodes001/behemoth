@@ -12,11 +12,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { resolveLocale } from "@/i18n/config";
 import { api } from "@/lib/api";
 import { auth } from "@/lib/auth";
 
 export default function LoginPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = resolveLocale(i18n.resolvedLanguage);
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -106,13 +108,15 @@ export default function LoginPage() {
   useEffect(() => {
     if (!turnstileSiteKey || turnstileState === "passed") return;
     let mounted = true;
+    let widgetId: string | undefined;
     const w = window as any;
     const renderWidget = () => {
       if (!mounted || !turnstileContainerRef.current || !w.turnstile) return;
       turnstileContainerRef.current.innerHTML = "";
-      w.turnstile.render(turnstileContainerRef.current, {
+      widgetId = w.turnstile.render(turnstileContainerRef.current, {
         sitekey: turnstileSiteKey,
         theme: "dark",
+        language: locale === "zh-CN" ? "zh-cn" : "en",
         callback: async (cfToken: string) => {
           try {
             const v = await api.turnstileVerify(cfToken, navigator.userAgent);
@@ -127,7 +131,7 @@ export default function LoginPage() {
             }
             setTurnstileState("passed");
           } catch {
-            setError("Cloudflare Turnstile verification failed");
+            setError("error.turnstile_failed");
           }
         },
       });
@@ -143,8 +147,9 @@ export default function LoginPage() {
     }
     return () => {
       mounted = false;
+      if (widgetId !== undefined) w.turnstile.remove(widgetId);
     };
-  }, [turnstileSiteKey, turnstileState]);
+  }, [turnstileSiteKey, turnstileState, locale]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -173,9 +178,7 @@ export default function LoginPage() {
           <div className="space-y-2">
             <h1 className="text-3xl font-semibold tracking-tight text-white">{hostLabel}</h1>
             <p className="text-lg font-medium text-zinc-300">
-              {turnstileState === "verifying"
-                ? "Verifying you are human. This may take a few seconds."
-                : "Verification successful. Redirecting..."}
+              {t(turnstileState === "verifying" ? "auth.verifyingHuman" : "auth.verifiedRedirect")}
             </p>
           </div>
 
@@ -194,28 +197,29 @@ export default function LoginPage() {
                   </div>
                 )}
                 <span className="text-sm font-medium text-zinc-100">
-                  {turnstileState === "verifying" ? "Verifying..." : "Success!"}
+                  {t(turnstileState === "verifying" ? "auth.verifying" : "auth.verified")}
                 </span>
               </div>
               <div className="flex flex-col items-end text-right leading-tight">
                 <div className="flex items-center gap-1 text-[11px] font-bold tracking-wide text-orange-400">
                   <ShieldCheck className="size-3.5" /> CLOUDFLARE
                 </div>
-                <span className="text-[9px] text-zinc-400">Turnstile · Privacy · Terms</span>
+                <span className="text-[9px] text-zinc-400">{t("auth.turnstileLinks")}</span>
               </div>
             </div>
           )}
 
           <p className="text-sm text-zinc-400 leading-relaxed">
-            {hostLabel} needs to review the security of your connection before proceeding.
+            {t("auth.connectionCheck", { host: hostLabel })}
           </p>
+          {error && <p role="alert" className="text-sm text-destructive">{t(error)}</p>}
         </div>
 
         <div className="mx-auto w-full max-w-xl border-t border-zinc-800 pt-4 text-center text-xs text-zinc-500 flex flex-wrap items-center justify-between gap-2">
           <span>
-            Ray ID: <code className="font-mono text-zinc-400">{rayId}</code>
+            {t("auth.rayId")}: <code className="font-mono text-zinc-400">{rayId}</code>
           </span>
-          <span>Performance &amp; security by Cloudflare Turnstile</span>
+          <span>{t("auth.turnstileCredit")}</span>
         </div>
       </div>
     );

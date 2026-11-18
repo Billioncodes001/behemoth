@@ -56,7 +56,7 @@ func assetInputLabel(item assetInputItem) string {
 	case strings.TrimSpace(item.ServiceIP) != "":
 		target = strings.TrimSpace(item.ServiceIP)
 	default:
-		target = "(未知)"
+		target = "(unknown)"
 	}
 	if typ != "" {
 		return fmt.Sprintf("[%s] %s", typ, target)
@@ -202,7 +202,7 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 		}, "assets"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.as == nil {
-				return actool.Errorf("insert_assets 未启用: AssetStore 未初始化"), nil
+				return actool.Errorf("insert_assets disabled: AssetStore is not initialized"), nil
 			}
 			var a struct {
 				Assets []assetInputItem `json:"assets"`

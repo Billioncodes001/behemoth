@@ -154,17 +154,20 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			// Background requests use Bearer auth. Challenging them with Basic
 			// can trap the browser in repeated native dialogs. Let the client
 			// reload the current page once to renew only the outer session.
-			w.Header().Set(dynamicAuthHeaderName, "basic")
+			w.Header().Set("X-Artex-Auth", "basic")
+			if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Artex-Auth") {
+				w.Header().Set(dynamicAuthHeaderName, "basic")
+			}
 			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted", charset="UTF-8"`)
 			}
-			writeProductError(w, http.StatusUnauthorized, "basic_auth_required", "请先完成 HTTP Basic Auth 验证", nil)
+			writeProductError(w, http.StatusUnauthorized, "basic_auth_required", "Complete HTTP Basic Auth verification first", nil)
 			return
 		}
 		// Browser API requests already use Authorization: Bearer. A separate
 		// HttpOnly cookie keeps the gate satisfied without replacing that header.
 		if err := s.setBasicAuthCookie(w, r, cfg); err != nil {
-			writeProductError(w, 500, "auth_session_failed", "认证会话生成失败", nil)
+			writeProductError(w, 500, "auth_session_failed", "Unable to create an authentication session", nil)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -187,7 +190,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		Password string  `json:"password"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeProductError(w, 400, "invalid_request", "请求格式错误", nil)
+		writeProductError(w, 400, "invalid_request", "Invalid request format", nil)
 		return
 	}
 	g := &s.basicAuth
@@ -207,7 +210,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.Username = strings.TrimSpace(*req.Username)
 	}
 	if (cfg.Enabled || cfg.Username != "") && !validBasicUsername(cfg.Username) {
-		writeProductError(w, 400, "basic_auth_username_invalid", "Basic Auth 用户名不能为空、超过 128 字节或包含冒号及控制字符", nil)
+		writeProductError(w, 400, "basic_auth_username_invalid", "The Basic Auth username is required, must not exceed 128 bytes, and cannot contain colons or control characters", nil)
 		return
 	}
 	if req.Password != "" {
@@ -218,13 +221,13 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			writeProductError(w, 500, "password_hash_failed", "密码加密失败", nil)
+			writeProductError(w, 500, "password_hash_failed", "Unable to secure the password", nil)
 			return
 		}
 		cfg.PasswordHash = string(hash)
 	}
 	if cfg.Enabled && cfg.PasswordHash == "" {
-		writeProductError(w, 400, "basic_auth_password_required", "请先设置 Basic Auth 密码", nil)
+		writeProductError(w, 400, "basic_auth_password_required", "Set a Basic Auth password first", nil)
 		return
 	}
 	// Every save revokes previous gate cookies, including disable/re-enable.
@@ -233,7 +236,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), basicAuthSaveTimeout)
 	defer cancel()
 	if err != nil || store.SetSettingContext(ctx, basicAuthKey, string(data)) != nil {
-		writeProductError(w, 503, "basic_auth_save_failed", "Basic Auth 配置保存失败，请重试", nil)
+		writeProductError(w, 503, "basic_auth_save_failed", "Could not save Basic Auth settings. Try again.", nil)
 		return
 	}
 	// Hashing, persistence and response output never hold the request mutex.
@@ -245,7 +248,7 @@ func (s *Server) saveBasicAuthSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	// Keep the administrator who just saved the settings in their session.
 	if err := s.setBasicAuthCookie(w, r, cfg); err != nil {
-		writeProductError(w, 500, "auth_session_failed", "认证会话生成失败", nil)
+		writeProductError(w, 500, "auth_session_failed", "Unable to create an authentication session", nil)
 		return
 	}
 	writeJSON(w, 200, basicAuthPublicSettings(cfg))

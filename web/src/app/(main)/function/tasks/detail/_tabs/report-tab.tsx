@@ -124,7 +124,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
       await api.exportFindings({
         format: "md-zip",
         scope: "filtered",
-        task_id: taskId,
+        filters: { task: taskId },
       });
       toast.success("Downloaded findings evidence & HTTP packet bundle (.zip).");
     } catch (e) {

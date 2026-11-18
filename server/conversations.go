@@ -521,6 +521,23 @@ func autoTitleIsUsable(generated string) bool {
 	return generated != "" && generated != "新对话"
 }
 
+func isTransientConversationError(err error) bool {
+	if err == nil || isQuotaExhaustedError(err) {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"status 408", "status 429", "status 500", "status 502", "status 503", "status 504",
+		"eof", "connection reset", "broken pipe", "timeout", "timed out",
+		"overloaded", "rate limit", "too many requests", "stream error", "interrupted",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // runConversation runs ONE agent turn on a conversation in a background goroutine
 // (each conversation is independent → parallel). Steps stream to
 // conversation_activities. Shared by the chat HTTP handler and the P3 scheduler.
@@ -645,7 +662,11 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	}
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
 	log.Printf("[chat] Conversation #%d (%s) started turn: %s", c.ID, c.AgentKey, firstLine(msg, 120))
+	emittedErrorResult := false
 	emit := func(rec db.Activity) {
+		if rec.Kind == "result" && rec.IsError {
+			emittedErrorResult = true
+		}
 		if rec.Tool != "" {
 			log.Printf("[chat] Conversation #%d (%s) tool=%s summary=%s", c.ID, c.AgentKey, rec.Tool, firstLine(rec.Summary, 120))
 		}
@@ -653,12 +674,36 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
 		}
 	}
-	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil {
-		finishReason = err.Error()
-		log.Printf("[chat] Conversation #%d (%s) error: %v", c.ID, c.AgentKey, err)
-		if ctx.Err() == nil {
-			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
-				Summary: "(Error: " + err.Error() + ")", Detail: err.Error()})
+	var chatErr error
+	maxChatRetries, chatRetryBackoff := s.engine.modelErrorRetryPolicy()
+	if c.AgentKey == db.FindingRetestAgentKey {
+		maxChatRetries = 0
+	}
+	for attempt := 0; attempt <= maxChatRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("[chat] Conversation #%d (%s) transient error, retrying turn from transcript (%d/%d) after %v: %v",
+				c.ID, c.AgentKey, attempt, maxChatRetries, chatRetryBackoff, chatErr)
+			if sleepCtx(ctx, chatRetryBackoff) {
+				break
+			}
+			// Re-resolve chat agent in case profile/pool changed
+			if nextCA := s.resolveChatAgent(c); nextCA != nil {
+				ca = nextCA
+			}
+			emittedErrorResult = false
+			msg = "Continue execution from the previous step without repeating already-completed tool calls."
+		}
+		_, chatErr = ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit)
+		if chatErr == nil || ctx.Err() != nil || !isTransientConversationError(chatErr) {
+			break
+		}
+	}
+	if chatErr != nil {
+		finishReason = chatErr.Error()
+		log.Printf("[chat] Conversation #%d (%s) error: %v", c.ID, c.AgentKey, chatErr)
+		if ctx.Err() == nil && !emittedErrorResult {
+			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
+				Summary: "Execution error: " + chatErr.Error(), Detail: chatErr.Error()})
 		}
 	} else {
 		finishStatus, finishReason = "completed", ""

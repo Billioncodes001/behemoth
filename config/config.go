@@ -138,6 +138,21 @@ func PostgresDSN() (dsn, source string, err error) {
 	if v := strings.TrimSpace(os.Getenv("ARTEX_PG_DSN")); v != "" {
 		return v, "environment variable ARTEX_PG_DSN", nil
 	}
+	if h := strings.TrimSpace(os.Getenv("ARTEX_PG_HOST")); h != "" {
+		port, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("ARTEX_PG_PORT")))
+		envDB := Database{
+			Host:     h,
+			Port:     port,
+			User:     strings.TrimSpace(os.Getenv("ARTEX_PG_USER")),
+			Password: os.Getenv("ARTEX_PG_PASSWORD"),
+			DBName:   strings.TrimSpace(os.Getenv("ARTEX_PG_DB")),
+			SSLMode:  strings.TrimSpace(os.Getenv("ARTEX_PG_SSLMODE")),
+		}
+		if envDB.DBName == "" {
+			envDB.DBName = "artex"
+		}
+		return envDB.buildDSN(), "environment variables ARTEX_PG_*", nil
+	}
 	db := Load().Database
 	if d := strings.TrimSpace(db.DSN); d != "" {
 		return d, "config file " + Path() + " (database.dsn)", nil

@@ -68,7 +68,7 @@ export function FindingAutoChat({
     setRunning(false);
     setLoading(true);
     try {
-      const created = await api.createConversation(agentKey, `漏洞 #${findingId} · ${safeTitle}`);
+      const created = await api.createConversation(agentKey, `Finding #${findingId} · ${safeTitle}`);
       window.localStorage.setItem(storageKey, String(created.id));
       setConversation(created);
     } catch (error) {
@@ -84,7 +84,7 @@ export function FindingAutoChat({
       setConversation({
         id: initialConversationId,
         agent_key: agentKey,
-        title: `漏洞 #${findingId} · ${safeTitle}`,
+        title: `Finding #${findingId} · ${safeTitle}`,
         created_at: "",
         updated_at: "",
       });
@@ -95,14 +95,14 @@ export function FindingAutoChat({
       setConversation({
         id: storedID,
         agent_key: agentKey,
-        title: `漏洞 #${findingId} · ${safeTitle}`,
+        title: `Finding #${findingId} · ${safeTitle}`,
         created_at: "",
         updated_at: "",
       });
       return;
     }
     void createConversation();
-  }, [conversation, createConversation, initialConversationId, manualEmpty, open, safeTitle, storageKey]);
+  }, [agentKey, conversation, createConversation, findingId, initialConversationId, manualEmpty, open, safeTitle, storageKey]);
 
   React.useEffect(() => {
     if (!historyOpen && !running) return;
@@ -112,8 +112,13 @@ export function FindingAutoChat({
       try {
         const items = await api.conversations();
         if (!live) return;
-        const prefix = `漏洞 #${findingId} ·`;
-        setHistory(items.filter((item) => item.agent_key === agentKey && item.title.startsWith(prefix)));
+        const prefix = `Finding #${findingId} ·`;
+        const legacyPrefix = `漏洞 #${findingId} ·`;
+        setHistory(
+          items.filter(
+            (item) => item.agent_key === agentKey && (item.title.startsWith(prefix) || item.title.startsWith(legacyPrefix)),
+          ),
+        );
       } catch {
         if (live && historyOpen) setHistory([]);
       } finally {
@@ -191,7 +196,7 @@ export function FindingAutoChat({
     setSending(true);
     setInput("");
     const firstQuestion = !messages.some((item) => item.kind === "user");
-    const message = firstQuestion ? `@[漏洞#${findingId} ${safeTitle}] ${question}` : question;
+    const message = firstQuestion ? `@[finding#${findingId} ${safeTitle}] ${question}` : question;
     try {
       await api.sendConversationMessage(conversation.id, message);
       setRunning(true);

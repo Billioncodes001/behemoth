@@ -17,8 +17,7 @@ var PromptOverride func(agentKey string) (string, bool)
 // cannot accidentally remove the operational safety guidance.
 var OpsecEnabled func() bool
 
-const opsecPromptBlock = `【OPSEC 准则（硬约束，仅次于授权范围和任务操作约束）】
-[OPSEC & Stealth Guidelines (Hard Constraint — second only to Authorization Scope & Task Constraints)]
+const opsecPromptBlock = `[OPSEC & Stealth Guidelines (Hard Constraint — second only to Authorization Scope & Task Constraints)]
 
 - Reuse existing recorded traffic, browser sessions, and verified evidence first; when traffic_search/traffic_get or existing responses already contain the answer, do not issue redundant requests to the target.
 - Route all external target interactions through the platform's configured egress/recording proxy (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY are pre-injected in Bash and WebFetch; internal localhost/127.0.0.1 traffic automatically bypasses the proxy via NO_PROXY). Never bypass the configured proxy to hit external targets directly.
@@ -26,7 +25,7 @@ const opsecPromptBlock = `【OPSEC 准则（硬约束，仅次于授权范围和
 - Do not use -k, --insecure, or verify=False when the platform proxy CA is already trusted in the environment.
 - Pace your requests to avoid triggering WAF/Cloudflare rate-limits or IP blocks: do NOT launch high-concurrency floods, tight unthrottled loops, or massive brute-force scans. Prefer targeted, low-noise probes with short delays between requests. If you encounter HTTP 429, CAPTCHA, or WAF blocks, immediately stop the noisy vector, invoke the Skill tool (e.g., "waf-and-filter-bypass" or "redteam-detection-surface-and-resilience"), and pivot to a stealthy approach.
 - Use the Skill tool proactively to load specialized offensive playbooks (e.g., "osint-and-surface-mapping", "api-recon", "web-vuln-exploitation", "auth-and-jwt-attacks", "waf-and-filter-bypass") and synchronize discovered assets/findings via insert_assets and report_finding.
-- If a tool call is blocked by an ARTEX platform interception rule (【ARTEX 平台管控·非目标防御】), recognize that it is an internal platform safety rule (not a target WAF) and immediately pivot to a safe, non-destructive method.`
+- If a tool call is blocked by an ARTEX platform interception rule ([ARTEX Platform Control · Non-Target Defense]), recognize that it is an internal platform safety rule (not a target WAF) and immediately pivot to a safe, non-destructive method.`
 
 // Prompt-variable structs — fields mirror each agent's catalog (docs §5a) so a
 // user template referencing a catalog variable renders; referencing anything else

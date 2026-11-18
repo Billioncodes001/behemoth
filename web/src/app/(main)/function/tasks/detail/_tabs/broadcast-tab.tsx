@@ -229,9 +229,7 @@ function AssetList({ assets, dense = false }: { assets: FindingAsset[]; dense?: 
       </div>
       <ul className="flex flex-wrap gap-1.5">
         {assets.map((a) => {
-          // 运行时 a.type 可能是标签表未覆盖的类型,退回原始字符串。转一层类型让回退不被判成多余。
-          const typeLabel =
-            (taskAssetTypeLabel as (t: NewAssetType) => string | undefined)(a.type as NewAssetType) || a.type;
+          const typeLabel = taskAssetTypeLabel(a.type as NewAssetType, ui) || a.type;
           return (
             <li
               key={a.id}

@@ -2981,5 +2981,7 @@
   "punctuation.f114611cd6": ["：", ": "],
   "punctuation.d6a4e79b56": ["？", "?"],
   "punctuation.5432cbf694": ["JSON（.json）", "JSON(.json)"],
-  "punctuation.b269e4a091": ["「", "“"]
+  "punctuation.b269e4a091": ["「", "“"],
+  "screen.denyPlaceholder": ["操作被安全策略阻止", "Action blocked by security policy"],
+  "screen.repeaterAutoGroup": ["分组 {{count}}", "Group {{count}}"]
 }

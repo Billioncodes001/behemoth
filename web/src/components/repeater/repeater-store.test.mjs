@@ -114,7 +114,7 @@ test("missing, corrupt and malformed storage recover a default group and empty t
   ]) {
     const recovered = deserializeWorkspace(raw);
     assert.equal(recovered.version, 1);
-    assert.equal(recovered.groups[0].name, "默认");
+    assert.equal(recovered.groups[0].name, "Default");
     assert.equal(recovered.tabs.length, 1);
     assert.equal(recovered.tabs[0].title, "Tab 1");
     assert.equal(recovered.tabs[0].url, "");
@@ -345,7 +345,7 @@ test("two failed storage writes report save failure through a Chinese error toas
   flush();
   assert.equal(setItem.mock.callCount(), 2);
   assert.equal(error.mock.callCount(), 1);
-  assert.match(error.mock.calls[0].arguments[0], /工作区保存失败/);
+  assert.match(error.mock.calls[0].arguments[0], /Could not save workspace/);
   assert.equal(useRepeaterStore.getState().workspace.tabs[0].body, "unsaved draft");
 });
 
@@ -432,14 +432,14 @@ test("traffic import uses captured metadata, preserves Host overrides and the fu
 
 test("traffic import rejects failed loads and blob preview markers rather than sending corrupted bodies", () => {
   const flow = { method: "POST", url: "https://example.test/", host: "example.test" };
-  assert.throws(() => requestFromTraffic("（无法加载报文）", flow), /不完整/);
+  assert.throws(() => requestFromTraffic("(could not load message)", flow), /incomplete/);
   assert.throws(
     () =>
       requestFromTraffic(
         `POST / HTTP/1.1\nHost: example.test\n\npreview\n…[truncated] @blob sha256:${"a".repeat(64)} (len=9999)`,
         flow,
       ),
-    /截断预览/,
+    /truncated/,
   );
 });
 
@@ -552,7 +552,7 @@ test("raw HTTP editing keeps the first line, method, path, protocol, Host and bo
     parseRawRequest("GET http://elsewhere.test/path HTTP/1.1\nHost: vhost.test\n\n", "https://old.test").url,
     "http://elsewhere.test/path",
   );
-  assert.throws(() => parseRawRequest("POST /missing-version\nHost: test\n\n"), /首行/);
+  assert.throws(() => parseRawRequest("POST /missing-version\nHost: test\n\n"), /request line/);
   assert.equal(buildRawRequest({ ...tab, rawRequest: "unfinished HTTP draft" }), "unfinished HTTP draft");
 });
 

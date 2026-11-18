@@ -367,7 +367,7 @@ func (s *Server) getFindingTrafficBody(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) toolGetFindingTraffic() actool.CoreTool {
 	return roTool("get_finding_traffic", "Read authentic traffic evidence bound to a vulnerability, independent of the capture switch. finding_id uses the standalone vulnerability record ID returned in the report_finding JSON (NOT the exploration node ID on the first line). Call without binding_id first to get the list and version; an empty list is normal, and TCP/non-HTTP or uncaptured findings can still be reported from text/command evidence without forced binding. When bindings exist, read body chunks by binding_id, side (request/response), and offset. When writing the report, pass the read version as evidence_version to update_finding_report (whose finding_id parameter still uses the exploration node ID).",
-		objSchema(map[string]any{"finding_id": strParam("Standalone vulnerability record ID"), "binding_id": strParam("Binding ID from the list; omit to return the list"), "side": strParam("request or response, default response"), "offset": map[string]any{"type": "integer"}, "length": map[string]any{"type": "integer"}}, "finding_id"),
+		objSchema(map[string]any{"finding_id": idParam("Standalone vulnerability record ID"), "binding_id": idParam("Binding ID from the list; omit to return the list"), "side": strParam("request or response, default response"), "offset": map[string]any{"type": "integer"}, "length": map[string]any{"type": "integer"}}, "finding_id"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				FindingID      json.RawMessage `json:"finding_id"`

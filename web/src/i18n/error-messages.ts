@@ -1,9 +1,12 @@
 export const errorMessages = {
+  "error.turnstile_failed": ["Cloudflare Turnstile 验证失败", "Cloudflare Turnstile verification failed"],
+  "error.turnstile_unreachable": ["无法连接 Cloudflare Turnstile 验证服务", "Failed to contact Cloudflare Turnstile verification service"],
   "error.intelligence_response_invalid": [
     "情报数据响应不完整，请刷新后重试",
     "The intelligence response is incomplete. Refresh to try again.",
   ],
   "error.basic_auth_required": ["请先完成 HTTP Basic Auth 验证", "Complete HTTP Basic Auth verification first"],
+  "error.basic_auth_expired": ["访问验证已过期，正在重新验证…", "Auth expired, revalidating..."],
   "error.auth_session_failed": ["认证会话生成失败", "Unable to create an authentication session"],
   "error.basic_auth_username_invalid": [
     "Basic Auth 用户名不能为空、超过 128 字节或包含冒号及控制字符",

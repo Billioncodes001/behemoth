@@ -304,6 +304,19 @@ type Manager struct {
 	proxyPool           *proxyPoolState
 	forwardProxy        *dynamicForwardProxy
 	proxyPoolConfigured atomic.Bool
+	onCloseMu           sync.Mutex
+	onClose             []func()
+}
+
+// RegisterOnClose registers a cleanup hook invoked at the start of Manager.Close
+// before the underlying database and proxy resources are torn down.
+func (m *Manager) RegisterOnClose(fn func()) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.onCloseMu.Lock()
+	m.onClose = append(m.onClose, fn)
+	m.onCloseMu.Unlock()
 }
 
 // SetTaskControlMutex lets lifecycle operations that originate in Manager
@@ -1145,6 +1158,13 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 }
 
 func (m *Manager) Close() error {
+	m.onCloseMu.Lock()
+	hooks := m.onClose
+	m.onClose = nil
+	m.onCloseMu.Unlock()
+	for i := len(hooks) - 1; i >= 0; i-- {
+		hooks[i]()
+	}
 	if m.forwardProxy != nil {
 		_ = m.forwardProxy.Close()
 	}

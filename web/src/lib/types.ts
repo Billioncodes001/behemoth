@@ -2190,7 +2190,7 @@ export interface ToolParameter {
   options?: string[];
 }
 
-export interface Tool {
+export interface CatalogTool {
   id: string;
   name: string;
   description: string;
@@ -2402,6 +2402,7 @@ export interface BrowserResult {
   success: boolean;
   url: string;
   action: BrowserAction;
+  screenshot?: string;
   screenshot_path?: string;
   content?: string;      // Markdown content
   title?: string;

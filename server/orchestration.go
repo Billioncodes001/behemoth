@@ -626,11 +626,16 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	// Always ensure operational agents have their required tool & skill bindings on startup
+	// Seed built-in patch monitor tools (first-insert-only, preserves user edits).
 	for _, t := range s.patchMonitorTools() {
 		schema, _ := json.Marshal(t.InputSchema())
 		binds, _ := json.Marshal([]string{"auto", "pentest", "patch_watch", "worker"})
 		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+	}
+
+	const flag = "tool_schema_refresh_v16_multi_search_and_whatsapp"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
 	}
 	_ = s.m.pg.AddAgentToToolBinding("auto", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
@@ -649,6 +654,7 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
 		"multi_engine_search", "exploit_search",
 	})
+	_ = s.m.pg.AddAgentToToolBinding("reporter", []string{"traffic_search", "traffic_get", "traffic_blob"})
 	_ = s.m.pg.AddAgentToToolBinding("patch_watch", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings",
@@ -663,11 +669,6 @@ func (s *Server) refreshBuiltinToolSchemas() {
 	_ = s.m.pg.AddAgentToToolBinding("planner", []string{"multi_engine_search", "exploit_search"})
 	_ = s.m.pg.AddAgentToToolBinding("mainagent", []string{"multi_engine_search", "exploit_search"})
 	_ = s.m.pg.AddAgentToToolBinding("asset_mapper", []string{"multi_engine_search"})
-
-	const flag = "tool_schema_refresh_v16_multi_search_and_whatsapp"
-	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
-		return
-	}
 	tools := append(append(s.orchestrationTools(), s.platformTools()...), s.findingRetestTools()...)
 	tools = append(tools, traffic.SeedToolMetas()...)
 	for _, t := range tools {
@@ -752,29 +753,19 @@ func (s *Server) refreshBuiltinToolSchemas() {
 			}
 		}
 	}
-	// Enable all high-capability platform settings by default
+	// Enable safe operational platform settings by default without overriding
+	// opt-in workflow gates or spawning unsolicited traffic listeners in server.New().
 	defaultTrueSettings := []string{
-		settingTrafficCapture,
-		settingAgentTrafficBinding,
-		db.SettingTaskIntelligence,
-		db.SettingCredentialAgent,
-		db.SettingCredentialTraffic,
 		settingOpsecEnabled,
 		settingWebSearchOn,
-		settingLLMRecord,
 		settingLLMPoolOn,
 		settingLLMPoolBindFallback,
-		db.SettingTaskAutoTitle,
-		db.SettingChatAutoTitle,
-		settingBrowserScreenshot,
-		settingScreenshotTimestamp,
 		settingProxyRotateFailure,
 		settingNotifyEnabled,
 	}
 	for _, k := range defaultTrueSettings {
 		_ = s.m.pg.SetBool(k, true)
 	}
-	_ = s.m.SetTrafficEnabled(true)
 	on, backend, _, _, _ := s.m.WebSearch()
 	if !on {
 		if backend == "" {

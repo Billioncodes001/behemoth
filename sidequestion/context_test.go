@@ -363,7 +363,7 @@ func TestSideSummaryRecoveryHonorsCancellationAndSharedCallCap(t *testing.T) {
 			if mode == "cancel" && !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation lost: %v", err)
 			}
-			if mode == "call-cap" && !strings.Contains(err.Error(), "处理上限") {
+			if mode == "call-cap" && !strings.Contains(err.Error(), "call limit") && !strings.Contains(err.Error(), "处理上限") {
 				t.Fatalf("call cap lost: %v", err)
 			}
 		})
@@ -428,7 +428,7 @@ func TestSideOverflowWithoutReductionDoesNotRepeatAnswer(t *testing.T) {
 	}}
 	snapshot := Snapshot{Request: llm.CompletionRequest{MaxTokens: 128, Messages: []llm.Message{llm.UserText("tiny")}}}
 	out, _, err := (SideQuestionService{p}).Respond(t.Context(), snapshot, "question", Replay{}, ContextOptions{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "未能进一步缩减") || answers != 1 || summaries != 1 || out.Usage.InputTokens != 8 {
+	if err == nil || (!strings.Contains(err.Error(), "could not reduce context further") && !strings.Contains(err.Error(), "未能进一步缩减")) || answers != 1 || summaries != 1 || out.Usage.InputTokens != 8 {
 		t.Fatalf("no-progress recovery: %d %d %+v %v", answers, summaries, out, err)
 	}
 }

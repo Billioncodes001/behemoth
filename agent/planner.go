@@ -133,7 +133,7 @@ func renderPlannerTodos(items []actool.Todo) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\n【你的规划待办（跨唤醒保留，上一轮你写的）】：\n")
+	b.WriteString("\n\n[Your Persistent Planning Todos (carried across wake-ups from your previous round)]:\n")
 	for _, it := range items {
 		mark := map[actool.TodoStatus]string{actool.TodoPending: "☐", actool.TodoInProgress: "▶", actool.TodoCompleted: "✔"}[it.Status]
 		if mark == "" {
@@ -141,7 +141,7 @@ func renderPlannerTodos(items []actool.Todo) string {
 		}
 		b.WriteString(fmt.Sprintf("  %s %s\n", mark, it.Content))
 	}
-	b.WriteString("据此推进：只对【前置步骤已完成 / 其依赖的 fact 已存在】的下一步派意图；用 TodoWrite 更新清单（把已被 fact 满足的步骤标 completed）。不要重复派已在清单里 pending/in_progress 的步骤。")
+	b.WriteString("Proceed accordingly: dispatch intents ONLY for next steps whose prerequisite steps are completed or whose dependent facts already exist; update the list with TodoWrite (mark steps satisfied by facts as completed). Do not re-dispatch steps already marked pending/in_progress.")
 	return b.String()
 }
 
@@ -250,7 +250,7 @@ func intentSummary(ts *db.ExplorationStore, id int64) string {
 func workerOutput(ts *db.ExplorationStore, id int64) string {
 	acts, _, err := ts.ActivityList(&id, 0, 1000)
 	if err != nil {
-		return "(取输出失败)"
+		return "(failed to fetch output)"
 	}
 	var pick *db.Activity
 	for i := range acts {
@@ -373,7 +373,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 目标判定、不产新意图。
 	tc := taskClockFrom(ctx)
 	if tc.Final {
-		situational += "\n\n【任务终局收尾（本轮特殊指令，覆盖上面的常规规划流程）】：" + resolveTaskTimeoutWrapup("planner")
+		situational += "\n\n[Task Final Wrap-Up (Special instruction for this round, overriding the normal planning workflow above)]: " + resolveTaskTimeoutWrapup("planner")
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	taskDir := ensureRunDir(p.workDir, taskID, 0)
@@ -427,6 +427,10 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		NonStreaming: p.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    p.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}
+	// Wire planner continuation hooks so if the planner outputs a status sentence
+	// or fails a tool call without calling add_intent / prove_goal when intents are needed,
+	// it is automatically nudged to complete its planning round.
+	opts.Hooks = WrapPlannerContinuationHooks(opts.Hooks, fmt.Sprintf("planner-%d", taskID), 4)
 	if p.tx != nil { // persist raw LLM conversation; one accumulating file per task's planner
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())
@@ -438,16 +442,14 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 指令 + 跨唤醒待办（todo 是模型自己的规划便签，可再生，放 user 即可）。
 	// 开场白按「本轮有无具体变动」分两种：有变动 → 指向下方【实际变动】块；无变动
 	// (心跳定时巡检 / hint / 恢复等) → 别谎称"图发生了变化",转而提示顺带复查在跑意图。
-	lead := "刚有具体变动（见下面的【本次触发本轮的实际变动】），据此规划下一步："
+	lead := "Concrete changes just occurred (see [Actual Changes Triggering This Round] below); plan the next steps accordingly:"
 	if len(triggers) == 0 {
-		lead = "本轮是**定时巡检（心跳到点）/无具体变动信号**的唤醒——图不一定有新变动。顺带复查在跑意图：长时间无进展或跑偏的用 steer_work 纠偏、方向整个错的用 kill_work 止损；再判定目标、决定是否补方向："
-		// 心跳/无变动唤醒时,若全图已无任何 open 或 running 意图 → 探索已停摆(没 worker 在跑、
-		// 也没排队方向)。明确告知 planner 并强制其本轮补出新方向,别只复查在跑意图后空转一轮。
+		lead = "This round is a **periodic heartbeat check / wake-up without a specific change signal** — the graph may not have new changes. Review running intents along the way: use steer_work to course-correct stalled or off-track workers and kill_work to stop completely misguided ones; then evaluate goals and decide whether to add new directions:"
 		if active, err := ts.HasActiveIntent(); err == nil && !active {
-			lead = "本轮是**定时巡检（心跳到点）**的唤醒,且当前**已没有任何 open 或 running 的意图**——没有 worker 在跑、也没有排队中的方向,探索已停摆。你**必须**在本轮产出一个或多个向目标推进、且与图中既有意图**互不重复**的新意图(不得产出 0 意图);先据下面的态势判定目标是否已达成,未达成则立即补方向："
+			lead = "This round is a **periodic heartbeat check**, and there are currently **NO open or running intents** — no workers are running and no directions are queued, so exploration is stalled. You **MUST** produce one or more non-duplicate intents advancing toward the goal in this round (do NOT produce 0 intents); first check whether the goal is already met based on the overview below, and if not, immediately add new directions:"
 		}
 	}
-	input := lead + situational + "\n\n据上面的态势，判定目标。目标已【真正达成】（已拿到目标成果/已确认目标漏洞）时用 prove_goal 逐个标记。**硬底线：只要目标尚未达成、且当前没有任何 open 或 running 意图（frontier_open=0 且 running_intents 为空），本轮就必须产出至少一个向目标推进的意图——此时没有在跑的 work 可等、也没有在排队的方向，产出 0 意图=任务停摆。仅当已有 open/running 意图在推进、或目标已达成时，本轮才可以不产出新意图。**" +
+	input := lead + situational + "\n\nBased on the situational overview above, evaluate the goals. When a goal is [genuinely achieved] (target objective obtained / target vulnerability confirmed), mark each met goal using prove_goal. **Hard Floor: As long as goals are not yet met AND there are currently NO open or running intents (frontier_open=0 and running_intents is empty), you MUST produce at least one intent advancing toward the goal in this round — with no running work to wait for and nothing queued, producing 0 intents stalls the task. You may produce 0 new intents ONLY when open/running intents are already progressing or all goals are met.**" +
 		renderPlannerTodos(opts.Todos.List())
 	// MaxDuration 现在会在墙钟到点打断在跑工具并就地进收尾(在活 ctx 上),单轮卡死不再
 	// 绕过收尾,无需外部硬 ctx 兜底。ctx 只承载 pause / kill / shutdown。
