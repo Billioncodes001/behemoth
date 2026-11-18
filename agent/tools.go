@@ -52,6 +52,7 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 // One ToolSet is created per planner/worker run; per-run signals live here.
 type ToolSet struct {
 	findingRecorder FindingRecorder
+	pg              *db.DB           // standalone DB (optional; allows list_findings/report_finding outside tasks)
 	as              *db.AssetStore   // asset store (optional; nil = asset tools not available)
 	cs              *db.CompanyStore // company store (optional)
 	ts              *db.ExplorationStore
@@ -168,6 +169,10 @@ func (t *ToolSet) Writes() WriteCounts { return t.writes }
 func NewToolSet(ts *db.ExplorationStore, worker string) *ToolSet {
 	return &ToolSet{ts: ts, worker: worker}
 }
+
+// SetStandaloneDB wires the Postgres DB so task-less agents (Auto, Solo Pentest in /chat)
+// can call list_findings and report_finding directly against the standalone findings table.
+func (t *ToolSet) SetStandaloneDB(pg *db.DB) { t.pg = pg }
 
 // SetTaskID sets the PG task id on this ToolSet so that report_finding can
 // dual-write to the standalone findings table (which survives task deletion).
@@ -903,9 +908,35 @@ func compactFinding(n *db.Node) map[string]any {
 }
 
 func (t *ToolSet) listFindings() actool.CoreTool {
-	return t.readExpTool("list_findings", "List [confirmed vulnerabilities] for this task and directly linked tasks (compact: id + task_id + intent_id + vulnclass + severity + summary + state). Linked task entries carry source_task_id/inherited=true and are read-only. Contains vulnerabilities only; use list_facts for general exploration facts, and node_detail(id) for full details.",
+	return readTool("list_findings", "List [confirmed vulnerabilities] for this task (or all standalone platform findings when running in Chat) (compact: id + task_id + intent_id + vulnclass + severity + summary + state).",
 		obj(map[string]any{}),
 		func(context.Context, json.RawMessage) (actool.Result, error) {
+			if t.ts == nil {
+				if t.pg == nil {
+					return actool.Errorf("list_findings requires task context (exploration graph): the current agent is not running inside a task, so the exploration graph is unavailable."), nil
+				}
+				rows, err := t.pg.ListFindings(100)
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				out := make([]map[string]any, 0, len(rows))
+				for _, r := range rows {
+					m := map[string]any{
+						"id":         r.ID,
+						"finding_id": r.ID,
+						"vulnclass":  r.VulnClass,
+						"name":       r.Name,
+						"severity":   r.Severity,
+						"summary":    r.Summary,
+						"state":      r.Status,
+					}
+					if r.TaskID != nil {
+						m["task_id"] = *r.TaskID
+					}
+					out = append(out, m)
+				}
+				return jsonResult(out)
+			}
 			f, _ := t.ts.ListByKindWithSources(db.KindFinding, 500)
 			if err := t.ts.PopulateFindingTrafficIDs(f); err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -1258,7 +1289,34 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			return actool.Errorf(err.Error()), nil
 		}
 		if t.ts == nil {
-			return actool.Errorf("report_finding requires task context; in platform chat, hand off the vulnerability to the corresponding task via add_task_hint with existing traffic_refs so the task Agent can register it. Already registered findings can bind traffic via bind_finding_traffic."), nil
+			if t.pg == nil {
+				return actool.Errorf("report_finding requires task context; in platform chat, hand off the vulnerability to the corresponding task via add_task_hint with existing traffic_refs so the task Agent can register it. Already registered findings can bind traffic via bind_finding_traffic."), nil
+			}
+			sev := strings.ToLower(strings.TrimSpace(a.Severity))
+			if !db.ValidSeverity(sev) {
+				sev = db.SeverityMedium
+			}
+			vc := strings.TrimSpace(a.VulnClass)
+			if vc == "" {
+				vc = "web-vulnerability"
+			}
+			worker := t.worker
+			if worker == "" {
+				worker = "auto"
+			}
+			fid, err := t.pg.AddFinding(0, 0, vc, strings.TrimSpace(a.Name), sev, strings.TrimSpace(a.Summary), strings.TrimSpace(a.Evidence), worker, pidList(a.AssetIDs))
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			t.writes.Findings++
+			raw, _ := json.Marshal(map[string]any{
+				"finding_id":      fid,
+				"vulnclass":       vc,
+				"severity":        sev,
+				"summary":         a.Summary,
+				"evidence_status": "standalone",
+			})
+			return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", fid, raw)), nil
 		}
 		// Auto-binding off: ignore the evidence params instead of rejecting the call.
 		// stripTrafficParameters already removes them from the advertised schema, but

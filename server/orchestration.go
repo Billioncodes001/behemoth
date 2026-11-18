@@ -681,6 +681,9 @@ func (s *Server) refreshBuiltinToolSchemas() {
 			_, _ = s.m.pg.Exec(`UPDATE agent_prompts SET body=$2 WHERE agent_id=$1 AND version=1`, autoAgent.ID, tmpl)
 		}
 	}
+	// Cap overly large max_tokens (e.g. 16384) to 4096 so 32K context-window models
+	// (such as Featherless AI / vLLM) do not reject multi-turn prompts with tool schemas.
+	_, _ = s.m.pg.Exec(`UPDATE llm_profiles SET max_tokens=4096 WHERE max_tokens > 4096`)
 	// Disable unconfigured HTTP MCP placeholders (e.g. ScopeSentry with empty URL) so they don't log connection errors on every turn
 	_, _ = s.m.pg.Exec(`UPDATE mcp_servers SET enabled=false WHERE transport IN ('http','sse') AND COALESCE(TRIM(url),'')=''`)
 	_, _ = s.m.pg.Exec(`DELETE FROM agent_visibility WHERE resource_kind='mcp' AND resource_id IN (SELECT id FROM mcp_servers WHERE transport IN ('http','sse') AND COALESCE(TRIM(url),'')='')`)

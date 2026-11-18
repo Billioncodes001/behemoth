@@ -107,9 +107,37 @@ func TestIsPrematureActionTurn(t *testing.T) {
 		t.Fatalf("normal greeting should not be nudged, got nudge=%q", nudge)
 	}
 
-	// 4. Final structured report with headings should NOT be flagged as premature
+	// 4. Hallucinated report with 0 execution turns should be flagged as premature
+	msgsHallucinatedReport := []llm.Message{
+		llm.UserText(prompt),
+		{
+			Role:    llm.RoleAssistant,
+			Content: []llm.ContentBlock{llm.TextBlock("## Vulnerability Scan Summary\n\n### Findings\n- Fabricated summary with zero Bash calls.")},
+		},
+	}
+	if ok, _ := IsPrematureActionTurn(msgsHallucinatedReport, prompt); !ok {
+		t.Fatal("expected report with 0 execution turns to be flagged as premature")
+	}
+
+	// 5. Final structured report after 3+ execution turns + insert_assets should NOT be flagged as premature
+	bashTurn := llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockToolUse, ID: "b1", Name: "Bash", Input: json.RawMessage(`{"command":"curl -I https://josiahadeyemo.me"}`)},
+		},
+	}
+	assetTurn := llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.BlockToolUse, ID: "a1", Name: "insert_assets", Input: json.RawMessage(`{"domain":"josiahadeyemo.me"}`)},
+		},
+	}
 	msgsFinalReport := []llm.Message{
 		llm.UserText(prompt),
+		bashTurn,
+		bashTurn,
+		bashTurn,
+		assetTurn,
 		{
 			Role:    llm.RoleAssistant,
 			Content: []llm.ContentBlock{llm.TextBlock("## Vulnerability Scan Summary\n\n### Findings\n- Confirmed missing security headers and exposed endpoints on josiahadeyemo.me.")},
@@ -117,7 +145,7 @@ func TestIsPrematureActionTurn(t *testing.T) {
 	}
 	cleanHooks := WrapContinuationHooks(nil, prompt, "test", 3)
 	if prevent, blocking, _ := cleanHooks.Stop(context.Background(), msgsFinalReport); prevent || len(blocking) > 0 {
-		t.Fatalf("final report should not be blocked: prevent=%v blocking=%v", prevent, blocking)
+		t.Fatalf("final report after 3 exec turns + insert_assets should not be blocked: prevent=%v blocking=%v", prevent, blocking)
 	}
 }
 

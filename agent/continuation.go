@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -22,6 +23,12 @@ const (
 	continuationToolErrorNudge = "[System Continuation] The previous tool call returned an error and you responded with a brief status message without invoking any tool. Do not stop—immediately invoke the corrected tool call or use an alternative tool (e.g., Bash, Skill, WebFetch, insert_assets, spawn_task, report_finding) to continue the operation."
 
 	continuationPrematureIntentNudge = "[System Continuation] You announced an action or next step in text without emitting a tool call. Never stop after a status announcement—immediately invoke the required tool (e.g., Bash, Skill, WebFetch, insert_assets, spawn_task, report_finding) and continue executing step-by-step until the user's request is thoroughly completed."
+
+	continuationNoExecToolsNudge = "[System Continuation — Mandatory Live Execution] You have NOT executed any live reconnaissance or probing tools (such as Bash, WebFetch, or spawn_task) against the target yet—only meta/lookup tools were called. Never fabricate or guess scan results, IPs, headers, or asset IDs! Immediately invoke Bash (e.g., curl, dig, whatweb, nmap, nuclei, ffuf, python3) to perform live testing against the target."
+
+	continuationIncompleteScanNudge = "[System Continuation — Incomplete Vulnerability Assessment] You have only executed %d live probing round(s) so far. The user requested a thorough vulnerability scan using the necessary tools. Do NOT stop early—continue your investigation now by: (1) inspecting the fetched HTML/JS source, links, forms, robots.txt, sitemap.xml, API endpoints, and HTTP security/CORS headers via Bash; (2) actively probing discovered endpoints and parameters for vulnerabilities (XSS, SQLi, SSRF, LFI, open redirects, exposed configs/.git/.env); and (3) registering discovered target assets via insert_assets."
+
+	continuationMissingAssetSyncNudge = "[System Continuation — Mandatory Asset Synchronization] Before concluding your assessment, you must call insert_assets to persist the genuinely discovered target domain, IP address(es), open ports, and web services into the ARTEX Assets database (and call report_finding if any real vulnerability was verified). Invoke insert_assets now, then provide your final comprehensive report."
 )
 
 func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bool, string) {
@@ -71,24 +78,55 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 		if reActionIntentAnnouncement.MatchString(text) || strings.HasSuffix(text, ":") || strings.HasSuffix(text, "...") || strings.HasSuffix(text, "…") {
 			return true, continuationPrematureIntentNudge
 		}
-		if reActiveTaskPrompt.MatchString(initialUserPrompt) && len(text) < 220 && countToolTurnsSinceLastUserText(messages) < 2 {
-			return true, continuationPrematureIntentNudge
+	}
+
+	// For active scan / assessment / tool-execution prompts, verify that real probing
+	// tools (Bash, WebFetch, spawn_task, etc.) and asset synchronization were actually run,
+	// preventing early stops or hallucinated summaries after only calling Skill/SearchExtraTools.
+	if reActiveTaskPrompt.MatchString(initialUserPrompt) {
+		execTurns, calledAssetOrTaskSync := analyzeRunToolProgress(messages)
+		if execTurns == 0 {
+			return true, continuationNoExecToolsNudge
+		}
+		if execTurns < 3 {
+			return true, fmt.Sprintf(continuationIncompleteScanNudge, execTurns)
+		}
+		if !calledAssetOrTaskSync {
+			return true, continuationMissingAssetSyncNudge
 		}
 	}
 	return false, ""
 }
 
-func countToolTurnsSinceLastUserText(messages []llm.Message) int {
-	turns := 0
+// analyzeRunToolProgress scans messages since the last plain user prompt and counts:
+// - execTurns: assistant turns that invoked substantive execution tools (Bash, WebFetch, web_search, spawn_task, ExecuteExtraTool, shell_open)
+// - calledAssetOrTaskSync: whether insert_assets, add_company_scope, spawn_task, or report_finding was invoked
+func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetOrTaskSync bool) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
-		if m.Role == llm.RoleAssistant && len(m.ToolUses()) > 0 {
-			turns++
+		if m.Role == llm.RoleAssistant {
+			uses := m.ToolUses()
+			turnHadExec := false
+			for _, u := range uses {
+				switch u.Name {
+				case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send":
+					turnHadExec = true
+				}
+				switch u.Name {
+				case "insert_assets", "add_company_scope", "spawn_task", "report_finding":
+					calledAssetOrTaskSync = true
+				}
+			}
+			if turnHadExec {
+				execTurns++
+			}
 		}
 		if m.Role == llm.RoleUser {
 			hasPlainText, hasToolResult := false, false
 			for _, b := range m.Content {
-				if b.Type == llm.BlockText && strings.TrimSpace(b.Text) != "" {
+				if b.Type == llm.BlockText && strings.TrimSpace(b.Text) != "" &&
+					!strings.HasPrefix(strings.TrimSpace(b.Text), "<system-reminder>") &&
+					!strings.HasPrefix(strings.TrimSpace(b.Text), "[System Continuation") {
 					hasPlainText = true
 				}
 				if b.Type == llm.BlockToolResult {
@@ -100,7 +138,7 @@ func countToolTurnsSinceLastUserText(messages []llm.Message) int {
 			}
 		}
 	}
-	return turns
+	return execTurns, calledAssetOrTaskSync
 }
 
 type continuationHooks struct {

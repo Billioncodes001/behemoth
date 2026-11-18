@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"regexp"
 	"strings"
@@ -324,75 +325,365 @@ func wrapToolSanitizingProvider(p llm.Provider) llm.Provider {
 	return &toolSanitizingProvider{inner: p}
 }
 
-func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
-	return func(yield func(llm.StreamEvent, error) bool) {
-		var (
-			buildingTool  bool
-			curToolName   string
-			curToolBuf    strings.Builder
-			sawNativeTool bool
-			textBuf       strings.Builder
-		)
-		flushTool := func() bool {
-			if !buildingTool {
-				return true
-			}
-			buildingTool = false
-			raw := curToolBuf.String()
-			curToolBuf.Reset()
-			schema := findToolSchema(curToolName, req.Tools)
-			sanitized := SanitizeToolInput(curToolName, json.RawMessage(raw), schema)
-			return yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(sanitized)}, nil)
-		}
+func isContinuationUserMsg(m llm.Message) bool {
+	if m.Role != llm.RoleUser {
+		return false
+	}
+	t := strings.TrimSpace(m.Text())
+	return strings.HasPrefix(t, "[System Continuation")
+}
 
-		for ev, err := range p.inner.Stream(ctx, req) {
-			if err != nil {
-				_ = flushTool()
-				yield(llm.StreamEvent{}, err)
-				return
+var primaryChatTools = map[string]bool{
+	"Bash":             true,
+	"WebFetch":         true,
+	"web_search":       true,
+	"Skill":            true,
+	"Read":             true,
+	"Write":            true,
+	"Edit":             true,
+	"LS":               true,
+	"Glob":             true,
+	"Grep":             true,
+	"insert_assets":    true,
+	"list_assets":      true,
+	"add_company_scope": true,
+	"list_companies":   true,
+	"report_finding":   true,
+	"list_findings":    true,
+	"spawn_task":       true,
+	"list_tasks":       true,
+	"get_task_graph":   true,
+	"list_task_findings": true,
+	"traffic_search":   true,
+	"traffic_get":      true,
+	"create_skill":     true,
+	"update_skill_file": true,
+	"SearchExtraTools": true,
+	"ExecuteExtraTool": true,
+}
+
+// mirrorToolBlocksToText ensures that OpenAI-compatible gateways whose ChatML
+// templates ignore assistant.tool_calls (when content is empty) or skip role:"tool"
+// messages still see every tool invocation and tool result inside assistant/user
+// text content, while preserving the native BlockToolUse and BlockToolResult blocks.
+func mirrorToolBlocksToText(msgs []llm.Message) []llm.Message {
+	out := make([]llm.Message, len(msgs))
+	for i, m := range msgs {
+		cp := llm.Message{
+			Role:    m.Role,
+			Content: make([]llm.ContentBlock, len(m.Content)),
+		}
+		copy(cp.Content, m.Content)
+
+		switch cp.Role {
+		case llm.RoleAssistant:
+			var toolDescs []string
+			hasText := false
+			for _, b := range cp.Content {
+				if b.Type == llm.BlockText && strings.TrimSpace(b.Text) != "" {
+					hasText = true
+				}
+				if b.Type == llm.BlockToolUse {
+					inStr := string(b.Input)
+					if len(inStr) > 300 {
+						inStr = inStr[:300] + "..."
+					}
+					toolDescs = append(toolDescs, fmt.Sprintf("[Called tool %s(%s)]", b.Name, inStr))
+				}
 			}
-			if ev.Type == llm.SEToolInputJSON && buildingTool {
-				curToolBuf.WriteString(ev.Text)
-				continue
-			}
-			if !flushTool() {
-				return
-			}
-			switch ev.Type {
-			case llm.SEToolUseStart:
-				sawNativeTool = true
-				buildingTool = true
-				curToolName = ev.ToolName
-				curToolBuf.Reset()
-			case llm.SETextDelta:
-				textBuf.WriteString(ev.Text)
-			case llm.SEMessageDelta:
-				if !sawNativeTool && textBuf.Len() > 0 {
-					_, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
-					if len(embedded) > 0 {
-						sawNativeTool = true
-						for _, tc := range embedded {
-							if !yield(llm.StreamEvent{Type: llm.SEToolUseStart, ToolID: tc.ID, ToolName: tc.Name}, nil) {
-								return
-							}
-							if !yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(tc.Input)}, nil) {
-								return
-							}
+			if len(toolDescs) > 0 {
+				summary := strings.Join(toolDescs, "\n")
+				if !hasText {
+					cp.Content = append([]llm.ContentBlock{llm.TextBlock(summary)}, cp.Content...)
+				} else {
+					for j := range cp.Content {
+						if cp.Content[j].Type == llm.BlockText {
+							cp.Content[j].Text = strings.TrimSpace(cp.Content[j].Text) + "\n" + summary
+							break
 						}
-						ev.StopReason = "tool_use"
 					}
 				}
 			}
-			if !yield(ev, nil) {
-				return
+		case llm.RoleUser:
+			var resTexts []string
+			for _, b := range cp.Content {
+				if b.Type == llm.BlockToolResult {
+					var sb strings.Builder
+					for _, cb := range b.Content {
+						if cb.Type == llm.BlockText && cb.Text != "" {
+							sb.WriteString(cb.Text)
+						}
+					}
+					r := strings.TrimSpace(sb.String())
+					if len(r) > 2500 {
+						r = r[:2500] + "\n...[truncated]..."
+					}
+					status := "OK"
+					if b.IsError {
+						status = "ERROR"
+					}
+					resTexts = append(resTexts, fmt.Sprintf("[Tool Result (%s, status=%s)]:\n%s", b.ToolUseID, status, r))
+				}
+			}
+			if len(resTexts) > 0 {
+				mirrorBlock := llm.TextBlock(strings.Join(resTexts, "\n\n") + "\n\nContinue the operation based on the tool results above: invoke the next required tool (e.g., Bash, insert_assets, report_finding), or if all probing and asset/finding registration are complete, write your comprehensive final Markdown security assessment report.")
+				cp.Content = append(cp.Content, mirrorBlock)
 			}
 		}
-		_ = flushTool()
+		out[i] = cp
+	}
+	return out
+}
+func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
+	if req.MaxTokens > 4096 {
+		req.MaxTokens = 4096
+	}
+	if len(req.Tools) > 28 {
+		filtered := make([]llm.ToolSchema, 0, len(primaryChatTools))
+		for _, t := range req.Tools {
+			if primaryChatTools[t.Name] || strings.HasPrefix(t.Name, "mcp__") {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) >= 10 {
+			req.Tools = filtered
+		}
+	}
+	if len(req.Messages) >= 2 {
+		cleaned := make([]llm.Message, 0, len(req.Messages))
+		for i := 0; i < len(req.Messages); i++ {
+			if i+1 < len(req.Messages) &&
+				req.Messages[i].Role == llm.RoleAssistant &&
+				len(req.Messages[i].ToolUses()) == 0 &&
+				isContinuationUserMsg(req.Messages[i+1]) {
+				if i+1 < len(req.Messages)-1 {
+					i++
+				}
+				continue
+			}
+			cleaned = append(cleaned, req.Messages[i])
+		}
+		req.Messages = cleaned
+	}
+	req.Messages = mirrorToolBlocksToText(req.Messages)
+	return req
+}
+
+func isMaxTokensContextError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return (strings.Contains(msg, "context_length_exceeded") || strings.Contains(msg, "exceeds the model's context size") || strings.Contains(msg, "maximum context length")) &&
+		(strings.Contains(msg, "max_tokens") || strings.Contains(msg, "completion"))
+}
+
+func hasDegenerateRepetition(s string) bool {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	var nonEmpty []string
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if len(t) >= 12 {
+			nonEmpty = append(nonEmpty, t)
+		}
+	}
+	n := len(nonEmpty)
+	if n >= 3 && nonEmpty[n-1] == nonEmpty[n-2] && nonEmpty[n-2] == nonEmpty[n-3] {
+		return true
+	}
+	return false
+}
+
+func dedupRepeatedLines(s string) string {
+	lines := strings.Split(s, "\n")
+	var out []string
+	var lastNonEmpty string
+	repeatCount := 0
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t != "" && t == lastNonEmpty {
+			repeatCount++
+			if repeatCount >= 1 {
+				continue
+			}
+		} else if t != "" {
+			lastNonEmpty = t
+			repeatCount = 0
+		}
+		out = append(out, l)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	req = prepareRequest(req)
+	isContTurn := len(req.Messages) > 0 && isContinuationUserMsg(req.Messages[len(req.Messages)-1])
+	return func(yield func(llm.StreamEvent, error) bool) {
+		for attempt := 0; attempt < 3; attempt++ {
+			var (
+				buildingTool  bool
+				curToolName   string
+				curToolBuf    strings.Builder
+				sawNativeTool bool
+				textBuf       strings.Builder
+				bufferedEvs   []llm.StreamEvent
+				buffering     = isContTurn && attempt < 2
+				emittedAny    bool
+				retryAttempt  bool
+			)
+			flushBuffered := func() bool {
+				if !buffering {
+					return true
+				}
+				buffering = false
+				for _, bev := range bufferedEvs {
+					emittedAny = true
+					if !yield(bev, nil) {
+						return false
+					}
+				}
+				bufferedEvs = nil
+				return true
+			}
+			flushTool := func() bool {
+				if !buildingTool {
+					return true
+				}
+				buildingTool = false
+				raw := curToolBuf.String()
+				curToolBuf.Reset()
+				schema := findToolSchema(curToolName, req.Tools)
+				sanitized := SanitizeToolInput(curToolName, json.RawMessage(raw), schema)
+				emittedAny = true
+				return yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(sanitized)}, nil)
+			}
+
+			streamCtx, cancelStream := context.WithCancel(ctx)
+			for ev, err := range p.inner.Stream(streamCtx, req) {
+				if err != nil {
+					cancelStream()
+					_ = flushTool()
+					if !emittedAny && attempt == 0 && isMaxTokensContextError(err) && req.MaxTokens > 1024 {
+						req.MaxTokens = 1024
+						retryAttempt = true
+						break
+					}
+					if retryAttempt {
+						break
+					}
+					yield(llm.StreamEvent{}, err)
+					return
+				}
+				if ev.Type == llm.SEToolInputJSON && buildingTool {
+					curToolBuf.WriteString(ev.Text)
+					continue
+				}
+				if !flushTool() {
+					cancelStream()
+					return
+				}
+				switch ev.Type {
+				case llm.SEToolUseStart:
+					sawNativeTool = true
+					if !flushBuffered() {
+						cancelStream()
+						return
+					}
+					buildingTool = true
+					curToolName = ev.ToolName
+					curToolBuf.Reset()
+				case llm.SETextDelta:
+					textBuf.WriteString(ev.Text)
+					if !sawNativeTool && hasDegenerateRepetition(textBuf.String()) {
+						cancelStream()
+						if attempt < 2 && len(req.Messages) > 0 {
+							lastIdx := len(req.Messages) - 1
+							req.Messages[lastIdx] = llm.UserText(req.Messages[lastIdx].Text() + "\n\nCRITICAL: Do not repeat sentences—invoke a tool (such as Bash or insert_assets) immediately, or output your final structured markdown report.")
+							retryAttempt = true
+						}
+						break
+					}
+					if buffering {
+						bufferedEvs = append(bufferedEvs, ev)
+						continue
+					}
+				case llm.SEThinkingDelta, llm.SEThinkingSignature, llm.SEMessageStart:
+					if buffering {
+						bufferedEvs = append(bufferedEvs, ev)
+						continue
+					}
+				case llm.SEMessageDelta:
+					if !sawNativeTool && textBuf.Len() > 0 {
+						_, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
+						if len(embedded) > 0 {
+							sawNativeTool = true
+							if !flushBuffered() {
+								cancelStream()
+								return
+							}
+							for _, tc := range embedded {
+								emittedAny = true
+								if !yield(llm.StreamEvent{Type: llm.SEToolUseStart, ToolID: tc.ID, ToolName: tc.Name}, nil) {
+									cancelStream()
+									return
+								}
+								if !yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(tc.Input)}, nil) {
+									cancelStream()
+									return
+								}
+							}
+							ev.StopReason = "tool_use"
+						}
+					}
+					if buffering && !sawNativeTool && attempt < 2 {
+						txt := strings.TrimSpace(textBuf.String())
+						// On a continuation turn (where Hooks.Stop already demanded a tool call),
+						// any response without a tool call that is not a comprehensive multi-section
+						// final report (>= 500 chars with markdown headings) must be retried so
+						// harness does not exit early while stopHookActive is true.
+						isFullReport := len(txt) >= 500 && (strings.Contains(txt, "## ") || strings.Contains(txt, "### "))
+						if !isFullReport {
+							cancelStream()
+							lastIdx := len(req.Messages) - 1
+							req.Messages[lastIdx] = llm.UserText(req.Messages[lastIdx].Text() + "\n\nCRITICAL: Do not respond with a status sentence—you MUST emit a tool_calls function call (such as Bash, insert_assets, or report_finding) right now.")
+							retryAttempt = true
+							break
+						}
+					}
+					if !flushBuffered() {
+						cancelStream()
+						return
+					}
+				}
+				if retryAttempt {
+					break
+				}
+				if ev.Type == llm.SETextDelta || ev.Type == llm.SEThinkingDelta || ev.Type == llm.SEToolUseStart {
+					emittedAny = true
+				}
+				if !yield(ev, nil) {
+					cancelStream()
+					return
+				}
+			}
+			cancelStream()
+			if retryAttempt {
+				continue
+			}
+			_ = flushBuffered()
+			_ = flushTool()
+			return
+		}
 	}
 }
 
 func (p *toolSanitizingProvider) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	req = prepareRequest(req)
 	msg, stop, usage, err := p.inner.Complete(ctx, req)
+	if err != nil && isMaxTokensContextError(err) && req.MaxTokens > 1024 {
+		req.MaxTokens = 1024
+		msg, stop, usage, err = p.inner.Complete(ctx, req)
+	}
 	if err != nil {
 		return msg, stop, usage, err
 	}
