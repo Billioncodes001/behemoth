@@ -356,10 +356,14 @@ var primaryChatTools = map[string]bool{
 	"list_task_findings": true,
 	"traffic_search":   true,
 	"traffic_get":      true,
-	"create_skill":     true,
-	"update_skill_file": true,
-	"SearchExtraTools": true,
-	"ExecuteExtraTool": true,
+	"create_skill":          true,
+	"update_skill_file":     true,
+	"generate_payload":      true,
+	"check_patch_feeds":     true,
+	"generate_vuln_exploit": true,
+	"search_ios_exploits":   true,
+	"SearchExtraTools":      true,
+	"ExecuteExtraTool":      true,
 }
 
 // mirrorToolBlocksToText ensures that OpenAI-compatible gateways whose ChatML

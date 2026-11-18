@@ -208,6 +208,7 @@ var builtinAgents = []builtinAgent{
 	{"auto", "Auto", "assistant", "Platform operator assistant: manages tasks (create/inspect/pause/hint) and assets using tools, and can create/modify skills, custom tools, and MCP servers.", nil, false, nil},
 	{"asset_mapper", "Asset Mapper", "assistant", "Asset mapping assistant: summarizes relationships among public, boundary, and internal assets, explaining inbound paths based on authentic asset data without unfounded inference.", nil, false, nil},
 	{"pentest", "Solo Pentest", "assistant", "Solo pentest agent: runs the full chain end-to-end from recon -> attack surface mapping -> deep exploitation -> verification -> wrap-up, planning, executing, and adversarially verifying on its own.", nil, true, intp(0)},
+	{"patch_watch", "Patch Watch", "assistant", "Autonomous Security Patch & Advisory Watcher: continuously monitors OS & tech-giant security feeds (Windows MSRC, macOS/iOS, CISA KEV, Chrome, Linux Kernel, RHEL, Ubuntu, Cisco, Fortinet, Palo Alto, AWS), analyzes patch diffs/CVEs, and automatically generates PoC exploits and client-side payloads.", nil, true, intp(0)},
 }
 
 // seedBuiltins inserts the fixed built-in agents and their variable catalog (idempotent).

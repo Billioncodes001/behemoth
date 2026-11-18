@@ -2862,6 +2862,7 @@
   "builtinAgent.auto.name": ["Auto", "Auto"],
   "builtinAgent.asset_mapper.name": ["资产梳理", "Asset mapper"],
   "builtinAgent.pentest.name": ["渗透测试", "Pentest"],
+  "builtinAgent.patch_watch.name": ["补丁监控 Agent", "Patch Watch"],
   "builtinAgent.retester.name": ["漏洞复测", "Finding retest"],
   "builtinAgent.reporter.name": ["报告撰写", "Report writing"],
   "builtinAgent.credential_processor.name": ["凭据整理", "Credential processing"],

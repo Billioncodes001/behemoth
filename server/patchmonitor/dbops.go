@@ -102,21 +102,48 @@ CREATE TABLE IF NOT EXISTS exploit_test_results (
 
 	_, _ = m.db.Exec(`
 INSERT INTO patch_sources (name, url, source_type, check_interval, enabled) VALUES
+    ('Microsoft Windows & Server (MSRC)', 'https://api.msrc.microsoft.com/cvrf/v3.0/updates', 'msrc', 1800, true),
+    ('Apple macOS & iOS Security Releases', 'https://support.apple.com/en-us/100100', 'apple', 3600, true),
+    ('CISA Known Exploited Vulnerabilities (KEV)', 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', 'cisa_kev', 1800, true),
+    ('Google Chrome & Android Security Releases', 'https://chromereleases.googleblog.com/feeds/posts/default?alt=rss', 'rss', 1800, true),
+    ('Linux Kernel CVE Announcements', 'https://lore.kernel.org/linux-cve-announce/new.atom', 'atom', 1800, true),
+    ('Ubuntu / Canonical USN Security Notices', 'https://ubuntu.com/security/notices/rss.xml', 'rss', 1800, true),
+    ('Red Hat Enterprise Linux (RHEL) Security API', 'https://access.redhat.com/hydra/rest/securitydata/cve.json?per_page=20', 'redhat', 3600, true),
+    ('Cisco PSIRT Security Advisories', 'https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml', 'rss', 3600, true),
+    ('Fortinet FortiGuard PSIRT Advisories', 'https://filestore.fortinet.com/fortiguard/rss/ir.xml', 'rss', 3600, true),
+    ('Palo Alto Networks Security Advisories', 'https://security.paloaltonetworks.com/rss.xml', 'rss', 3600, true),
+    ('AWS Security Bulletins', 'https://aws.amazon.com/security/security-bulletins/rss/feed/', 'rss', 3600, true),
+    ('VMware / Broadcom Security Advisories', 'https://support.broadcom.com/web/ecx/security-advisory', 'rss', 3600, true),
+    ('Cloudflare Security & Edge Advisories', 'https://www.cloudflarestatus.com/history.atom', 'atom', 3600, true),
     ('NVD Recent CVEs', 'https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=20', 'nvd', 3600, true),
     ('GitHub Security Advisories', 'https://api.github.com/advisories?per_page=20', 'github', 1800, true),
     ('Exploit-DB RSS Feed', 'https://www.exploit-db.com/rss.xml', 'exploitdb', 3600, true)
 ON CONFLICT (name) DO NOTHING`)
 
 	var count int
-	if err := m.db.QueryRow(`SELECT COUNT(*) FROM patch_vulnerabilities`).Scan(&count); err == nil && count == 0 {
+	if err := m.db.QueryRow(`SELECT COUNT(*) FROM patch_vulnerabilities`).Scan(&count); err == nil && count < 6 {
 		var srcID sql.NullInt64
 		_ = m.db.QueryRow(`SELECT id FROM patch_sources ORDER BY id LIMIT 1`).Scan(&srcID)
 		_, _ = m.db.Exec(`
 INSERT INTO patch_vulnerabilities (source_id, cve_id, title, description, severity, cvss_score, affected_versions, patched_version, status) VALUES
+    ($1, 'CVE-2024-38063', 'Windows TCP/IP IPv6 Remote Code Execution Vulnerability', 'Microsoft Windows TCP/IP stack integer underflow when processing IPv6 packets allows unauthenticated remote code execution with SYSTEM privileges.', 'critical', 9.8, 'Windows 10, Windows 11, Windows Server 2016/2019/2022', 'MSRC August Security Update', 'exploitable'),
+    ($1, 'CVE-2024-44308', 'Apple macOS & iOS JavaScriptCore Arbitrary Code Execution', 'Processing maliciously crafted web content in Safari/WebKit JavaScriptCore on macOS Sequoia and iOS 18 may lead to arbitrary code execution (actively exploited).', 'critical', 9.3, 'macOS Sequoia < 15.1.1, iOS < 18.1.1', 'macOS 15.1.1 / iOS 18.1.1', 'exploitable'),
     ($1, 'CVE-2024-4577', 'PHP CGI Argument Injection RCE', 'PHP CGI on Windows/XAMPP fails to properly sanitize Best-Fit character mappings, allowing unauthenticated remote code execution via query string arguments.', 'critical', 9.8, 'PHP 8.1.* < 8.1.29, 8.2.* < 8.2.20, 8.3.* < 8.3.8', '8.3.8 / 8.2.20 / 8.1.29', 'exploitable'),
     ($1, 'CVE-2024-6387', 'OpenSSH regreSSHion Unauthenticated RCE', 'Signal handler race condition in OpenSSH server (sshd) on glibc-based Linux systems allows unauthenticated remote code execution as root.', 'high', 8.1, 'OpenSSH 8.5p1 - 9.7p1', '9.8p1', 'active'),
     ($1, 'CVE-2024-3400', 'Palo Alto PAN-OS GlobalProtect Command Injection', 'Unauthenticated command injection in the GlobalProtect gateway telemetry feature of Palo Alto Networks PAN-OS software.', 'critical', 10.0, 'PAN-OS 10.2, 11.0, 11.1', '11.1.2-h3 / 11.0.4-h1', 'exploitable'),
-    ($1, 'CVE-2024-27198', 'JetBrains TeamCity Authentication Bypass RCE', 'Path traversal in JetBrains TeamCity web server allows complete authentication bypass and administrative token creation leading to RCE.', 'critical', 9.8, 'TeamCity < 2023.11.4', '2023.11.4', 'patched')`, srcID)
+    ($1, 'CVE-2024-27198', 'JetBrains TeamCity Authentication Bypass RCE', 'Path traversal in JetBrains TeamCity web server allows complete authentication bypass and administrative token creation leading to RCE.', 'critical', 9.8, 'TeamCity < 2023.11.4', '2023.11.4', 'patched')
+ON CONFLICT DO NOTHING`, srcID)
+	}
+
+	// Ensure baseline auto-generated exploits & payloads exist for initial vulnerabilities
+	var expCount int
+	if err := m.db.QueryRow(`SELECT COUNT(*) FROM generated_exploits`).Scan(&expCount); err == nil && expCount == 0 {
+		if vulns, verr := m.GetVulnerabilities("all", 10); verr == nil {
+			gen := NewExploitGenerator(m.db)
+			for _, v := range vulns {
+				m.autoGenerateExploitAndPayload(gen, v)
+			}
+		}
 	}
 }
 
@@ -189,16 +216,61 @@ func (m *Monitor) GetAllSources() ([]PatchSource, error) {
 
 // storeVulnerability inserts a new vulnerability (ignoring duplicates by CVE ID).
 func (m *Monitor) storeVulnerability(sourceID int64, v Vulnerability) error {
+	_, _ = m.storeVulnerabilityReturningID(sourceID, v)
+	return nil
+}
+
+// storeVulnerabilityReturningID inserts a new vulnerability if not already present by (cve_id, title)
+// and returns (id, true) when newly inserted.
+func (m *Monitor) storeVulnerabilityReturningID(sourceID int64, v Vulnerability) (int64, bool) {
 	status := v.Status
 	if status == "" || status == "new" {
 		status = "active"
 	}
-	_, err := m.db.Exec(`
-		INSERT INTO patch_vulnerabilities (source_id, cve_id, title, description, severity, cvss_score, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT DO NOTHING`,
-		sourceID, v.CVEID, v.Title, v.Description, v.Severity, v.CVSSScore, status)
-	return err
+	var existingID int64
+	if v.CVEID != "" {
+		if err := m.db.QueryRow(`SELECT id FROM patch_vulnerabilities WHERE cve_id = $1 LIMIT 1`, v.CVEID).Scan(&existingID); err == nil && existingID > 0 {
+			return existingID, false
+		}
+	} else {
+		if err := m.db.QueryRow(`SELECT id FROM patch_vulnerabilities WHERE title = $1 LIMIT 1`, v.Title).Scan(&existingID); err == nil && existingID > 0 {
+			return existingID, false
+		}
+	}
+	var id int64
+	err := m.db.QueryRow(`
+		INSERT INTO patch_vulnerabilities (source_id, cve_id, title, description, severity, cvss_score, affected_versions, patched_version, patch_url, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id`,
+		sourceID, v.CVEID, v.Title, v.Description, v.Severity, v.CVSSScore, v.AffectedVersions, v.PatchedVersion, v.PatchURL, status).Scan(&id)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+// AddSource adds a custom patch feed source to watch.
+func (m *Monitor) AddSource(s PatchSource) (int64, error) {
+	s.Name = strings.TrimSpace(s.Name)
+	s.URL = strings.TrimSpace(s.URL)
+	if s.SourceType == "" {
+		s.SourceType = "rss"
+	}
+	if s.CheckInterval <= 0 {
+		if s.CheckIntervalMinutes > 0 {
+			s.CheckInterval = s.CheckIntervalMinutes * 60
+		} else {
+			s.CheckInterval = 1800
+		}
+	}
+	var id int64
+	err := m.db.QueryRow(`
+		INSERT INTO patch_sources (name, url, source_type, check_interval, enabled)
+		VALUES ($1, $2, $3, $4, true)
+		ON CONFLICT (name) DO UPDATE SET url = EXCLUDED.url, source_type = EXCLUDED.source_type, check_interval = EXCLUDED.check_interval
+		RETURNING id`,
+		s.Name, s.URL, s.SourceType, s.CheckInterval).Scan(&id)
+	return id, err
 }
 
 // GetVulnerabilities returns vulnerabilities with optional filtering.

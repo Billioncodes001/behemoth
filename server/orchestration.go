@@ -65,7 +65,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 // orchestrationTools returns the cross-task tool set. Bound per-agent via the
 // tools table (default: no binding — opt-in for orchestration agents).
 func (s *Server) orchestrationTools() []actool.CoreTool {
-	return append([]actool.CoreTool{
+	out := append([]actool.CoreTool{
 		s.toolListTasks(),
 		s.toolListLLMProfiles(),
 		s.toolSpawnTask(),
@@ -81,6 +81,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
 	}, s.findingCaseTools()...)
+	return append(out, s.patchMonitorTools()...)
 }
 
 // --- schema helpers ---
@@ -625,7 +626,33 @@ func (s *Server) migrateReporterWorkflow() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v14_mcp_and_model_identity"
+	// Always ensure operational agents have their required tool & skill bindings on startup
+	_ = s.m.pg.AddAgentToToolBinding("auto", []string{
+		"insert_assets", "list_assets", "add_company_scope", "list_companies",
+		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
+		"spawn_task", "list_tasks", "pause_task", "get_task_graph", "list_task_findings",
+		"add_task_hint", "get_task_worker_trace", "list_task_worker_traces",
+		"search_task_worker_traces", "get_task_node_detail",
+		"create_skill", "update_skill_file", "create_custom_tool", "update_custom_tool", "create_mcp", "update_mcp",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+	})
+	_ = s.m.pg.AddAgentToToolBinding("pentest", []string{
+		"insert_assets", "list_assets", "add_company_scope", "list_companies",
+		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
+		"create_skill", "update_skill_file",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+	})
+	_ = s.m.pg.AddAgentToToolBinding("patch_watch", []string{
+		"insert_assets", "list_assets", "add_company_scope", "list_companies",
+		"report_finding", "list_findings",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"create_skill", "update_skill_file",
+	})
+	_ = s.m.pg.AddAgentToToolBinding("worker", []string{
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+	})
+
+	const flag = "tool_schema_refresh_v15_patch_watch_and_payloads"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -643,7 +670,7 @@ func (s *Server) refreshBuiltinToolSchemas() {
 			log.Printf("[tools] refresh %s desc failed: %v", sd.Key, err)
 		}
 	}
-	// Ensure Auto and Solo Pentest have full access to asset, finding, traffic, skill-creation, and orchestration tools
+	// Ensure Auto, Solo Pentest, Patch Watch, and Worker have full access to asset, finding, traffic, payload, and patch-monitor tools
 	_ = s.m.pg.AddAgentToToolBinding("auto", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
@@ -651,14 +678,25 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		"add_task_hint", "get_task_worker_trace", "list_task_worker_traces",
 		"search_task_worker_traces", "get_task_node_detail",
 		"create_skill", "update_skill_file", "create_custom_tool", "update_custom_tool", "create_mcp", "update_mcp",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
 	})
 	_ = s.m.pg.AddAgentToToolBinding("pentest", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
 		"create_skill", "update_skill_file",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
 	})
-	// Enable web_search and all 8 built-in skills for operational agents
-	_, _ = s.m.pg.Exec(`UPDATE agents SET web_search=true WHERE key IN ('auto','pentest','worker','planner','mainagent')`)
+	_ = s.m.pg.AddAgentToToolBinding("patch_watch", []string{
+		"insert_assets", "list_assets", "add_company_scope", "list_companies",
+		"report_finding", "list_findings",
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"create_skill", "update_skill_file",
+	})
+	_ = s.m.pg.AddAgentToToolBinding("worker", []string{
+		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+	})
+	// Enable web_search and all 20 built-in skills for operational agents
+	_, _ = s.m.pg.Exec(`UPDATE agents SET web_search=true WHERE key IN ('auto','pentest','patch_watch','worker','planner','mainagent')`)
 	allSkills := []string{
 		"api-recon", "auth-and-jwt-attacks", "network-and-service-pentest",
 		"osint-and-surface-mapping", "playwright-cli", "scopesentry",
@@ -669,7 +707,7 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		"privilege-escalation", "redteam-detection-surface-and-resilience",
 		"webshell-deploy",
 	}
-	for _, agKey := range []string{"auto", "pentest", "worker"} {
+	for _, agKey := range []string{"auto", "pentest", "patch_watch", "worker"} {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			for _, sk := range allSkills {
 				_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, a.ID, sk)

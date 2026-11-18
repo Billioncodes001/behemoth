@@ -109,11 +109,13 @@ func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetO
 			turnHadExec := false
 			for _, u := range uses {
 				switch u.Name {
-				case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send":
+				case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send",
+					"check_patch_feeds", "generate_vuln_exploit", "generate_payload", "search_ios_exploits":
 					turnHadExec = true
 				}
 				switch u.Name {
-				case "insert_assets", "add_company_scope", "spawn_task", "report_finding":
+				case "insert_assets", "add_company_scope", "spawn_task", "report_finding",
+					"generate_vuln_exploit", "generate_payload":
 					calledAssetOrTaskSync = true
 				}
 			}

@@ -87,20 +87,26 @@ type TestResult struct {
 
 // Monitor is the main patch monitoring orchestrator.
 type Monitor struct {
-	db         *sql.DB
-	httpClient *http.Client
-	mu         sync.RWMutex
-	running    bool
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	db                 *sql.DB
+	httpClient         *http.Client
+	mu                 sync.RWMutex
+	running            bool
+	autoPayload        bool
+	llmProfileID       *int64
+	lastConversationID int64
+	lastScanAt         *time.Time
+	onAgentWatch       func(profileID *int64, newVulns []Vulnerability, sourcesChecked int) int64
+	stopCh             chan struct{}
+	wg                 sync.WaitGroup
 }
 
 // NewMonitor creates a new PatchMonitor instance and ensures database tables & seeds exist.
 func NewMonitor(db *sql.DB) *Monitor {
 	m := &Monitor{
-		db: db,
+		db:          db,
+		autoPayload: true,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 		stopCh: make(chan struct{}),
 	}
@@ -109,4 +115,41 @@ func NewMonitor(db *sql.DB) *Monitor {
 	}
 	return m
 }
+
+// SetAgentWatchCallback wires the AI agent trigger invoked when a watch cycle runs.
+func (m *Monitor) SetAgentWatchCallback(fn func(profileID *int64, newVulns []Vulnerability, sourcesChecked int) int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onAgentWatch = fn
+}
+
+// Configure updates the monitor's LLM profile and auto-payload generation settings.
+func (m *Monitor) Configure(profileID *int64, autoPayload bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.llmProfileID = profileID
+	m.autoPayload = autoPayload
+}
+
+// AutoPayloadEnabled reports whether automatic exploit & payload generation is enabled.
+func (m *Monitor) AutoPayloadEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.autoPayload
+}
+
+// StatusSnapshot returns the current runtime state of the Patch Monitor.
+func (m *Monitor) StatusSnapshot() map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return map[string]interface{}{
+		"running":              m.running,
+		"auto_payload":         m.autoPayload,
+		"llm_profile_id":       m.llmProfileID,
+		"last_conversation_id": m.lastConversationID,
+		"last_scan_at":         m.lastScanAt,
+		"checked_at":           time.Now(),
+	}
+}
+
 

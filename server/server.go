@@ -342,6 +342,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Initialize Patch Monitor for security vulnerability tracking
 	if m.pg != nil {
 		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
+		s.patchMon.SetAgentWatchCallback(s.launchPatchWatchAgentRun)
 		log.Printf("[patchmon] Patch monitor initialized")
 	}
 
@@ -1389,12 +1390,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Patch Monitor & Offensive Security API
 	mux.HandleFunc("GET /api/patch-monitor/sources", s.handlePatchMonitorSources)
+	mux.HandleFunc("POST /api/patch-monitor/sources", s.handlePatchMonitorAddSource)
 	mux.HandleFunc("GET /api/patch-monitor/vulns", s.handlePatchMonitorVulns)
+	mux.HandleFunc("GET /api/patch-monitor/exploits", s.handlePatchMonitorExploits)
 	mux.HandleFunc("GET /api/patch-monitor/targets", s.handlePatchMonitorTargets)
 	mux.HandleFunc("POST /api/patch-monitor/targets", s.handlePatchMonitorAddTarget)
 	mux.HandleFunc("DELETE /api/patch-monitor/targets/{id}", s.handlePatchMonitorDeleteTarget)
 	mux.HandleFunc("POST /api/patch-monitor/start", s.handlePatchMonitorStart)
 	mux.HandleFunc("POST /api/patch-monitor/stop", s.handlePatchMonitorStop)
+	mux.HandleFunc("POST /api/patch-monitor/check-now", s.handlePatchMonitorCheckNow)
 	mux.HandleFunc("GET /api/patch-monitor/status", s.handlePatchMonitorStatus)
 	mux.HandleFunc("POST /api/patch-monitor/exploits/generate", s.handlePatchMonitorGenerateExploit)
 	mux.HandleFunc("POST /api/payloads/generate", s.handleGeneratePayload)

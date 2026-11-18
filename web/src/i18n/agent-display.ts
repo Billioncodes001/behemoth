@@ -11,6 +11,7 @@ const shippedNames: Record<string, string[]> = {
   auto: ["Auto"],
   asset_mapper: ["资产梳理", "Asset Mapper", "Asset mapping"],
   pentest: ["渗透测试", "Solo Pentest", "Penetration testing"],
+  patch_watch: ["补丁监控", "Patch Watch", "Security Watch"],
   retester: ["漏洞复测", "Finding Retester", "Finding retest"],
   reporter: ["报告撰写", "Report Writer", "Report writing"],
   credential_processor: ["凭据整理", "Credential Processor", "Credential processing"],
