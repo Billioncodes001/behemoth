@@ -792,6 +792,9 @@ func (m *Manager) WebSearch() (on bool, backend, braveKey, tavilyKey, proxy stri
 // its key (so a half-configured backend never silently drops the tool at session build).
 func (m *Manager) WebSearchOpts() agent.WebSearchOpts {
 	on, backend, braveKey, tavilyKey, proxy := m.WebSearch()
+	if strings.TrimSpace(proxy) == "" && strings.TrimSpace(m.GlobalProxy()) != "" {
+		proxy = m.ProxyAddr()
+	}
 	if on && backend == "brave-free" && strings.TrimSpace(braveKey) == "" {
 		on = false
 	}
@@ -1084,17 +1087,38 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 	}
 	if m.proxyPool != nil {
 		m.proxyPool.mu.Lock()
-		managed := len(m.proxyPool.entries) > 0
-		if !managed && raw != "" {
-			m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(raw), Enabled: true, Health: "healthy"}, RawURL: raw}}
-			m.proxyPool.active = "proxy-legacy"
-			m.proxyPoolConfigured.Store(true)
-			if err := m.applyActiveProxyLocked("proxy-legacy", "manual"); err != nil {
-				m.proxyPool.entries = nil
-				m.proxyPool.active = ""
-				m.proxyPool.mu.Unlock()
-				return err
+		managed := false
+		for _, e := range m.proxyPool.entries {
+			if e.ID != "proxy-legacy" && e.Enabled && strings.TrimSpace(e.RawURL) != "" {
+				managed = true
+				break
 			}
+		}
+		if !managed {
+			if raw != "" {
+				m.proxyPool.entries = []proxyPoolEntry{{ProxyPoolEntry: ProxyPoolEntry{ID: "proxy-legacy", URL: maskSecrets(raw), Enabled: true, Health: "healthy"}, RawURL: raw}}
+				m.proxyPool.active = "proxy-legacy"
+				m.proxyPoolConfigured.Store(true)
+				if err := m.applyActiveProxyLocked("proxy-legacy", "manual"); err != nil {
+					m.proxyPool.entries = nil
+					m.proxyPool.active = ""
+					m.proxyPool.mu.Unlock()
+					return err
+				}
+				m.proxyPool.mu.Unlock()
+				return nil
+			}
+			// raw == "" and no non-legacy enabled pool entries: clear legacy entry
+			kept := m.proxyPool.entries[:0]
+			for _, e := range m.proxyPool.entries {
+				if e.ID != "proxy-legacy" {
+					kept = append(kept, e)
+				}
+			}
+			m.proxyPool.entries = kept
+			m.proxyPool.active = ""
+			m.proxyPoolConfigured.Store(len(kept) > 0)
+			_ = m.applyActiveProxyLocked("", "manual")
 			m.proxyPool.mu.Unlock()
 			return nil
 		}

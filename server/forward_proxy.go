@@ -19,16 +19,17 @@ import (
 // dynamicForwardProxy is a credential-free, stable local proxy. Each request
 // resolves the current upstream, so pool switches do not rebuild agents or MCP.
 type dynamicForwardProxy struct {
-	ln      net.Listener
-	addr    string
-	current func() string
-	direct  func() bool
-	server  *http.Server
-	once    sync.Once
-	mu      sync.Mutex
-	conns   map[net.Conn]struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
+	ln          net.Listener
+	addr        string
+	current     func() string
+	direct      func() bool
+	outboundMod func(host string, hdr http.Header)
+	server      *http.Server
+	once        sync.Once
+	mu          sync.Mutex
+	conns       map[net.Conn]struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func newDynamicForwardProxy(current func() string) (*dynamicForwardProxy, error) {
@@ -120,6 +121,9 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 		if strings.EqualFold(k, "Proxy-Authorization") {
 			rr.Header.Del(k)
 		}
+	}
+	if p.outboundMod != nil {
+		p.outboundMod(rr.URL.Hostname(), rr.Header)
 	}
 	resp, err := tr.RoundTrip(rr)
 	if err != nil {

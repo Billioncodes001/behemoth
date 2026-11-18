@@ -269,6 +269,20 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.antiDetect = security.NewAntiDetect(stealthCfg)
 	s.backdoorDetector = security.NewBackdoorDetector()
+	if m.traffic != nil {
+		m.traffic.SetOutboundModifier(func(host string, hdr http.Header) {
+			if s.antiDetect != nil {
+				s.antiDetect.ApplyOutboundStealth(host, hdr)
+			}
+		})
+	}
+	if m.forwardProxy != nil {
+		m.forwardProxy.outboundMod = func(host string, hdr http.Header) {
+			if s.antiDetect != nil {
+				s.antiDetect.ApplyOutboundStealth(host, hdr)
+			}
+		}
+	}
 	log.Printf("[security] Security modules initialized: IOC blocklist (%d IPs), anti-detect (enabled=%v), backdoor detector", len(s.iocBlocklist.GetStats().BlockedIPs), stealthCfg.Enabled)
 
 	// Initialize Multi-Engine Web Search (Pentagi-inspired)
@@ -343,6 +357,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.pg != nil {
 		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
 		s.patchMon.SetAgentWatchCallback(s.launchPatchWatchAgentRun)
+		s.patchMon.SetProxyProvider(func() string {
+			if strings.TrimSpace(s.m.GlobalProxy()) != "" {
+				return s.m.ProxyAddr()
+			}
+			return ""
+		})
 		log.Printf("[patchmon] Patch monitor initialized")
 	}
 
@@ -382,7 +402,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Wire DB-stored prompt templates into the agents (new approach S3.3 / S5a). With no
 	// override row, agents keep their built-in defaults -- behavior is unchanged.
 	if m.pg != nil {
-		agent.OpsecEnabled = func() bool { return m.pg.GetBool(settingOpsecEnabled, false) }
+		agent.OpsecEnabled = func() bool { return m.pg.GetBool(settingOpsecEnabled, true) }
 		agent.PromptOverride = func(key string) (string, bool) {
 			a, err := m.pg.GetAgentByKey(key)
 			if err != nil || a == nil {
@@ -726,6 +746,9 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	s.llmCfg = cfg
 	s.llmOn = true
 	s.cfgMu.Unlock()
+	s.profMu.Lock()
+	s.profChatAgents = map[int64]*agent.ChatAgent{}
+	s.profMu.Unlock()
 	s.invalidateTaskAgents()
 
 	// wake the active task so a task created while idle starts exploring.
@@ -4359,6 +4382,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		if globalProxyValue == "" && (s.m.proxyPool == nil || len(s.m.proxyPoolEntries()) == 0) {
 			s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 		}
+		s.syncV1ToProxyPoolV2()
+		changed = true
 	}
 	if req.ProxyReconnectMax != nil || req.ProxyReconnectInterval != nil {
 		if err := s.setProxyReconnectSettings(req.ProxyReconnectMax, req.ProxyReconnectInterval); err != nil {
@@ -5137,6 +5162,9 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 	for _, px := range proxies {
 		rawURL := px.BuildProxyURL()
 		enabled := px.Active && px.Status != proxyv2.StatusDisabled
+		if cfg != nil && !cfg.Enabled && px.ID != "proxy-legacy" {
+			enabled = false
+		}
 		health := "unknown"
 		switch px.Status {
 		case proxyv2.StatusHealthy, proxyv2.StatusInUse:
@@ -5189,6 +5217,12 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 			healthInt = defaultProxyHealthInterval
 		}
 		_ = s.m.SetProxyPoolSettings(cfg.Enabled, interval, cfg.AutoRotateOnFailure || cfg.FailoverEnabled, strategy, threshold, cooldown, healthInt)
+	}
+	s.profMu.Lock()
+	s.profChatAgents = map[int64]*agent.ChatAgent{}
+	s.profMu.Unlock()
+	if s.chatAgent != nil {
+		s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	}
 }
 

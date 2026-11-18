@@ -198,11 +198,13 @@ func proxyEnv(proxyAddr, caCert string) []string {
 	if proxyAddr == "" {
 		return nil
 	}
+	noProxy := "localhost,127.0.0.1,::1,.local,169.254.169.254"
 	env := []string{
 		"HTTP_PROXY=" + proxyAddr, "HTTPS_PROXY=" + proxyAddr,
 		"http_proxy=" + proxyAddr, "https_proxy=" + proxyAddr,
 		"ALL_PROXY=" + proxyAddr, "all_proxy=" + proxyAddr, // socks5 egress: curl reads only this
-		"NODE_USE_ENV_PROXY=1", // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
+		"NO_PROXY=" + noProxy, "no_proxy=" + noProxy,       // internal/loopback traffic bypasses proxy
+		"NODE_USE_ENV_PROXY=1",                             // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
 	}
 	if caCert != "" {
 		env = append(env,

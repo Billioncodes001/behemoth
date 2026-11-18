@@ -287,7 +287,7 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 		return nil
 	}
 	for _, e := range entries {
-		if e.ID == active && e.Enabled && e.Health == "healthy" {
+		if e.ID == active && e.Enabled && e.RawURL != "" && e.Health != "unhealthy-cooling" {
 			return m.applyActiveProxyLocked(active, "manual")
 		}
 	}

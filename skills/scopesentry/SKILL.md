@@ -1,7 +1,7 @@
 ---
-
-## name: scopesentry-mcp
+name: scopesentry
 description: Manage the ScopeSentry security scanning platform (projects, tasks, templates, assets, nodes) via ScopeSentry MCP. Use when the user mentions ScopeSentry, MCP, API Key, scan tasks, or asset queries.
+---
 
 # ScopeSentry MCP User Guide
 

@@ -172,6 +172,13 @@ type Traffic struct {
 	upstream        atomic.Pointer[url.URL]
 	upstreamMu      sync.RWMutex
 	upstreamFailure func(error)
+	outboundMod     atomic.Value // optional func(host string, hdr http.Header)
+}
+
+// SetOutboundModifier registers an optional callback that can cloak headers or
+// pace outbound requests flowing through the MITM proxy.
+func (t *Traffic) SetOutboundModifier(fn func(host string, hdr http.Header)) {
+	t.outboundMod.Store(fn)
 }
 
 // Open initializes the traffic tree, blob store and SQLite index under dir.
@@ -420,6 +427,18 @@ func (s *sink) Requestheaders(f *mproxy.Flow) {
 	}
 	if f.Request.Header == nil {
 		f.Request.Header = make(http.Header)
+	}
+	if s.t != nil {
+		if fn, ok := s.t.outboundMod.Load().(func(string, http.Header)); ok && fn != nil {
+			host := ""
+			if f.Request.URL != nil {
+				host = f.Request.URL.Hostname()
+			}
+			if host == "" {
+				host = hostOnly(f.Request.Header.Get("Host"))
+			}
+			fn(host, f.Request.Header)
+		}
 	}
 	if _, present := f.Request.Header["User-Agent"]; !present {
 		f.Request.Header.Set("User-Agent", "")

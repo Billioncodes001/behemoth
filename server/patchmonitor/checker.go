@@ -25,7 +25,7 @@ func (m *Monitor) checkSource(src PatchSource) []Vulnerability {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json, application/xml, text/xml, application/atom+xml, text/html, */*")
 
-	resp, err := m.httpClient.Do(req)
+	resp, err := m.client().Do(req)
 	if err != nil {
 		m.updateSourceStatus(src.ID, "error", fmt.Sprintf("fetch error: %v", err))
 		return nil

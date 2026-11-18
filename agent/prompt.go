@@ -18,14 +18,15 @@ var PromptOverride func(agentKey string) (string, bool)
 var OpsecEnabled func() bool
 
 const opsecPromptBlock = `【OPSEC 准则（硬约束，仅次于授权范围和任务操作约束）】
+[OPSEC & Stealth Guidelines (Hard Constraint — second only to Authorization Scope & Task Constraints)]
 
-- 先复用已有流量、浏览器会话和已验证证据；能通过 traffic_search/traffic_get 或浏览器完成时，不要重复直接请求。
-- 所有目标交互必须经过平台配置的记录代理或浏览器工具，确保请求可追溯。
-- 不得使用裸 curl、urllib、requests 等工具的默认请求头直接访问目标。优先复用目标已有流量中的 User-Agent、Accept、Referer、Cookie 等请求特征；平台 HTTP 工具和采集模板的默认 UA 由系统随机策略提供，同一次请求的重定向、重试必须保持一致，明确配置的 UA 优先。
-- 不得使用 -k、--ignore-https-errors、verify=False 等方式绕过证书校验；平台代理 CA 已配置时应正常验证。
-- 不得批量并发、快速循环、无节制重试、端口横扫、目录爆破或大规模扫描；遇到限速、验证码、WAF 或异常响应时立即停止当前方向，不得通过更换 UA 继续当前方向。
-- OPSEC 不扩大授权范围；目标、主机、端口、路径或账号不在授权范围内时不得访问。
-- 请求和响应是否留痕由平台代理和浏览器负责；不要额外复制完整请求头、Cookie 或响应正文。`
+- Reuse existing recorded traffic, browser sessions, and verified evidence first; when traffic_search/traffic_get or existing responses already contain the answer, do not issue redundant requests to the target.
+- Route all external target interactions through the platform's configured egress/recording proxy (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY are pre-injected in Bash and WebFetch; internal localhost/127.0.0.1 traffic automatically bypasses the proxy via NO_PROXY). Never bypass the configured proxy to hit external targets directly.
+- Never expose default CLI/scanner User-Agents (such as bare curl, python-requests, Go-http-client, sqlmap, nuclei) or leak the ARTEX platform's own domain/IP in Referer, Origin, or callback headers. When running curl or custom scripts in Bash, pass a realistic browser User-Agent (-A "Mozilla/5.0 ...") or rely on the platform stealth proxy to cloak headers.
+- Do not use -k, --insecure, or verify=False when the platform proxy CA is already trusted in the environment.
+- Pace your requests to avoid triggering WAF/Cloudflare rate-limits or IP blocks: do NOT launch high-concurrency floods, tight unthrottled loops, or massive brute-force scans. Prefer targeted, low-noise probes with short delays between requests. If you encounter HTTP 429, CAPTCHA, or WAF blocks, immediately stop the noisy vector, invoke the Skill tool (e.g., "waf-and-filter-bypass" or "redteam-detection-surface-and-resilience"), and pivot to a stealthy approach.
+- Use the Skill tool proactively to load specialized offensive playbooks (e.g., "osint-and-surface-mapping", "api-recon", "web-vuln-exploitation", "auth-and-jwt-attacks", "waf-and-filter-bypass") and synchronize discovered assets/findings via insert_assets and report_finding.
+- If a tool call is blocked by an ARTEX platform interception rule (【ARTEX 平台管控·非目标防御】), recognize that it is an internal platform safety rule (not a target WAF) and immediately pivot to a safe, non-destructive method.`
 
 // Prompt-variable structs — fields mirror each agent's catalog (docs §5a) so a
 // user template referencing a catalog variable renders; referencing anything else

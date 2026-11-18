@@ -40,8 +40,9 @@ func DefaultStealthConfig() StealthConfig {
 // AntiDetect provides anti-detection capabilities
 type AntiDetect struct {
 	config       *StealthConfig
-	requestCount map[string]int      // per-IP request counting
+	requestCount map[string]int       // per-IP request counting
 	windowStart  map[string]time.Time // rate limit window
+	hostLastReq  map[string]time.Time // per-target-host outbound pacing
 	mu           sync.RWMutex
 }
 
@@ -51,7 +52,101 @@ func NewAntiDetect(cfg StealthConfig) *AntiDetect {
 		config:       &cfg,
 		requestCount: make(map[string]int),
 		windowStart:  make(map[string]time.Time),
+		hostLastReq:  make(map[string]time.Time),
 	}
+}
+
+// ApplyOutboundStealth cloaks scanner/CLI headers and paces rapid burst requests
+// to external target hosts so targets and WAFs (e.g. Cloudflare) are not flooded
+// or trivially fingerprinted by tool User-Agents.
+func (ad *AntiDetect) ApplyOutboundStealth(host string, hdr map[string][]string) {
+	if ad == nil {
+		return
+	}
+	cfg := ad.GetConfig()
+	if !cfg.Enabled {
+		return
+	}
+	h := host
+	if h == "" {
+		return
+	}
+	isLoopback := h == "localhost" || h == "127.0.0.1" || h == "::1"
+
+	// Strip headers that could leak proxy/platform identity
+	for _, k := range []string{"Via", "X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Artex-Agent"} {
+		delete(hdr, k)
+	}
+
+	// Cloak noisy CLI/scanner User-Agents when UA rotation is enabled
+	var curUA string
+	if uas, ok := hdr["User-Agent"]; ok && len(uas) > 0 {
+		curUA = uas[0]
+	}
+	if cfg.UserAgentRotation && isNoisyToolUA(curUA) {
+		stealthHdrs := ad.StealthHeaders(curUA)
+		if newUA := stealthHdrs["User-Agent"]; newUA != "" {
+			hdr["User-Agent"] = []string{newUA}
+		}
+		if cfg.HeaderRandomize {
+			if _, ok := hdr["Accept-Language"]; !ok {
+				if v := stealthHdrs["Accept-Language"]; v != "" {
+					hdr["Accept-Language"] = []string{v}
+				}
+			}
+		}
+	}
+
+	if isLoopback {
+		return
+	}
+
+	// Per-host outbound burst pacing & jitter
+	minGap := cfg.DelayBetweenReqs
+	if minGap <= 0 {
+		minGap = 120 * time.Millisecond
+	}
+	if minGap > 2*time.Second {
+		minGap = 2 * time.Second
+	}
+	ad.mu.Lock()
+	if ad.hostLastReq == nil {
+		ad.hostLastReq = make(map[string]time.Time)
+	}
+	last := ad.hostLastReq[h]
+	now := time.Now()
+	var wait time.Duration
+	if !last.IsZero() && now.Sub(last) < minGap {
+		wait = minGap - now.Sub(last)
+		if cfg.RequestJitter > 0 {
+			j := ad.GetJitter()
+			if j > 500*time.Millisecond {
+				j = 500 * time.Millisecond
+			}
+			wait += j
+		}
+	}
+	ad.hostLastReq[h] = now.Add(wait)
+	ad.mu.Unlock()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+func isNoisyToolUA(ua string) bool {
+	if ua == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"curl/", "python-requests/", "python-urllib", "Go-http-client/",
+		"Wget/", "python-httpx/", "aiohttp/", "libwww-perl", "nuclei",
+		"sqlmap", "nikto", "gobuster", "ffuf", "feroxbuster", "wfuzz",
+	} {
+		if len(ua) >= len(prefix) && ua[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 // GetConfig returns a copy of the current stealth configuration.

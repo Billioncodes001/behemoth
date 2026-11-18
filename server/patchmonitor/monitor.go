@@ -3,8 +3,11 @@
 package patchmonitor
 
 import (
+	"crypto/tls"
 	"database/sql"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -89,6 +92,7 @@ type TestResult struct {
 type Monitor struct {
 	db                 *sql.DB
 	httpClient         *http.Client
+	proxyAddrFn        func() string
 	mu                 sync.RWMutex
 	running            bool
 	autoPayload        bool
@@ -98,6 +102,35 @@ type Monitor struct {
 	onAgentWatch       func(profileID *int64, newVulns []Vulnerability, sourcesChecked int) int64
 	stopCh             chan struct{}
 	wg                 sync.WaitGroup
+}
+
+// SetProxyProvider configures an optional dynamic proxy URL provider so outbound
+// feed requests route through the active Global Proxy / Proxy Pool when enabled.
+func (m *Monitor) SetProxyProvider(fn func() string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.proxyAddrFn = fn
+}
+
+func (m *Monitor) client() *http.Client {
+	m.mu.RLock()
+	fn := m.proxyAddrFn
+	base := m.httpClient
+	m.mu.RUnlock()
+	if fn != nil {
+		if raw := strings.TrimSpace(fn()); raw != "" {
+			if u, err := url.Parse(raw); err == nil && u.Host != "" {
+				return &http.Client{
+					Timeout: 30 * time.Second,
+					Transport: &http.Transport{
+						Proxy:           http.ProxyURL(u),
+						TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+					},
+				}
+			}
+		}
+	}
+	return base
 }
 
 // NewMonitor creates a new PatchMonitor instance and ensures database tables & seeds exist.

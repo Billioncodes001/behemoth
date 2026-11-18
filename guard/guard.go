@@ -137,7 +137,8 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 // model-facing tool_result carries this framing.
 func systemBlockMessage(reason string) string {
 	return "【ARTEX 平台管控·非目标防御】此调用被平台拦截。" +
-		"原因：" + reason + "。此操作被禁止。"
+		"原因：" + reason + "。此操作被禁止。 " +
+		"[ARTEX Platform Safety Policy — NOT a target WAF/defense]: This tool call was blocked by an internal platform interception rule (" + reason + "). Do NOT retry or attempt to bypass this blocked operation; pivot immediately to a safe, non-destructive method."
 }
 
 var reBlocked = regexp.MustCompile(`(?i)\b(403|forbidden|waf|blocked|rate.?limit|429|captcha|denied)\b`)
