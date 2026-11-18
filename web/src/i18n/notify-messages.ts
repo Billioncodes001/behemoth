@@ -92,7 +92,28 @@ export const notifyMessages = {
   "notify.kinds.feishu": ["飞书", "Feishu"],
   "notify.kinds.wecom": ["企业微信", "WeCom"],
   "notify.kinds.webhook": ["通用 Webhook", "Generic webhook"],
+  "notify.kinds.whatsapp": ["WhatsApp", "WhatsApp"],
   "notify.kinds.email": ["邮件", "Email"],
+  "notify.fields.whatsappPhoneId": ["Phone Number ID", "Phone Number ID"],
+  "notify.fields.whatsappPhoneIdHelp": [
+    "Meta WhatsApp Cloud API 的发送号码 ID；使用自建网关（WAHA / Evolution API 等）时可留空",
+    "Meta WhatsApp Cloud API Phone Number ID; leave empty when using a custom gateway (WAHA / Evolution API, etc.).",
+  ],
+  "notify.fields.whatsappToken": ["Access Token / API Key", "Access Token / API Key"],
+  "notify.fields.whatsappTokenHelp": [
+    "Meta Cloud API 永久/临时访问令牌，或自建 WhatsApp 网关的 Bearer Token",
+    "Meta Cloud API access token or Bearer token for your WhatsApp gateway.",
+  ],
+  "notify.fields.whatsappTo": ["接收号码 (To)", "Recipient Phone Numbers (To)"],
+  "notify.fields.whatsappToHelp": [
+    "国际格式号码（如 +14155552671）或 JID，多个号码用逗号分隔",
+    "E.164 phone numbers (e.g. +14155552671) or WhatsApp JIDs, separated by commas.",
+  ],
+  "notify.fields.whatsappApiUrl": ["网关 / API 地址", "Gateway / API URL"],
+  "notify.fields.whatsappApiUrlHelp": [
+    "留空默认使用官方 https://graph.facebook.com/v21.0；也可填写自建网关地址",
+    "Leave empty for official https://graph.facebook.com/v21.0, or enter a custom WhatsApp gateway URL.",
+  ],
   "notify.fields.webhook": ["Webhook 地址", "Webhook URL"],
   "notify.fields.signingSecret": ["加签密钥", "Signing secret"],
   "notify.fields.dingtalkSecretHelp": [

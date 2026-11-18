@@ -65,7 +65,7 @@ func (s *SploitusSearchEngine) fallbackScrape(ctx context.Context, req Request, 
 		url.QueryEscape(req.Query+" exploit OR poc OR CVE"), min(maxRes, 10))
 	if ghReq, err := http.NewRequestWithContext(ctx, http.MethodGet, ghURL, nil); err == nil {
 		ghReq.Header.Set("Accept", "application/vnd.github+json")
-		ghReq.Header.Set("User-Agent", "ARTEX-Security-Scanner")
+		ghReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 		if ghResp, err := httpClient.Do(ghReq); err == nil {
 			body, _ := io.ReadAll(io.LimitReader(ghResp.Body, 1<<20))
 			ghResp.Body.Close()

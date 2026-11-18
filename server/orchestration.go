@@ -627,6 +627,11 @@ func (s *Server) migrateReporterWorkflow() {
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
 	// Always ensure operational agents have their required tool & skill bindings on startup
+	for _, t := range s.patchMonitorTools() {
+		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "patch_watch", "worker"})
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+	}
 	_ = s.m.pg.AddAgentToToolBinding("auto", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
@@ -635,24 +640,31 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		"search_task_worker_traces", "get_task_node_detail",
 		"create_skill", "update_skill_file", "create_custom_tool", "update_custom_tool", "create_mcp", "update_mcp",
 		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"multi_engine_search", "exploit_search",
 	})
 	_ = s.m.pg.AddAgentToToolBinding("pentest", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings", "traffic_search", "traffic_get", "traffic_blob",
 		"create_skill", "update_skill_file",
 		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"multi_engine_search", "exploit_search",
 	})
 	_ = s.m.pg.AddAgentToToolBinding("patch_watch", []string{
 		"insert_assets", "list_assets", "add_company_scope", "list_companies",
 		"report_finding", "list_findings",
 		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"multi_engine_search", "exploit_search",
 		"create_skill", "update_skill_file",
 	})
 	_ = s.m.pg.AddAgentToToolBinding("worker", []string{
 		"generate_payload", "check_patch_feeds", "generate_vuln_exploit", "search_ios_exploits",
+		"multi_engine_search", "exploit_search",
 	})
+	_ = s.m.pg.AddAgentToToolBinding("planner", []string{"multi_engine_search", "exploit_search"})
+	_ = s.m.pg.AddAgentToToolBinding("mainagent", []string{"multi_engine_search", "exploit_search"})
+	_ = s.m.pg.AddAgentToToolBinding("asset_mapper", []string{"multi_engine_search"})
 
-	const flag = "tool_schema_refresh_v15_patch_watch_and_payloads"
+	const flag = "tool_schema_refresh_v16_multi_search_and_whatsapp"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

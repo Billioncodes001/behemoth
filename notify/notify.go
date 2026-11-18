@@ -18,6 +18,7 @@ const (
 	KindWeCom    = "wecom"    // 企业微信群机器人
 	KindWebhook  = "webhook"  // 通用 Webhook：自定义方法/头/JSON 模板
 	KindTelegram = "telegram" // Telegram Bot API
+	KindWhatsApp = "whatsapp" // WhatsApp Business Cloud API / Gateway
 	KindEmail    = "email"    // SMTP 邮件
 )
 

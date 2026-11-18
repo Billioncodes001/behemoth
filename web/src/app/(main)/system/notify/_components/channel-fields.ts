@@ -10,6 +10,7 @@ export const KIND_LABEL: Record<string, string> = {
   wecom: "notify.kinds.wecom",
   webhook: "notify.kinds.webhook",
   telegram: "Telegram",
+  whatsapp: "WhatsApp",
   email: "notify.kinds.email",
 };
 
@@ -102,6 +103,36 @@ export const CHANNEL_FIELDS: Record<string, FieldDef[]> = {
       kind: "text",
       placeholder: "https://api.telegram.org",
       help: "notify.fields.apiUrlHelp",
+    },
+  ],
+  whatsapp: [
+    {
+      key: "phone_number_id",
+      label: "notify.fields.whatsappPhoneId",
+      kind: "text",
+      placeholder: "105928374651234",
+      help: "notify.fields.whatsappPhoneIdHelp",
+    },
+    {
+      key: "access_token",
+      label: "notify.fields.whatsappToken",
+      kind: "password",
+      placeholder: "EAAGm0PX4ZCps...",
+      help: "notify.fields.whatsappTokenHelp",
+    },
+    {
+      key: "to",
+      label: "notify.fields.whatsappTo",
+      kind: "list",
+      placeholder: "+14155552671",
+      help: "notify.fields.whatsappToHelp",
+    },
+    {
+      key: "api_url",
+      label: "notify.fields.whatsappApiUrl",
+      kind: "text",
+      placeholder: "https://graph.facebook.com/v21.0",
+      help: "notify.fields.whatsappApiUrlHelp",
     },
   ],
   email: [

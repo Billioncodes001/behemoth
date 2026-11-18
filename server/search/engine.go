@@ -5,9 +5,13 @@ package search
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -176,7 +180,28 @@ func NewRequest(query string, mode SearchMode) Request {
 	}
 }
 
+var proxyProviderFn atomic.Value // holds func() string
+
+// SetProxyProvider configures a dynamic proxy URL resolver so multi-engine searches
+// route through the active Global Proxy / Proxy Pool when enabled.
+func SetProxyProvider(fn func() string) {
+	proxyProviderFn.Store(fn)
+}
+
 // httpClient is a shared HTTP client for search requests.
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if v := proxyProviderFn.Load(); v != nil {
+				if fn, ok := v.(func() string); ok && fn != nil {
+					if raw := strings.TrimSpace(fn()); raw != "" {
+						return url.Parse(raw)
+					}
+				}
+			}
+			return http.ProxyFromEnvironment(req)
+		},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	},
 }

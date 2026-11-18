@@ -328,6 +328,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	searchCfg.Tavily.Enabled = searchCfg.Tavily.APIKey != ""
 	searchCfg.SearXNG.Enabled = searchCfg.SearXNG.URL != ""
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
+	search.SetProxyProvider(func() string {
+		if strings.TrimSpace(s.m.GlobalProxy()) != "" {
+			return s.m.ProxyAddr()
+		}
+		return ""
+	})
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)

@@ -14,6 +14,7 @@ import (
 	"github.com/Autumn-27/artex/agent/research"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/server/patchmonitor"
+	"github.com/Autumn-27/artex/server/search"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -364,6 +365,8 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 		s.toolCheckPatchFeeds(),
 		s.toolGenerateVulnExploit(),
 		s.toolSearchIOSExploits(),
+		s.toolMultiEngineSearch(),
+		s.toolExploitSearch(),
 	}
 }
 
@@ -492,6 +495,74 @@ func (s *Server) toolSearchIOSExploits() actool.CoreTool {
 			_ = json.Unmarshal(in, &a)
 			db := research.NewIOSExploitDatabase()
 			return jsonResult(db.Search(a.Query, a.IOSVersion))
+		})
+}
+
+func (s *Server) toolMultiEngineSearch() actool.CoreTool {
+	return roTool("multi_engine_search",
+		"Execute a multi-engine intelligence search across DuckDuckGo, Sploitus Exploit DB, Google CSE, Tavily AI, and SearXNG with automatic fallback chains.",
+		objSchema(map[string]any{
+			"query":       strParam("Search query (e.g. 'CVE-2024-3094 PoC', 'site:target.com ext:env')"),
+			"mode":        strParam("Search mode: general | exploit | technical | osint | news (default: general)"),
+			"engine":      strParam("Optional specific engine override: duckduckgo | sploitus | google | tavily | searxng"),
+			"site_filter": strParam("Optional domain filter (e.g. target.com)"),
+			"max_results": map[string]any{"type": "integer", "description": "Max results (default 10)"},
+		}, "query"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.searchOrchestrator == nil {
+				return actool.Errorf("multi-engine search orchestrator not initialized"), nil
+			}
+			var a struct {
+				Query      string `json:"query"`
+				Mode       string `json:"mode"`
+				Engine     string `json:"engine"`
+				SiteFilter string `json:"site_filter"`
+				MaxResults int    `json:"max_results"`
+			}
+			_ = json.Unmarshal(in, &a)
+			if strings.TrimSpace(a.Query) == "" {
+				return actool.Errorf("query is required"), nil
+			}
+			mode := search.SearchMode(strings.ToLower(strings.TrimSpace(a.Mode)))
+			if mode == "" {
+				mode = search.ModeGeneral
+			}
+			res, err := s.searchOrchestrator.Search(ctx, search.Request{
+				Query:      a.Query,
+				Mode:       mode,
+				Engine:     a.Engine,
+				SiteFilter: a.SiteFilter,
+				MaxResults: a.MaxResults,
+			})
+			if err != nil {
+				return actool.Errorf(fmt.Sprintf("search failed: %v", err)), nil
+			}
+			return jsonResult(res)
+		})
+}
+
+func (s *Server) toolExploitSearch() actool.CoreTool {
+	return roTool("exploit_search",
+		"Search Sploitus, GitHub PoC repositories, Exploit-DB, and NVD for public exploits and proof-of-concept code matching a CVE ID, product, or version.",
+		objSchema(map[string]any{
+			"query": strParam("CVE ID, product version, or vulnerability keyword (e.g. 'CVE-2024-6387', 'OpenSSH regreSSHion PoC')"),
+		}, "query"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.searchOrchestrator == nil {
+				return actool.Errorf("multi-engine search orchestrator not initialized"), nil
+			}
+			var a struct {
+				Query string `json:"query"`
+			}
+			_ = json.Unmarshal(in, &a)
+			if strings.TrimSpace(a.Query) == "" {
+				return actool.Errorf("query is required"), nil
+			}
+			res, err := s.searchOrchestrator.SearchExploit(ctx, a.Query)
+			if err != nil {
+				return actool.Errorf(fmt.Sprintf("exploit search failed: %v", err)), nil
+			}
+			return jsonResult(res)
 		})
 }
 

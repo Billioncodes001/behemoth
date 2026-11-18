@@ -413,6 +413,9 @@ func TestChannelValidateReportsMissingFields(t *testing.T) {
 		{KindWeCom, map[string]any{}, "Webhook"},
 		{KindTelegram, map[string]any{}, "Bot Token"},
 		{KindTelegram, map[string]any{"bot_token": "t"}, "Chat ID"},
+		{KindWhatsApp, map[string]any{}, "Access Token"},
+		{KindWhatsApp, map[string]any{"access_token": "t"}, "收件人"},
+		{KindWhatsApp, map[string]any{"access_token": "t", "to": "+1234567890"}, "Phone Number ID"},
 		{KindEmail, map[string]any{}, "SMTP"},
 		{KindEmail, map[string]any{"host": "h"}, "端口"},
 		{KindEmail, map[string]any{"host": "h", "port": 587, "from": "f"}, "收件人"},
@@ -465,8 +468,8 @@ func TestEmailSMTPErrorClassification(t *testing.T) {
 }
 
 func TestRegistryCoversAllKinds(t *testing.T) {
-	// 六个渠道缺一不可——少一个会在 UI 下拉里静默消失。
-	want := []string{KindDingTalk, KindEmail, KindFeishu, KindTelegram, KindWebhook, KindWeCom}
+	// 七个渠道缺一不可——少一个会在 UI 下拉里静默消失。
+	want := []string{KindDingTalk, KindEmail, KindFeishu, KindTelegram, KindWebhook, KindWeCom, KindWhatsApp}
 	got := Kinds()
 	if len(got) != len(want) {
 		t.Fatalf("渠道数量应为 %d，得到 %d: %v", len(want), len(got), got)

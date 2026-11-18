@@ -68,7 +68,7 @@ func (s *SearXNGSearchEngine) Handle(ctx context.Context, req Request) (Response
 	}
 
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", "ARTEX/1.0")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {

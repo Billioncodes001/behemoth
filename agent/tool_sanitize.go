@@ -367,6 +367,8 @@ var primaryChatTools = map[string]bool{
 	"check_patch_feeds":          true,
 	"generate_vuln_exploit":      true,
 	"search_ios_exploits":        true,
+	"multi_engine_search":        true,
+	"exploit_search":             true,
 	"SearchExtraTools":           true,
 	"ExecuteExtraTool":           true,
 	"get_graph":                  true,
