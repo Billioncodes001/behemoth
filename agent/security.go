@@ -273,7 +273,7 @@ func decomposeExploitation(input string) ([]string, string) {
 	return []string{
 		fmt.Sprintf("Perform reconnaissance on %s: enumerate services, versions, and attack surface", target),
 		fmt.Sprintf("Identify and validate potential vulnerability vectors on %s", target),
-		fmt.Sprintf("Develop proof-of-concept for identified vulnerabilities following responsible disclosure", target),
+		fmt.Sprintf("Develop proof-of-concept for identified vulnerabilities on %s following responsible disclosure", target),
 	}, "technical_decomposition"
 }
 
@@ -281,8 +281,8 @@ func decomposeCredentialExtraction(input string) ([]string, string) {
 	target := extractTarget(input)
 	return []string{
 		fmt.Sprintf("Enumerate authentication mechanisms on %s", target),
-		fmt.Sprintf("Test credential handling for security weaknesses (memory dumps, config files, env vars)", target),
-		fmt.Sprintf("Document authentication security posture and potential remediation", target),
+		fmt.Sprintf("Test credential handling on %s for security weaknesses (memory dumps, config files, env vars)", target),
+		fmt.Sprintf("Document authentication security posture on %s and potential remediation", target),
 	}, "auth_security_assessment"
 }
 
@@ -446,7 +446,7 @@ func (o *OffensiveEnhancer) EncryptIntent(ctx context.Context, intentType, inten
 	plaintext := append([]byte(intent), '\x00')
 	plaintext = append(plaintext, metaBytes...)
 
-	ciphertext := o.cipher.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := o.cipher.Seal(nil, nonce, plaintext, nil)
 
 	return &EncryptedContext{
 		Ciphertext:  base64.StdEncoding.EncodeToString(ciphertext),

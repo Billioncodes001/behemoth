@@ -50,7 +50,9 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 
 	var tbuf strings.Builder
 	var tkind string
+	var turnEnded bool
 	flush := func() {
+		turnEnded = false
 		if tbuf.Len() == 0 {
 			return
 		}
@@ -66,6 +68,10 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		if text == "" {
 			return
 		}
+		if turnEnded && tbuf.Len() > 0 {
+			flush()
+		}
+		turnEnded = false
 		if tkind != "" && tkind != kind {
 			flush()
 		}
@@ -118,7 +124,10 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 			// live cumulative token usage (per model turn). Emitted as a non-rendered
 			// "usage" activity carrying only the token fields; the UI uses the latest
 			// one for a running session's live token count. Don't flush() here — the
-			// buffered final-answer text must stay for the KindResult de-dup.
+			// buffered final-answer text must stay for the KindResult de-dup; mark
+			// turnEnded so if a continuation turn starts emitting text, the prior turn's
+			// text flushes cleanly as its own activity.
+			turnEnded = true
 			if ev.Usage != nil {
 				u := *ev.Usage
 				lastUsage = &u

@@ -88,12 +88,24 @@ func guardPanic(t actool.CoreTool) actool.CoreTool { return &guardedTool{CoreToo
 
 type guardedTool struct{ actool.CoreTool }
 
+// AcceptsRawInput opts into raw input so guardedTool can sanitize parameter aliases
+// and XML tags before running schema validation.
+func (g *guardedTool) AcceptsRawInput() bool { return true }
+
+type rawInputAcceptor interface{ AcceptsRawInput() bool }
+
 func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (res actool.Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[tools] %s panic: %v\n%s", g.Name(), r, debug.Stack())
-			res, err = actool.Errorf(fmt.Sprintf("工具 %s 内部错误：%v（本次调用已失败，可换个参数或改用别的工具）", g.Name(), r)), nil
+			res, err = actool.Errorf(fmt.Sprintf("Tool %s internal error: %v (call failed; try adjusted parameters or an alternative tool)", g.Name(), r)), nil
 		}
 	}()
-	return g.CoreTool.Call(ctx, in, tc)
+	cleanIn := SanitizeToolInput(g.Name(), in, g.InputSchema())
+	if ra, ok := g.CoreTool.(rawInputAcceptor); !ok || !ra.AcceptsRawInput() {
+		if verr := actool.ValidateInput(g.InputSchema(), cleanIn); verr != nil {
+			return actool.Errorf("Error: invalid tool input: " + verr.Error()), nil
+		}
+	}
+	return g.CoreTool.Call(ctx, cleanIn, tc)
 }

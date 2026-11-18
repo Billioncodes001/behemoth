@@ -65,6 +65,12 @@ export const messages = {
   "nav.logs": ["日志", "Logs"],
   "nav.settings": ["系统配置", "Settings"],
   "nav.proxy-pool": ["代理池", "Proxy pool"],
+  "nav.patch-monitor": ["补丁监控", "Patch Monitor"],
+  "patchMonitor.title": ["安全补丁监控", "Patch Monitor"],
+  "patchMonitor.subtitle": [
+    "自动漏洞跟踪、补丁分析与利用生成",
+    "Security vulnerability tracking with auto-exploit generation",
+  ],
   "nav.search": ["多引擎搜索", "Multi-Engine Search"],
   "proxyPool.title": ["代理池 v2", "Proxy Pool v2"],
   "proxyPool.subtitle": [

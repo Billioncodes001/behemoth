@@ -40,8 +40,9 @@ func meterSkillTool(t actool.CoreTool, pg *db.DB, reg *skill.Registry, agentKey 
 }
 
 func (m *meteredSkill) Call(ctx context.Context, input json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
-	m.record(input)
-	return m.CoreTool.Call(ctx, input, tc)
+	cleanIn := agent.SanitizeToolInput(m.Name(), input, m.InputSchema())
+	m.record(cleanIn)
+	return m.CoreTool.Call(ctx, cleanIn, tc)
 }
 
 // record appends the ledger row. Best-effort by design: a metering failure must

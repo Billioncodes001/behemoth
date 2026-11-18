@@ -663,12 +663,22 @@ func (s *Server) refreshBuiltinToolSchemas() {
 		"api-recon", "auth-and-jwt-attacks", "network-and-service-pentest",
 		"osint-and-surface-mapping", "playwright-cli", "scopesentry",
 		"waf-and-filter-bypass", "web-vuln-exploitation",
+		"anti-forensics", "cc-skimmer", "cookie-exfil",
+		"credential-harvesting", "crypto-swap", "data-exfiltration",
+		"lateral-movement", "persistence-setup", "post-exploitation-recon",
+		"privilege-escalation", "redteam-detection-surface-and-resilience",
+		"webshell-deploy",
 	}
 	for _, agKey := range []string{"auto", "pentest", "worker"} {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			for _, sk := range allSkills {
 				_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, a.ID, sk)
 			}
+		}
+	}
+	if autoAgent, err := s.m.pg.GetAgentByKey("auto"); err == nil && autoAgent != nil {
+		if tmpl, ok := agent.BuiltinPromptSeeds()["auto"]; ok {
+			_, _ = s.m.pg.Exec(`UPDATE agent_prompts SET body=$2 WHERE agent_id=$1 AND version=1`, autoAgent.ID, tmpl)
 		}
 	}
 	// Disable unconfigured HTTP MCP placeholders (e.g. ScopeSentry with empty URL) so they don't log connection errors on every turn

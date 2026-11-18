@@ -35,6 +35,7 @@ import (
 	"github.com/Autumn-27/artex/server/security"
 	"github.com/Autumn-27/artex/server/targets"
 	"github.com/Autumn-27/artex/server/tools"
+	"github.com/Autumn-27/artex/server/patchmonitor"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
@@ -178,6 +179,9 @@ type Server struct {
 
 	// Browser automation (Pentagi-inspired)
 	browserScraper *browser.Scraper
+
+	// Patch Monitor for security vulnerability tracking and auto-exploit generation
+	patchMon *patchmonitor.Monitor
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -334,6 +338,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.browserScraper = browser.NewScraper(browserCfg)
 	log.Printf("[browser] Browser automation initialized (local: %v, scraper: %v)",
 		browserCfg.UseLocalChrome, browserCfg.ScraperURL != "")
+
+	// Initialize Patch Monitor for security vulnerability tracking
+	if m.pg != nil {
+		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
+		log.Printf("[patchmon] Patch monitor initialized")
+	}
 
 	s.initSideQuestions()
 	if m.pg != nil {
@@ -1376,6 +1386,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/browser/content", s.handleBrowserContent)
 	mux.HandleFunc("GET /api/v2/browser/config", s.handleGetBrowserConfig)
 	mux.HandleFunc("POST /api/v2/browser/config", s.handleBrowserConfig)
+
+	// Patch Monitor & Offensive Security API
+	mux.HandleFunc("GET /api/patch-monitor/sources", s.handlePatchMonitorSources)
+	mux.HandleFunc("GET /api/patch-monitor/vulns", s.handlePatchMonitorVulns)
+	mux.HandleFunc("GET /api/patch-monitor/targets", s.handlePatchMonitorTargets)
+	mux.HandleFunc("POST /api/patch-monitor/targets", s.handlePatchMonitorAddTarget)
+	mux.HandleFunc("DELETE /api/patch-monitor/targets/{id}", s.handlePatchMonitorDeleteTarget)
+	mux.HandleFunc("POST /api/patch-monitor/start", s.handlePatchMonitorStart)
+	mux.HandleFunc("POST /api/patch-monitor/stop", s.handlePatchMonitorStop)
+	mux.HandleFunc("GET /api/patch-monitor/status", s.handlePatchMonitorStatus)
+	mux.HandleFunc("POST /api/patch-monitor/exploits/generate", s.handlePatchMonitorGenerateExploit)
+	mux.HandleFunc("POST /api/payloads/generate", s.handleGeneratePayload)
+	mux.HandleFunc("GET /api/research/ios-exploits", s.handleIOSExploits)
 
 	// /api/* goes through Security -> CORS + JWT; everything else is served by the embedded
 	// frontend (no JWT required; the optional Basic Auth gate wraps both). With the

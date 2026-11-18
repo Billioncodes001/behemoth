@@ -1700,3 +1700,95 @@ CREATE TABLE IF NOT EXISTS mcp_audit_log (
     duration_ms BIGINT NOT NULL DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =====================================================================
+-- Patch Monitor (Security Patch Monitoring & Vulnerability Management)
+--   patch_sources           Patch feed configurations (NVD, GitHub Advisories, etc.)
+--   patch_vulnerabilities   Discovered vulnerabilities (CVE ID, severity, CVSS score)
+--   generated_exploits      Auto-generated PoC / exploit code
+--   exploit_targets         Testable targets (local/remote)
+--   exploit_test_results    Exploit test execution records
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS patch_sources (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    url VARCHAR(2048) NOT NULL,
+    source_type VARCHAR(50) DEFAULT 'custom',
+    check_interval INT DEFAULT 3600,
+    enabled BOOLEAN DEFAULT true,
+    last_check TIMESTAMPTZ,
+    last_hash VARCHAR(64),
+    last_status VARCHAR(50),
+    error_message TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS patch_vulnerabilities (
+    id SERIAL PRIMARY KEY,
+    source_id INTEGER REFERENCES patch_sources(id) ON DELETE SET NULL,
+    cve_id VARCHAR(64),
+    title TEXT NOT NULL,
+    description TEXT,
+    severity VARCHAR(20) DEFAULT 'medium',
+    cvss_score DECIMAL(3,1),
+    affected_software VARCHAR(512),
+    affected_versions VARCHAR(512),
+    patched_version VARCHAR(512),
+    patch_url VARCHAR(2048),
+    diff_summary TEXT,
+    raw_data JSONB,
+    status VARCHAR(30) DEFAULT 'active',
+    discovered_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_patch_vulns_cve ON patch_vulnerabilities(cve_id);
+CREATE INDEX IF NOT EXISTS idx_patch_vulns_severity ON patch_vulnerabilities(severity);
+CREATE INDEX IF NOT EXISTS idx_patch_vulns_status ON patch_vulnerabilities(status);
+
+CREATE TABLE IF NOT EXISTS generated_exploits (
+    id SERIAL PRIMARY KEY,
+    vuln_id INTEGER REFERENCES patch_vulnerabilities(id) ON DELETE CASCADE,
+    cve_id VARCHAR(64),
+    exploit_type VARCHAR(50) DEFAULT 'poc',
+    code TEXT NOT NULL DEFAULT '',
+    exploit_code TEXT NOT NULL DEFAULT '',
+    language VARCHAR(50) DEFAULT 'python',
+    type VARCHAR(50) DEFAULT 'poc',
+    confidence FLOAT DEFAULT 0.5,
+    code_hash VARCHAR(64),
+    success_rate FLOAT DEFAULT 0,
+    status VARCHAR(30) DEFAULT 'draft',
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_gen_exploits_vuln ON generated_exploits(vuln_id);
+
+CREATE TABLE IF NOT EXISTS exploit_targets (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    target_type VARCHAR(50) NOT NULL DEFAULT 'web',
+    target_value VARCHAR(512) NOT NULL DEFAULT '',
+    host VARCHAR(512) NOT NULL DEFAULT '',
+    port INT NOT NULL DEFAULT 80,
+    service VARCHAR(255),
+    version VARCHAR(255),
+    os_type VARCHAR(128),
+    notes TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'online',
+    enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS exploit_test_results (
+    id SERIAL PRIMARY KEY,
+    exploit_id INTEGER REFERENCES generated_exploits(id) ON DELETE CASCADE,
+    target_id INTEGER REFERENCES exploit_targets(id) ON DELETE SET NULL,
+    target_name VARCHAR(255),
+    output TEXT,
+    success BOOLEAN,
+    error_code VARCHAR(50),
+    duration_ms BIGINT DEFAULT 0,
+    tested_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_test_results_exploit ON exploit_test_results(exploit_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_target ON exploit_test_results(target_id);

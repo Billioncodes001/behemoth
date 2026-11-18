@@ -290,6 +290,16 @@ func (r *Registry) loadBuiltinTools() {
 		{Name: "wmi-exec", Type: ToolLOLBAS, Category: CatLateral, Description: "Execute via WMI (LOLBAS)", ParseMode: ParsePositional, Tags: []string{"lateral", "lolbas", "wmi"}, Platform: "windows"},
 		{Name: "shell-netcat", Type: ToolLOLBAS, Category: CatLateral, Description: "Reverse shell via netcat", ParseMode: ParseNone, Tags: []string{"lateral", "lolbas"}, Platform: "any"},
 		{Name: "priv-whoami", Type: ToolLOLBAS, Category: CatPrivEsc, Description: "Check current privileges", ParseMode: ParseNormalize, Tags: []string{"privesc", "lolbas"}, Platform: "windows"},
+		// --- Patch Monitor / Payload Generation Tools ---
+		{Name: "generate-cc-skimmer", Type: ToolScript, Category: CatExfil, Description: "Generate credit card skimmer payload for web injection", ParseMode: ParseNone, Tags: []string{"exfil", "web", "payload"}, Platform: "any"},
+		{Name: "generate-cookie-exfil", Type: ToolScript, Category: CatExfil, Description: "Generate cookie/session exfiltration payload", ParseMode: ParseNone, Tags: []string{"exfil", "web", "payload"}, Platform: "any"},
+		{Name: "generate-crypto-swap", Type: ToolScript, Category: CatExfil, Description: "Generate cryptocurrency address swap DOM payload", ParseMode: ParseNone, Tags: []string{"crypto", "web", "payload"}, Platform: "any"},
+		{Name: "generate-clipboard-hijack", Type: ToolScript, Category: CatCredential, Description: "Generate clipboard crypto hijack payload", ParseMode: ParseNone, Tags: []string{"crypto", "credential", "payload"}, Platform: "any"},
+		{Name: "generate-screen-exfil", Type: ToolScript, Category: CatExfil, Description: "Generate screen capture exfiltration payload", ParseMode: ParseNone, Tags: []string{"exfil", "surveillance", "payload"}, Platform: "any"},
+		{Name: "patch-monitor-start", Type: ToolScript, Category: CatRecon, Description: "Start security patch monitoring background service", ParseMode: ParseNone, Tags: []string{"recon", "monitoring", "vuln"}, Platform: "any"},
+		{Name: "patch-monitor-status", Type: ToolScript, Category: CatDiscovery, Description: "Get patch monitor status and vulnerability counts", ParseMode: ParseJSON, Tags: []string{"discovery", "monitoring", "vuln"}, Platform: "any"},
+		{Name: "exploit-generate", Type: ToolScript, Category: CatExecution, Description: "Generate PoC exploit from vulnerability data", ParseMode: ParseJSON, Tags: []string{"execution", "exploit", "vuln"}, Platform: "any"},
+		{Name: "exploit-test", Type: ToolScript, Category: CatExecution, Description: "Test exploit against configured target", ParseMode: ParseJSON, Tags: []string{"execution", "testing", "exploit"}, Platform: "any"},
 	}
 	for _, t := range builtins {
 		t.Enabled = true
