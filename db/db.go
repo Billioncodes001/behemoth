@@ -285,6 +285,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV4(); err != nil {
+		return fmt.Errorf("seed intercept rules v4: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -606,4 +609,35 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v3", "done")
+}
+
+// seedDefaultInterceptRulesV4 eliminates false-positive built-in interception rules
+// that blocked legitimate reconnaissance wordlists (e.g. "admin/delete" inside
+// directory enumeration scripts) and workspace file cleanup under /root/myartex/data,
+// while keeping host OS destructive-command protections strictly enabled.
+func (d *DB) seedDefaultInterceptRulesV4() error {
+	if v, _, _ := d.GetSetting("intercept_default_rules_v4"); v == "done" {
+		return nil
+	}
+	// 1) Disable overly broad URL-substring rules by default (like Data exfiltration pipe in V2)
+	//    and tighten their regexes to require actual HTTP URLs if manually re-enabled.
+	_, _ = d.Exec(`UPDATE intercept_rules SET enabled = false, pattern = $2 WHERE name = $1`,
+		"[Built-in] Deletion endpoint path",
+		`(?i)https?://[^\s"']+/(?:(?:delete|remove|unlink|erase|destroy)[-\w]*|del)(?:[/?#"'\s]|$)`,
+	)
+	_, _ = d.Exec(`UPDATE intercept_rules SET enabled = false, pattern = $2 WHERE name = $1`,
+		"[Built-in] Bulk clear / wipe endpoint path",
+		`(?i)https?://[^\s"']+/(?:clear|wipe|flush|purge|truncate|drop|destroy|factory[-_]reset|reset[-_]all)(?:[/?#"'\s]|$)`,
+	)
+	// 2) Scope rm rules to critical host root directories so cleaning up recon subdirectories
+	//    inside the session workspace (including /root/myartex/data/sessions/...) is allowed.
+	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
+		"[Built-in] Recursive forced deletion rm -rf",
+		`(?i)\brm\b[^|\n;&]{0,80}(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|--recursive|--no-preserve-root)\s+["']?(?:/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/home|/root)(?:["'\s/;\n]|$)`,
+	)
+	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
+		"[Built-in] Delete critical system directories",
+		`\brm\b[^"'\n]{0,60}["'\s](?:/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)(?:["'\s;\n]|$)`,
+	)
+	return d.SetSetting("intercept_default_rules_v4", "done")
 }

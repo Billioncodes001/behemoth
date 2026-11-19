@@ -81,7 +81,8 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
 	}, s.findingCaseTools()...)
-	return append(out, s.patchMonitorTools()...)
+	out = append(out, s.patchMonitorTools()...)
+	return append(out, s.arsenalTools()...)
 }
 
 // --- schema helpers ---
@@ -560,6 +561,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedFindingTrafficTools() // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	s.seedFindingCaseTools()
+	s.seedArsenalAndAutoUpgradeV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -1159,6 +1161,38 @@ func (s *Server) seedAutoDefaultBindings() {
 	if err := s.m.pg.AddAgentToToolBinding("auto", keys); err != nil {
 		log.Printf("[auto] 默认绑定失败: %v", err)
 		return
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedArsenalAndAutoUpgradeV1 binds the Security Arsenal, Browser Inspector,
+// Multi-Engine/Exploit Search, and Interception Rule Governance tools to operational
+// agents, removes the default 20-minute wall-clock cap on Auto so comprehensive scans
+// run to completion, and refreshes Auto's prompt to maximize tool & scanner utilization.
+func (s *Server) seedArsenalAndAutoUpgradeV1() {
+	const flag = "arsenal_and_auto_upgrade_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	arsenalKeys := []string{
+		"list_security_arsenal", "run_security_tool", "browser_inspect",
+		"multi_engine_search", "exploit_search",
+	}
+	for _, agKey := range []string{"auto", "pentest", "worker"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, arsenalKeys)
+	}
+	_ = s.m.pg.AddAgentToToolBinding("auto", []string{"list_intercept_rules", "update_intercept_rule"})
+
+	// Lift legacy 1200s (20m) default wall-clock cap on auto so full-site assessments finish cleanly.
+	_, _ = s.m.pg.Exec(`UPDATE agents SET run_seconds = 0 WHERE key = 'auto' AND run_seconds = 1200`)
+
+	// Refresh Auto's system prompt to the tool-maximizing v2 prompt.
+	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
+		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
+			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+			}
+		}
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }

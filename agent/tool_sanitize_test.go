@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"strings"
 	"testing"
 
@@ -213,5 +214,70 @@ func TestPayloadGenerators_NoFormatErrors(t *testing.T) {
 	scr, err := payloads.GenerateScreenExfil(payloads.ScreenExfilConfig{ExfilURL: "https://example.com/screen"})
 	if err != nil || strings.Contains(scr, "%!") {
 		t.Fatalf("ScreenExfil error or fmt artifact: err=%v payload=%s", err, scr)
+	}
+}
+
+type mockInterleavedStreamProvider struct{}
+
+func (mockInterleavedStreamProvider) Complete(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	return llm.Message{}, "", llm.Usage{}, nil
+}
+
+func (mockInterleavedStreamProvider) Stream(_ context.Context, _ llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		evs := []llm.StreamEvent{
+			{Type: llm.SETextDelta, Text: "Let me check input r"},
+			{Type: llm.SEToolUseStart, ToolID: "call_bash_1", ToolName: "Bash"},
+			{Type: llm.SETextDelta, Text: "eflection."},
+			{Type: llm.SEThinkingDelta, Text: "\n"},
+			{Type: llm.SEToolInputJSON, Text: `{"command":`},
+			{Type: llm.SEToolInputJSON, Text: `"curl -sI https://example.com"}`},
+			{Type: llm.SEMessageDelta, StopReason: "tool_use"},
+			{Type: llm.SEMessageStop},
+		}
+		for _, ev := range evs {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	}
+}
+
+func TestStreamInterleavedThinkingDoesNotCorruptToolInput(t *testing.T) {
+	prov := wrapToolSanitizingProvider(mockInterleavedStreamProvider{})
+	acc := llm.NewAccumulator()
+	var order []llm.StreamEventType
+	for ev, err := range prov.Stream(context.Background(), llm.CompletionRequest{
+		Messages: []llm.Message{llm.UserText("probe headers")},
+		Tools: []llm.ToolSchema{{
+			Name: "Bash",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"command": map[string]any{"type": "string"}},
+				"required":   []any{"command"},
+			},
+		}},
+	}) {
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		order = append(order, ev.Type)
+		acc.Add(ev)
+	}
+	msg := acc.Message()
+	uses := msg.ToolUses()
+	if len(uses) != 1 {
+		t.Fatalf("expected 1 tool_use block, got %d (order=%v)", len(uses), order)
+	}
+	if string(uses[0].Input) != `{"command":"curl -sI https://example.com"}` {
+		t.Fatalf("expected intact Bash command JSON, got %s", string(uses[0].Input))
+	}
+	// Verify SEToolUseStart is immediately followed by SEToolInputJSON with no intervening events.
+	for i := 0; i < len(order); i++ {
+		if order[i] == llm.SEToolUseStart {
+			if i+1 >= len(order) || order[i+1] != llm.SEToolInputJSON {
+				t.Fatalf("SEToolUseStart must be immediately followed by SEToolInputJSON, got order=%v", order)
+			}
+		}
 	}
 }

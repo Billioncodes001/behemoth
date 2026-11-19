@@ -21,12 +21,37 @@ type ConvTokenSummary struct {
 // result-row token usage (0 for conversations with no completed run yet).
 func (d *DB) ConversationTokenSummaries() ([]ConvTokenSummary, error) {
 	rows, err := d.Query(`
+WITH res AS (
+	SELECT conversation_id,
+	       COALESCE(MAX(id), 0) AS last_res_id,
+	       COALESCE(SUM(input_tokens), 0) AS in_tok,
+	       COALESCE(SUM(output_tokens), 0) AS out_tok,
+	       COALESCE(SUM(cache_read_tokens), 0) AS cr_tok,
+	       COALESCE(SUM(cache_write_tokens), 0) AS cw_tok
+	FROM conversation_activities
+	WHERE kind = 'result'
+	GROUP BY conversation_id
+),
+live AS (
+	SELECT DISTINCT ON (ca.conversation_id)
+	       ca.conversation_id,
+	       COALESCE(ca.input_tokens, 0) AS in_tok,
+	       COALESCE(ca.output_tokens, 0) AS out_tok,
+	       COALESCE(ca.cache_read_tokens, 0) AS cr_tok,
+	       COALESCE(ca.cache_write_tokens, 0) AS cw_tok
+	FROM conversation_activities ca
+	LEFT JOIN res r ON r.conversation_id = ca.conversation_id
+	WHERE ca.kind = 'usage' AND ca.id > COALESCE(r.last_res_id, 0)
+	ORDER BY ca.conversation_id, ca.id DESC
+)
 SELECT c.llm_profile_id, c.created_at::text,
-       COALESCE(sum(ca.input_tokens),0), COALESCE(sum(ca.output_tokens),0),
-       COALESCE(sum(ca.cache_read_tokens),0), COALESCE(sum(ca.cache_write_tokens),0)
+       COALESCE(r.in_tok, 0) + COALESCE(l.in_tok, 0),
+       COALESCE(r.out_tok, 0) + COALESCE(l.out_tok, 0),
+       COALESCE(r.cr_tok, 0) + COALESCE(l.cr_tok, 0),
+       COALESCE(r.cw_tok, 0) + COALESCE(l.cw_tok, 0)
 FROM conversations c
-LEFT JOIN conversation_activities ca ON ca.conversation_id = c.id AND ca.kind = 'result'
-GROUP BY c.id`)
+LEFT JOIN res r ON r.conversation_id = c.id
+LEFT JOIN live l ON l.conversation_id = c.id`)
 	if err != nil {
 		return nil, err
 	}

@@ -52,7 +52,36 @@ func cgroupMemory() (uint64, uint64, bool) {
 		cur, ce = readUint(filepath.Join(dir, "memory.usage_in_bytes")); max, me = readUint(filepath.Join(dir, "memory.limit_in_bytes"))
 		if ce == nil && me == nil && max < ^uint64(0)/2 { return cur, max, true }
 	}
+	if used, total, ok := hostMemoryUsage(); ok {
+		return used, total, false
+	}
 	return 0, 0, false
+}
+
+func hostMemoryUsage() (uint64, uint64, bool) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, false
+	}
+	var total, avail uint64
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "MemTotal:":
+			n, _ := strconv.ParseUint(f[1], 10, 64)
+			total = n * 1024
+		case "MemAvailable:":
+			n, _ := strconv.ParseUint(f[1], 10, 64)
+			avail = n * 1024
+		}
+	}
+	if total == 0 || avail > total {
+		return 0, 0, false
+	}
+	return total - avail, total, true
 }
 
 func hostMemoryTotal() uint64 { b, err := os.ReadFile("/proc/meminfo"); if err != nil { return 0 }; for _, line := range strings.Split(string(b), "\n") { f := strings.Fields(line); if len(f) >= 2 && f[0] == "MemTotal:" { n, _ := strconv.ParseUint(f[1], 10, 64); return n * 1024 } }; return 0 }

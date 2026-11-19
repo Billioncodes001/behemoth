@@ -416,6 +416,12 @@ func (s *ExplorationStore) RecordFinding(ctx context.Context, in RecordFindingIn
 
 func (d *DB) FindingIDByNodeID(nodeID int64) (id int64, err error) {
 	err = d.QueryRow(`SELECT id FROM findings WHERE node_id=$1`, nodeID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = d.QueryRow(`SELECT id FROM findings WHERE id=$1`, nodeID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+	}
 	return
 }
 
@@ -458,9 +464,15 @@ func (d *DB) SetFindingReportVersionByNodeID(ctx context.Context, nodeID int64, 
 		var id int64
 		if err := tx.QueryRow(`SELECT id FROM findings WHERE node_id=$1`, nodeID).Scan(&id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil
+				if err2 := tx.QueryRow(`SELECT id FROM findings WHERE id=$1`, nodeID).Scan(&id); err2 != nil {
+					if errors.Is(err2, sql.ErrNoRows) {
+						return nil
+					}
+					return err2
+				}
+			} else {
+				return err
 			}
-			return err
 		}
 		if err := LockFindingEvidenceTx(tx, id, version); err != nil {
 			return err

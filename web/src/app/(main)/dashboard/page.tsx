@@ -379,7 +379,7 @@ export default function DashboardPage() {
   const defaultProfileId = activeProfile ? Number(activeProfile.id) : null;
 
   // 数据源开关：旧版 = activity（task.tokens + 会话），新版 = llm_usage 计量账本。
-  const [tokenVersion, setTokenVersion] = React.useState<"old" | "new">("old");
+  const [tokenVersion, setTokenVersion] = React.useState<"old" | "new">("new");
   // selected profile tab: "all" = 全部; number = specific profile id
   const [tokenTab, setTokenTab] = React.useState<number | null | "all">("all");
   // day range for the daily bar chart
@@ -448,7 +448,10 @@ export default function DashboardPage() {
     return m;
   }, [usageStats, profileIdByName, defaultProfileId]);
 
-  const tokenByProfile = tokenVersion === "new" ? tokenByProfileNew : tokenByProfileOld;
+  const tokenByProfile =
+    tokenVersion === "new" && (tokenByProfileNew.size > 0 || tokenByProfileOld.size === 0)
+      ? tokenByProfileNew
+      : tokenByProfileOld;
 
   const displayedTokens = React.useMemo(() => {
     if (tokenTab === "all") {

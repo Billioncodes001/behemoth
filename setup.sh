@@ -55,15 +55,14 @@ install_system_deps() {
     build-essential pkg-config openssl ufw nginx certbot python3-certbot-nginx \
     postgresql postgresql-contrib \
     python3 python3-pip python3-venv \
-    nmap sqlmap nikto dirb whatweb hydra dnsutils whois netcat-openbsd socat ripgrep \
+    nmap sqlmap dnsutils whois netcat-openbsd socat ripgrep || true
+
+  apt-get install -y -qq \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 2>/dev/null || \
   apt-get install -y -qq \
-    curl wget git jq unzip zip tar tmux ca-certificates gnupg lsb-release \
-    build-essential pkg-config openssl ufw nginx certbot python3-certbot-nginx \
-    postgresql postgresql-contrib \
-    python3 python3-pip python3-venv \
-    nmap sqlmap dnsutils whois netcat-openbsd socat ripgrep || true
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 2>/dev/null || true
 
   if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
     info "Installing headless Chrome/Chromium for Browser Automation & Report Screenshots..."
@@ -72,7 +71,87 @@ install_system_deps() {
       apt-get install -y -qq /tmp/google-chrome.deb && rm -f /tmp/google-chrome.deb || true
     }
   fi
+  install_security_arsenal
   ok "System dependencies and security tools installed"
+}
+
+install_gh_release_tool() {
+  local repo="$1" bin_name="$2" install_as="${3:-$2}"
+  local target_dir="/usr/local/bin"
+  if [[ ! -w "$target_dir" ]]; then
+    target_dir="$HOME/.local/bin"
+    mkdir -p "$target_dir"
+  fi
+  if command -v "$install_as" >/dev/null 2>&1; then
+    return 0
+  fi
+  local os_tag="linux" arch_tag="amd64"
+  case "$(uname -s)" in
+    Darwin|darwin) os_tag="macOS" ;;
+  esac
+  case "$(uname -m)" in
+    aarch64|arm64) arch_tag="arm64" ;;
+  esac
+  local dl_url
+  dl_url="$(python3 - "$repo" "$os_tag" "$arch_tag" <<'PY' 2>/dev/null || true
+import json, sys, urllib.request
+repo, os_tag, arch_tag = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
+os_aliases = ["macos", "darwin"] if os_tag == "macos" else ["linux"]
+arch_aliases = ["arm64", "aarch64"] if arch_tag == "arm64" else ["amd64", "x86_64", "64-bit"]
+req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers={"User-Agent": "artex-setup"})
+with urllib.request.urlopen(req, timeout=15) as r:
+    data = json.load(r)
+for a in data.get("assets", []):
+    n = a.get("name", "").lower()
+    if n.endswith((".zip", ".tar.gz", ".tgz")) and "checksum" not in n:
+        if any(o in n for o in os_aliases) and any(ar in n for ar in arch_aliases):
+            print(a["browser_download_url"])
+            break
+PY
+)"
+  [[ -n "$dl_url" ]] || return 0
+  local tmpd
+  tmpd="$(mktemp -d)"
+  if curl -fsSL "$dl_url" -o "$tmpd/pkg" 2>/dev/null; then
+    if [[ "$dl_url" == *.zip ]]; then
+      unzip -qo "$tmpd/pkg" -d "$tmpd" >/dev/null 2>&1 || true
+    else
+      tar -xzf "$tmpd/pkg" -C "$tmpd" >/dev/null 2>&1 || true
+    fi
+    local found_bin
+    found_bin="$(find "$tmpd" -type f -name "$bin_name" | head -n 1)"
+    if [[ -n "$found_bin" && -f "$found_bin" ]]; then
+      install -m 0755 "$found_bin" "${target_dir}/${install_as}"
+      ok "Installed ${install_as} -> ${target_dir}/${install_as}"
+    fi
+  fi
+  rm -rf "$tmpd"
+}
+
+install_security_arsenal() {
+  info "Provisioning offensive & reconnaissance CLI arsenal..."
+  if command -v apt-get >/dev/null 2>&1 && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y -qq 2>/dev/null || true
+    for pkg in nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f dnsutils whois netcat-openbsd socat ripgrep jq python3-requests python3-bs4 python3-dnspython; do
+      apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
+    done
+  fi
+
+  install_gh_release_tool "projectdiscovery/nuclei" "nuclei" "nuclei"
+  install_gh_release_tool "projectdiscovery/subfinder" "subfinder" "subfinder"
+  install_gh_release_tool "projectdiscovery/httpx" "httpx" "httpx-pd"
+  if [[ -x /usr/local/bin/httpx-pd ]] && ! command -v httpx >/dev/null 2>&1; then
+    ln -sf /usr/local/bin/httpx-pd /usr/local/bin/httpx 2>/dev/null || true
+  fi
+  install_gh_release_tool "projectdiscovery/dnsx" "dnsx" "dnsx"
+  install_gh_release_tool "ffuf/ffuf" "ffuf" "ffuf"
+  install_gh_release_tool "OJ/gobuster" "gobuster" "gobuster"
+
+  if command -v nuclei >/dev/null 2>&1; then
+    nuclei -update-templates -silent >/dev/null 2>&1 &
+  fi
+  ok "Security CLI arsenal ready"
 }
 
 install_golang() {
@@ -303,6 +382,10 @@ case "$CMD" in
     git pull --ff-only || warn "git pull skipped or non-fast-forward"
     build_artex
     ./start.sh all
+    ;;
+  arsenal)
+    banner
+    install_security_arsenal
     ;;
   reset-password)
     banner

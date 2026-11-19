@@ -254,6 +254,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.toolCatalog = tools.NewCatalog()
 	s.toolExecutor = tools.NewToolExecutor(s.toolCatalog, tools.DefaultExecutorConfig())
 	s.targets = make(map[string]targets.TargetConnector)
+	s.ensureDefaultWordlists()
 	log.Printf("[tools] Tool catalog loaded: %d tools", s.toolCatalog.Count())
 
 	// Initialize Security Modules (IOC blocking, anti-detect, backdoor detection)

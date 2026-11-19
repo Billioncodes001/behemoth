@@ -26,6 +26,8 @@ func (s *Server) platformTools() []actool.CoreTool {
 		s.toolCreateMCP(),
 		s.toolUpdateMCP(),
 		s.toolDeleteAssetsByHost(),
+		s.toolListInterceptRules(),
+		s.toolUpdateInterceptRule(),
 	}
 }
 
@@ -35,6 +37,7 @@ var platformToolKeys = []string{
 	"create_custom_tool", "update_custom_tool",
 	"create_mcp", "update_mcp",
 	"delete_assets_by_host",
+	"list_intercept_rules", "update_intercept_rule",
 }
 
 // ---- assets ----
@@ -352,5 +355,95 @@ func (s *Server) toolUpdateMCP() actool.CoreTool {
 				return actool.Errorf(err.Error()), nil
 			}
 			return actool.Text(fmt.Sprintf("mcp updated: id=%d", a.ID)), nil
+		})
+}
+
+var immutableHostSafetyRuleNames = map[string]bool{
+	"[Built-in] Format disk mkfs":                  true,
+	"[Built-in] Overwrite disk device dd":          true,
+	"[Built-in] Fork bomb":                         true,
+	"[Built-in] Shutdown / Reboot":                 true,
+	"[Built-in] Kill all processes":                true,
+	"[Built-in] Disk wipe shred / wipe":            true,
+	"[Built-in] Flush firewall rules":              true,
+	"[Built-in] Destructive system commands":       true,
+	"[Built-in] Delete critical system directories": true,
+}
+
+func (s *Server) toolListInterceptRules() actool.CoreTool {
+	return roTool("list_intercept_rules",
+		"List all platform tool-interception rules (IDs, enabled status, regex pattern, action, and message) so you can inspect why a tool call was blocked.",
+		objSchema(map[string]any{}),
+		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
+			if s.m == nil || s.m.pg == nil {
+				return actool.Errorf("database not initialized"), nil
+			}
+			rules, err := s.m.pg.ListInterceptRules()
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(rules)
+		})
+}
+
+func (s *Server) toolUpdateInterceptRule() actool.CoreTool {
+	return wrTool("update_intercept_rule",
+		"Enable, disable, or refine a non-host-OS platform interception rule (by id) when an overly broad rule blocks authorized security reconnaissance or testing. Critical host-OS destructive rules (mkfs, dd, fork bomb, shutdown, system wipe) remain protected.",
+		objSchema(map[string]any{
+			"id":      map[string]any{"type": "integer", "description": "Interception rule ID from list_intercept_rules"},
+			"enabled": map[string]any{"type": "boolean", "description": "Set false to disable or true to enable the rule"},
+			"pattern": strParam("Optional updated regex/string pattern (omit to keep current pattern)"),
+			"action":  strParam("Optional updated action: allow | ask | deny (omit to keep current action)"),
+		}, "id", "enabled"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.m == nil || s.m.pg == nil {
+				return actool.Errorf("database not initialized"), nil
+			}
+			var a struct {
+				ID      int64  `json:"id"`
+				Enabled *bool  `json:"enabled"`
+				Pattern string `json:"pattern"`
+				Action  string `json:"action"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil || a.ID <= 0 || a.Enabled == nil {
+				return actool.Errorf("id and enabled (boolean) are required"), nil
+			}
+			rules, err := s.m.pg.ListInterceptRules()
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			var target *db.InterceptRule
+			for i := range rules {
+				if rules[i].ID == a.ID {
+					target = &rules[i]
+					break
+				}
+			}
+			if target == nil {
+				return actool.Errorf(fmt.Sprintf("intercept rule %d not found", a.ID)), nil
+			}
+			if immutableHostSafetyRuleNames[target.Name] && (!*a.Enabled || strings.TrimSpace(a.Pattern) != "" || (a.Action != "" && a.Action != "deny")) {
+				return actool.Errorf(fmt.Sprintf("rule %q protects the ARTEX host operating system and cannot be weakened", target.Name)), nil
+			}
+			newPattern := target.Pattern
+			if strings.TrimSpace(a.Pattern) != "" {
+				newPattern = a.Pattern
+			}
+			newAction := target.Action
+			if act := strings.TrimSpace(a.Action); act == "allow" || act == "ask" || act == "deny" {
+				newAction = act
+			}
+			updated, err := s.m.pg.UpdateInterceptRule(
+				target.ID, target.Name, target.MatchTarget, target.MatchType,
+				newPattern, newAction, target.Message, target.Priority, *a.Enabled,
+				target.TimeoutEnabled, target.TimeoutSeconds, target.TimeoutAction,
+			)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if s.m.interceptor != nil {
+				s.m.interceptor.Invalidate()
+			}
+			return jsonResult(updated)
 		})
 }

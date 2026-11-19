@@ -514,6 +514,14 @@ var primaryChatTools = map[string]bool{
 	"search_ios_exploits":        true,
 	"multi_engine_search":        true,
 	"exploit_search":             true,
+	"list_security_arsenal":      true,
+	"run_security_tool":          true,
+	"browser_inspect":            true,
+	"list_intercept_rules":       true,
+	"update_intercept_rule":      true,
+	"update_finding_report":      true,
+	"get_finding_traffic":        true,
+	"TodoWrite":                  true,
 	"SearchExtraTools":           true,
 	"ExecuteExtraTool":           true,
 	"get_graph":                  true,
@@ -645,7 +653,7 @@ func isResumeTokenLimitMsg(m llm.Message) bool {
 }
 
 func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
-	if len(req.Tools) > 120 {
+	if len(req.Tools) > 128 {
 		filtered := make([]llm.ToolSchema, 0, len(primaryChatTools))
 		for _, t := range req.Tools {
 			if primaryChatTools[t.Name] || strings.HasPrefix(t.Name, "mcp__") {
@@ -832,6 +840,7 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 		for attempt := 0; attempt < 3; attempt++ {
 			var (
 				buildingTool  bool
+				curToolID     string
 				curToolName   string
 				curToolBuf    strings.Builder
 				sawNativeTool bool
@@ -855,16 +864,25 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 				bufferedEvs = nil
 				return true
 			}
+			// Emit SEToolUseStart + sanitized SEToolInputJSON as an atomic pair so
+			// interleaved SEThinkingDelta/SETextDelta chunks from vLLM/OpenAI gateways
+			// never cause norma's streamAndExecute finalizeTool() to close the tool
+			// early with "{}" empty arguments or split mid-word text deltas.
 			flushTool := func() bool {
 				if !buildingTool {
 					return true
 				}
 				buildingTool = false
+				tid, tname := curToolID, curToolName
+				curToolID, curToolName = "", ""
 				raw := curToolBuf.String()
 				curToolBuf.Reset()
-				schema := findToolSchema(curToolName, req.Tools)
-				sanitized := SanitizeToolInput(curToolName, json.RawMessage(raw), schema)
+				schema := findToolSchema(tname, req.Tools)
+				sanitized := SanitizeToolInput(tname, json.RawMessage(raw), schema)
 				emittedAny = true
+				if !yield(llm.StreamEvent{Type: llm.SEToolUseStart, ToolID: tid, ToolName: tname}, nil) {
+					return false
+				}
 				return yield(llm.StreamEvent{Type: llm.SEToolInputJSON, Text: string(sanitized)}, nil)
 			}
 
@@ -888,12 +906,12 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 					curToolBuf.WriteString(ev.Text)
 					continue
 				}
-				if !flushTool() {
-					cancelStream()
-					return
-				}
 				switch ev.Type {
 				case llm.SEToolUseStart:
+					if !flushTool() {
+						cancelStream()
+						return
+					}
 					sawNativeTool = true
 					if buffering {
 						txt := textBuf.String()
@@ -918,8 +936,10 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						return
 					}
 					buildingTool = true
+					curToolID = ev.ToolID
 					curToolName = ev.ToolName
 					curToolBuf.Reset()
+					continue
 				case llm.SETextDelta:
 					textBuf.WriteString(ev.Text)
 					if !sawNativeTool && hasDegenerateRepetition(textBuf.String()) {
@@ -967,6 +987,10 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						continue
 					}
 				case llm.SEMessageDelta:
+					if !flushTool() {
+						cancelStream()
+						return
+					}
 					isContTurn := len(req.Messages) > 0 && isContinuationUserMsg(req.Messages[len(req.Messages)-1])
 					if !sawNativeTool && textBuf.Len() > 0 {
 						cleanedTxt, embedded := extractEmbeddedToolCalls(textBuf.String(), req.Tools)
@@ -1057,6 +1081,11 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 							retryAttempt = true
 							break
 						}
+					}
+				case llm.SEMessageStop:
+					if !flushTool() {
+						cancelStream()
+						return
 					}
 					if !flushBuffered() {
 						cancelStream()
