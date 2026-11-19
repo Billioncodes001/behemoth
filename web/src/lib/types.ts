@@ -1837,6 +1837,8 @@ export interface UpdateSettings {
 export interface UpdateCheck {
   /** 当前运行的版本；开发构建为 "dev" 或 git describe 的带后缀形式。 */
   current: string;
+  /** 当前 Git 提交短哈希（若由仓库构建）。 */
+  git_sha?: string;
   /** 运行形态。docker 下换装只作用于容器可写层，重建容器会退回镜像版本。 */
   mode: "docker" | "binary";
   os: string;

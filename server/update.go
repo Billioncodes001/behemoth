@@ -220,8 +220,11 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		mode = "docker"
 	}
 	boot := bootUpdateState()
+	snap := getMaintenanceSnapshot()
+	gitSHA, _ := snap["current_sha"].(string)
 	out := map[string]any{
 		"current":     current,
+		"git_sha":     gitSHA,
 		"mode":        mode,
 		"os":          runtime.GOOS,
 		"arch":        runtime.GOARCH,
@@ -267,9 +270,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	out["comparable"] = comparable
 	out["has_update"] = comparable && cmp < 0
 	if !comparable {
-		// 开发构建（dev / git describe 带后缀）没有可比较的版本号。放行只会
-		// 用正式版覆盖掉本地正在调试的二进制，所以直接不给更新。
-		out["reason"] = fmt.Sprintf("当前版本 %q 不是正式发布版本，已禁用一键更新", current)
+		out["reason"] = fmt.Sprintf("Current version %q is a development build; one-click binary updates are disabled", current)
 	}
 	writeJSON(w, 200, out)
 }
@@ -295,15 +296,15 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	cmp, comparable := selfupdate.CompareVersions(current, rel.TagName)
 	if !comparable {
-		writeErr(w, 400, fmt.Sprintf("当前版本 %q 不是正式发布版本，已禁用一键更新", current))
+		writeErr(w, 400, fmt.Sprintf("Current version %q is a development build; one-click binary updates are disabled", current))
 		return
 	}
 	if cmp >= 0 {
-		writeErr(w, 400, fmt.Sprintf("当前已是最新版本 %s", current))
+		writeErr(w, 400, fmt.Sprintf("Already running the latest version %s", current))
 		return
 	}
 	if !updHub.begin(rel.TagName) {
-		writeErr(w, 409, "已有一个更新正在进行中")
+		writeErr(w, 409, "An update is already in progress")
 		return
 	}
 

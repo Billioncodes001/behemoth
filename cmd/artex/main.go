@@ -23,8 +23,8 @@ import (
 )
 
 // version is the build version, injected at release time via
-// -ldflags "-X main.version=<tag>". Defaults to "dev" for local builds.
-var version = "dev"
+// -ldflags "-X main.version=<tag>". Defaults to "2.2.0" matching web/package.json.
+var version = "2.2.0"
 
 const banner = `
     _    ____ _____ _______  __

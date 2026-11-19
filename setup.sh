@@ -174,10 +174,15 @@ build_artex() {
     info "Building Next.js server runtime bundle (with /api/* proxy rewrites)..."
     ( cd web && npm run build )
   fi
-  info "Compiling single-binary ARTEX server (./artex)..."
-  CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w" -o artex ./cmd/artex
+  local build_ver="${ARTEX_BUILD_VERSION:-}"
+  if [[ -z "$build_ver" ]]; then
+    build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.2.0")"
+  fi
+  build_ver="${build_ver#v}"
+  info "Compiling single-binary ARTEX server (./artex v${build_ver})..."
+  CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${build_ver}" -o artex ./cmd/artex
   chmod +x artex start.sh
-  ok "Compiled ./artex ($(du -h artex | awk '{print $1}'))"
+  ok "Compiled ./artex v${build_ver} ($(du -h artex | awk '{print $1}'))"
 }
 
 reset_admin_password() {

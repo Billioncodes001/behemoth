@@ -119,7 +119,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 
 	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "main", "--quiet").Run(); err != nil {
+	if err := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "main", "--tags", "--quiet").Run(); err != nil {
 		return
 	}
 
@@ -153,7 +153,9 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		if command -v npm >/dev/null 2>&1 && [ -d web ]; then
 			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist && npm run build)
 		fi
-		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w" -o artex.new ./cmd/artex
+		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.2.0)"
+		BUILD_VER="${BUILD_VER#v}"
+		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o artex.new ./cmd/artex
 		mv -f artex.new artex
 		chmod +x artex
 	`)

@@ -664,6 +664,14 @@ export const settingsMessages = {
   "settings.latestVersion": ["最新版本", "Latest version"],
   "settings.changelog": ["更新日志", "Changelog"],
   "settings.githubUnavailablePrefix": ["无法连接 GitHub：", "Unable to connect to GitHub: "],
+  "settings.noPublishedReleaseYet": [
+    "仓库尚未发布正式 GitHub Release 标签；当前实例已启用 Git 实时同步自动跟踪最新提交。",
+    "No tagged GitHub Release has been published yet — this instance tracks repository updates automatically via Git Live-Sync.",
+  ],
+  "settings.gitLiveSyncActive": [
+    "Git 实时同步已激活",
+    "Git Live-Sync active",
+  ],
   "settings.retryUpdateNetwork": [
     "可配置更新代理或切换为直连后重试。",
     "Configure an update proxy or switch to a direct connection and try again.",

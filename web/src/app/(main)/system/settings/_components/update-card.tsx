@@ -285,14 +285,24 @@ export function UpdateCard() {
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">{t("settings.currentVersion")}</span>
           <Badge variant="secondary" className="font-mono">
-            {info?.current ?? "…"}
+            {info?.current ? (info.current.startsWith("v") || info.current === "dev" ? info.current : `v${info.current}`) : "…"}
           </Badge>
+          {info?.git_sha && (
+            <Badge variant="outline" className="font-mono text-xs text-muted-foreground">
+              {info.git_sha}
+            </Badge>
+          )}
           {info && (
             <>
               <Badge variant="outline" className="font-mono">
                 {info.os}/{info.arch}
               </Badge>
               <Badge variant="outline">{info.mode === "docker" ? "Docker" : t("settings.standalone")}</Badge>
+              {info.git_sha && (
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                  {t("settings.gitLiveSyncActive")}
+                </Badge>
+              )}
             </>
           )}
           {info?.latest && (
@@ -323,15 +333,20 @@ export function UpdateCard() {
           </p>
         )}
 
-        {info?.error && (
-          <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-            {t("settings.githubUnavailablePrefix")}
-            {info.error}
-            {"　"}
-            {t("settings.retryUpdateNetwork")}
-          </p>
-        )}
+        {info?.error &&
+          (info.error.includes("has no published release yet") ? (
+            <p className="flex items-center gap-2 rounded-md border border-border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+              <CheckCircle2Icon className="size-3.5 shrink-0 text-emerald-600" />
+              {t("settings.noPublishedReleaseYet")}
+            </p>
+          ) : (
+            <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+              {t("settings.githubUnavailablePrefix")}
+              {info.error}{" "}
+              {t("settings.retryUpdateNetwork")}
+            </p>
+          ))}
 
         {info && !info.comparable && info.reason && (
           <p className="text-xs text-muted-foreground">{t("settings.nonReleaseVersion", { version: info.current })}</p>
@@ -353,7 +368,7 @@ export function UpdateCard() {
           <p className="text-xs text-muted-foreground">
             {t("settings.downloadStart")}
             <span className="font-mono">{info.asset}</span>
-            {info.size ? `（${humanSize(info.size)}）` : ""}
+            {info.size ? ` (${humanSize(info.size)})` : ""}
             {t("settings.downloadEnd")}
           </p>
         )}
@@ -370,7 +385,7 @@ export function UpdateCard() {
             {t("settings.dockerUpdateHelpStart")}
             <span className="font-mono"> docker compose up -d </span>
             {t("settings.dockerUpdateHelpMiddle")}
-            <span className="font-mono"> docker compose pull artex &amp;&amp; docker compose up -d artex</span>。
+            <span className="font-mono"> docker compose pull artex &amp;&amp; docker compose up -d artex</span>.
           </p>
         )}
 
