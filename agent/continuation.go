@@ -46,6 +46,9 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 	}
 
 	text := strings.TrimSpace(lastAsst.Text())
+	if strings.Contains(text, "[Provider Safety Filter]") {
+		return false, ""
+	}
 	if text == "" {
 		return true, continuationThinkingNudge
 	}

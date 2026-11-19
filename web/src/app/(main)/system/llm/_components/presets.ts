@@ -144,13 +144,15 @@ export const LLM_PRESETS: LLMProviderPreset[] = [
   },
   {
     name: "Google Gemini",
-    hint: "generativelanguage.googleapis.com/v1beta/openai — Gemini 4 Argon & 3.8 Flash",
+    hint: "generativelanguage.googleapis.com/v1beta/openai — Gemini 4 Carbon, Argon & Hydrogen",
     format: "openai",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-4-argon",
     models: [
       { id: "gemini-4-argon", label: "Gemini 4 Argon (1M ctx)", badge: "FLAGSHIP", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
-      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (1M ctx)", badge: "FAST", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
+      { id: "gemini-4-carbon", label: "Gemini 4 Carbon (1M ctx)", badge: "FRONTIER", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
+      { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (1M ctx)", badge: "FAST", effort: "medium", contextWindowK: 1000, maxTokens: 65536 },
+      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (1M ctx)", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
       { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash (1M ctx)", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
       { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (1M ctx)", effort: "high", contextWindowK: 1000, maxTokens: 65536 },
       { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (1M ctx)", effort: "high", contextWindowK: 1000, maxTokens: 65536 },

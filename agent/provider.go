@@ -290,7 +290,11 @@ func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.P
 	if err := limiter.configure(c.RatePerSecond, c.RatePerMinute); err != nil {
 		return nil, err
 	}
-	client.Transport = rateLimitedTransport{base: client.Transport, limiter: limiter}
+	transport := http.RoundTripper(rateLimitedTransport{base: client.Transport, limiter: limiter})
+	if c.Format == llm.FormatOpenAI {
+		transport = openAICompatTransport{base: transport}
+	}
+	client.Transport = transport
 	lc := llm.Config{
 		Format:     c.Format,
 		BaseURL:    c.BaseURL,

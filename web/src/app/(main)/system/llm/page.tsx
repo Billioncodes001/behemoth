@@ -1139,6 +1139,7 @@ export default function LLMPage() {
                       {p.reasoning_effort && (
                         <span>
                           {ui("screen.8cf0105d35ee8d")}
+                          {": "}
                           {p.reasoning_effort === "off" ? ui("screen.5d0ae622f61f8e") : p.reasoning_effort}
                         </span>
                       )}
