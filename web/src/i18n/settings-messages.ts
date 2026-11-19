@@ -182,11 +182,16 @@ export const settingsMessages = {
     "要求执行型 Agent 复用流量和浏览器特征、控制请求噪声，并遵守平台代理与授权范围。",
     "Require execution Agents to reuse traffic and browser characteristics, reduce request noise, and respect platform proxy settings and authorized scope.",
   ],
-  "settings.globalProxy": ["全局代理", "Global proxy"],
+  "settings.globalProxy": ["单节点备用代理（Global Proxy）", "Static fallback proxy (Single URL)"],
   "settings.globalProxyHelp": [
-    "设置 Agent 目标流量的统一出口。留空时直连；网络搜索和 LLM 代理不受影响。",
-    "Set a shared outbound proxy for Agent traffic to targets. Leave blank for a direct connection. Web search and LLM proxies are configured separately.",
+    "当未启用代理池（Proxy Pool）时，为 Agent 目标流量设置单一固定出口代理。若需要多代理轮换或文件导入，请前往「系统 → 代理池」。",
+    "Optional single outbound proxy used only when Proxy Pool is disabled. For multi-proxy rotation, file uploads, and health failover, use System → Proxy Pool.",
   ],
+  "settings.proxyPoolManagedNotice": [
+    "当前目标出口由「代理池（Proxy Pool）」托管并自动轮换，此处单节点静态代理已自动锁定以避免冲突。",
+    "Outbound target traffic is currently managed and rotated by Proxy Pool. This single-URL field is locked while Proxy Pool is enabled so they never conflict.",
+  ],
+  "settings.manageInProxyPool": ["前往代理池管理 →", "Manage in Proxy Pool →"],
   "settings.proxyAddress": ["代理地址", "Proxy address"],
   "settings.globalProxyPlaceholder": [
     "socks5://user:pass@host:1080 或 http://host:port（留空=直连）",
@@ -210,10 +215,10 @@ export const settingsMessages = {
   "settings.reconnectAttempts": ["最大重连次数", "Maximum reconnection attempts"],
   "settings.reconnectInterval": ["重连间隔（秒）", "Reconnection interval (seconds)"],
   "settings.savePolicy": ["保存策略", "Save policy"],
-  "settings.showEgress": ["在顶栏显示出口 IP", "Show outbound IP in the header"],
+  "settings.showEgress": ["在顶栏实时显示出口 IP 徽章", "Show live exit IP badge in top bar"],
   "settings.showEgressHelp": [
-    "开启后显示直连 IP 和全局代理 IP，使用已保存的全局代理探测。",
-    "Show the direct IP and global proxy IP, probing through the saved global proxy.",
+    "开启后在页面顶部导航栏实时对比显示服务器直连公网 IP 与当前生效代理出口 IP，方便随时确认流量是否走代理。",
+    "Displays your server's direct IP alongside the active proxy/pool exit IP in the top navigation bar so you can verify outbound routing at a glance.",
   ],
   "settings.egressTestDetails": ["出口 IP 测试说明", "About outbound IP tests"],
   "settings.egressTestHelp": [
@@ -650,10 +655,10 @@ export const settingsMessages = {
     "从 GitHub 检查并安装新版本。更新会重启程序，正在运行的任务会被中断。",
     "Check GitHub for new releases and install updates. Updates restart the application and interrupt running tasks.",
   ],
-  "settings.updateProxy": ["更新代理（可选）", "Update proxy (optional)"],
+  "settings.updateProxy": ["GitHub 版本更新代理（可选）", "GitHub update proxy (optional)"],
   "settings.updateProxyHelp": [
-    "独立出口代理，仅用于检查版本和下载更新，支持 HTTP / HTTPS / SOCKS5。留空保存后直连；不影响任务、网络搜索或 LLM 的代理。",
-    "A separate outbound proxy for version checks and update downloads, supporting HTTP / HTTPS / SOCKS5. Clear and save for a direct connection. Task, web search and LLM proxies are unaffected.",
+    "仅用于连接 GitHub 检查版本和下载程序升级包（云服务器直连公网时请留空；完全不影响目标扫描或代理池）。",
+    "Used strictly for checking/downloading ARTEX version updates from GitHub (leave blank on cloud servers with internet access; never affects target scanning or Proxy Pool).",
   ],
   "settings.unsavedUpdateNetwork": [
     "修改尚未保存，保存后将自动检查更新。",

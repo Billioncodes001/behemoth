@@ -154,7 +154,7 @@ func (s *Server) toolImportAndTestProxies() actool.CoreTool {
 
 func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 	return roTool("get_proxy_pool_status",
-		"Inspect the current Proxy Pool status, enabled state, rotation strategy, active egress proxy & exit IP, health counts, and masked proxy entries.",
+		"Check whether outbound proxies are enabled anywhere in ARTEX (Proxy Pool or static Global Proxy), inspect active egress proxy IP/location/latency, pool health counts, rotation/sticky settings, and all configured proxies.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			if ppV2 == nil || ppV2.Pool == nil {
@@ -163,38 +163,101 @@ func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 			cfg := ppV2.Pool.GetConfig()
 			stats := ppV2.Pool.GetStats()
 			proxies := ppV2.Pool.GetProxies()
+			var activeProxy *proxyv2.ProxyInfo
+			for i := range proxies {
+				if proxies[i].ID == stats.ActiveProxyID {
+					cp := proxies[i]
+					activeProxy = &cp
+					break
+				}
+			}
+			globalRaw := ""
+			trafficCapture := false
+			if s.m != nil {
+				globalRaw = strings.TrimSpace(s.m.GlobalProxy())
+				trafficCapture = s.m.TrafficEnabled()
+			}
+			routingMode := "direct"
+			if cfg.Enabled && stats.Total > 0 && activeProxy != nil {
+				routingMode = "proxy_pool"
+			} else if globalRaw != "" {
+				routingMode = "static_global_proxy"
+			}
 			return jsonResult(map[string]any{
-				"enabled":         cfg.Enabled,
-				"config":          cfg,
-				"stats":           stats,
-				"active_proxy_id": stats.ActiveProxyID,
-				"proxies":         proxies,
+				"effective_routing_mode": routingMode,
+				"any_proxy_enabled":      routingMode != "direct",
+				"proxy_pool_enabled":     cfg.Enabled,
+				"static_global_proxy":    maskSecrets(globalRaw),
+				"traffic_capture":        trafficCapture,
+				"active_proxy_id":        stats.ActiveProxyID,
+				"active_proxy":           activeProxy,
+				"config":                 cfg,
+				"stats":                  stats,
+				"proxies":                proxies,
 			})
 		})
 }
 
 func (s *Server) toolManageProxyPool() actool.CoreTool {
 	return wrTool("manage_proxy_pool",
-		"Manage the Proxy Pool: test_all (re-test all proxies), rotate (switch to next healthy proxy), activate (pin a specific proxy_id), clear_failed (prune dead proxies), clear_all, enable, disable, or delete (remove proxy_id).",
+		"Control and reconfigure ARTEX proxy routing mid-operation: rotate (switch away from a slow/rate-limited/failing proxy immediately), test_all, test_one (probe proxy_id), activate (pin proxy_id), disable_proxy (quarantine a failing proxy_id and auto-failover), enable_proxy, clear_failed, clear_all, enable, disable, configure (adjust rotation_strategy, rotation_interval_seconds, auto_rotate_on_failure, session_sticky, max_consecutive_failures, cooldown_seconds), or delete.",
 		objSchema(map[string]any{
-			"action":            strParam("Action: test_all | rotate | activate | clear_failed | clear_all | enable | disable | delete"),
-			"proxy_id":          strParam("Target proxy ID (required only for activate or delete)"),
-			"rotation_strategy": strParam("Optional rotation strategy when enabling/configuring: round_robin | random | least_used"),
+			"action":                       strParam("Action: rotate | test_all | test_one | activate | disable_proxy | enable_proxy | clear_failed | clear_all | enable | disable | configure | delete"),
+			"proxy_id":                     strParam("Target proxy ID (used by test_one, activate, disable_proxy, enable_proxy, delete)"),
+			"rotation_strategy":            strParam("Optional rotation strategy: round_robin | random | least_used"),
+			"rotation_interval_seconds":    map[string]any{"type": "integer", "description": "Optional rotation interval in seconds (>= 5)"},
+			"auto_rotate_on_failure":       map[string]any{"type": "boolean", "description": "Optional toggle to auto-rotate when a proxy fails"},
+			"session_sticky":               map[string]any{"type": "boolean", "description": "Optional toggle to keep one proxy sticky per session until failure"},
+			"max_consecutive_failures":     map[string]any{"type": "integer", "description": "Optional failure threshold before marking unhealthy (>= 1)"},
+			"cooldown_seconds":             map[string]any{"type": "integer", "description": "Optional cooldown in seconds (>= 10)"},
+			"health_check_interval_seconds": map[string]any{"type": "integer", "description": "Optional background health check interval in seconds (>= 10)"},
 		}, "action"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			if ppV2 == nil || ppV2.Pool == nil {
 				return actool.Errorf("Proxy Pool v2 is not initialized"), nil
 			}
 			var a struct {
-				Action           string `json:"action"`
-				ProxyID          string `json:"proxy_id"`
-				RotationStrategy string `json:"rotation_strategy"`
+				Action                     string `json:"action"`
+				ProxyID                    string `json:"proxy_id"`
+				RotationStrategy           string `json:"rotation_strategy"`
+				RotationIntervalSeconds    *int   `json:"rotation_interval_seconds"`
+				AutoRotateOnFailure        *bool  `json:"auto_rotate_on_failure"`
+				SessionSticky              *bool  `json:"session_sticky"`
+				MaxConsecutiveFailures     *int   `json:"max_consecutive_failures"`
+				CooldownSeconds            *int   `json:"cooldown_seconds"`
+				HealthCheckIntervalSeconds *int   `json:"health_check_interval_seconds"`
 			}
 			if err := json.Unmarshal(in, &a); err != nil {
 				return actool.Errorf(fmt.Sprintf("invalid input JSON: %v", err)), nil
 			}
 			act := strings.ToLower(strings.TrimSpace(a.Action))
 			var actionOut map[string]any
+
+			applyConfigOverrides := func(cfg *proxyv2.ProxyPoolConfig) {
+				if rs := strings.ToLower(strings.TrimSpace(a.RotationStrategy)); rs == "round_robin" || rs == "random" || rs == "least_used" {
+					cfg.RotationMode = proxyv2.RotationStrategy(rs)
+					cfg.RotationStrategyAlias = cfg.RotationMode
+				}
+				if a.RotationIntervalSeconds != nil && *a.RotationIntervalSeconds >= 5 {
+					cfg.RotationIntervalSeconds = *a.RotationIntervalSeconds
+				}
+				if a.AutoRotateOnFailure != nil {
+					cfg.AutoRotateOnFailure = *a.AutoRotateOnFailure
+					cfg.FailoverEnabled = *a.AutoRotateOnFailure
+				}
+				if a.SessionSticky != nil {
+					cfg.SessionSticky = *a.SessionSticky
+				}
+				if a.MaxConsecutiveFailures != nil && *a.MaxConsecutiveFailures >= 1 {
+					cfg.MaxConsecutiveFailures = *a.MaxConsecutiveFailures
+				}
+				if a.CooldownSeconds != nil && *a.CooldownSeconds >= 10 {
+					cfg.CooldownSeconds = *a.CooldownSeconds
+				}
+				if a.HealthCheckIntervalSeconds != nil && *a.HealthCheckIntervalSeconds >= 10 {
+					cfg.HealthCheckIntervalSeconds = *a.HealthCheckIntervalSeconds
+				}
+			}
 
 			switch act {
 			case "test_all":
@@ -214,6 +277,16 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				}
 				actionOut = map[string]any{"action": act, "tested": len(results), "healthy": passed, "failed": failed, "results": results}
 
+			case "test_one":
+				if strings.TrimSpace(a.ProxyID) == "" {
+					return actool.Errorf("proxy_id is required for action=test_one"), nil
+				}
+				res, err := ppV2.Pool.TestProxy(strings.TrimSpace(a.ProxyID))
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				actionOut = map[string]any{"action": act, "result": res}
+
 			case "rotate":
 				px, err := ppV2.Pool.ForceRotate("agent_rotate")
 				if err != nil {
@@ -230,6 +303,16 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				}
 				actionOut = map[string]any{"action": act, "active_proxy_id": strings.TrimSpace(a.ProxyID)}
 
+			case "disable_proxy", "enable_proxy":
+				if strings.TrimSpace(a.ProxyID) == "" {
+					return actool.Errorf("proxy_id is required for action=" + act), nil
+				}
+				enableFlag := act == "enable_proxy"
+				if err := ppV2.Pool.SetProxyActive(strings.TrimSpace(a.ProxyID), enableFlag); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				actionOut = map[string]any{"action": act, "proxy_id": strings.TrimSpace(a.ProxyID), "active": enableFlag}
+
 			case "clear_failed":
 				removed, err := ppV2.Pool.ClearFailedProxies()
 				if err != nil {
@@ -244,17 +327,18 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				}
 				actionOut = map[string]any{"action": act, "removed": removed}
 
-			case "enable", "disable":
+			case "enable", "disable", "configure":
 				cfg := ppV2.Pool.GetConfig()
-				cfg.Enabled = act == "enable"
-				if rs := strings.ToLower(strings.TrimSpace(a.RotationStrategy)); rs == "round_robin" || rs == "random" || rs == "least_used" {
-					cfg.RotationMode = proxyv2.RotationStrategy(rs)
-					cfg.RotationStrategyAlias = cfg.RotationMode
+				if act == "enable" {
+					cfg.Enabled = true
+				} else if act == "disable" {
+					cfg.Enabled = false
 				}
+				applyConfigOverrides(cfg)
 				if err := ppV2.Pool.UpdateConfig(cfg); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
-				actionOut = map[string]any{"action": act, "enabled": cfg.Enabled, "rotation_strategy": cfg.RotationMode}
+				actionOut = map[string]any{"action": act, "config": cfg}
 
 			case "delete":
 				if strings.TrimSpace(a.ProxyID) == "" {
@@ -266,11 +350,13 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				actionOut = map[string]any{"action": act, "deleted": strings.TrimSpace(a.ProxyID)}
 
 			default:
-				return actool.Errorf(fmt.Sprintf("unsupported action %q (use test_all, rotate, activate, clear_failed, clear_all, enable, disable, or delete)", a.Action)), nil
+				return actool.Errorf(fmt.Sprintf("unsupported action %q (use rotate, test_all, test_one, activate, disable_proxy, enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete)", a.Action)), nil
 			}
 
 			s.syncProxyPoolNow()
-			actionOut["stats"] = ppV2.Pool.GetStats()
+			stats := ppV2.Pool.GetStats()
+			actionOut["active_proxy_id"] = stats.ActiveProxyID
+			actionOut["stats"] = stats
 			return jsonResult(actionOut)
 		})
 }

@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { localizedError } from "@/i18n/errors";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
@@ -107,7 +108,7 @@ function FindingDetailInner() {
         toast.success(liveUI("screen.2ef0f1dd23335c", { v0: statusMeta("severity", next, t).label }));
       } catch (e) {
         setFinding((cur) => (cur ? { ...cur, severity: prev } : cur));
-        toast.error(liveUI("screen.4f2e8a8d4cb328") + (e as Error).message);
+        toast.error(liveUI("screen.4f2e8a8d4cb328") + localizedError(e, t));
       }
     },
     [finding, id, t, liveUI],
@@ -124,7 +125,7 @@ function FindingDetailInner() {
         toast.success(liveUI("screen.96d69e2bc13dcd", { v0: statusMeta("finding", next, t).label }));
       } catch (e) {
         setFinding((cur) => (cur ? { ...cur, status: prev } : cur));
-        toast.error(liveUI("screen.4f2e8a8d4cb328") + (e as Error).message);
+        toast.error(liveUI("screen.4f2e8a8d4cb328") + localizedError(e, t));
       }
     },
     [finding, id, t, liveUI],
@@ -136,16 +137,29 @@ function FindingDetailInner() {
     try {
       await api.generateFindingReport(id);
       toast.success(liveUI("screen.111a2943460953"));
-      // The reporter runs asynchronously. Refresh once after it has had a
-      // chance to persist the report, while keeping the button available if
-      // the run is delayed or interrupted.
-      window.setTimeout(() => void load(), 2000);
+      // Poll briefly in the background so the newly authored report appears automatically
+      // as soon as the Report Writer agent saves it via update_finding_report.
+      let checks = 0;
+      const timer = window.setInterval(() => {
+        checks += 1;
+        api
+          .getFinding(id, contextTaskId || undefined)
+          .then((f) => {
+            setFinding(f);
+            if ((f.report && f.report !== finding.report) || checks >= 20) {
+              window.clearInterval(timer);
+            }
+          })
+          .catch(() => {
+            if (checks >= 20) window.clearInterval(timer);
+          });
+      }, 3000);
     } catch (e) {
-      toast.error(liveUI("screen.e89e7c308d04f7") + (e as Error).message);
+      toast.error(liveUI("screen.e89e7c308d04f7") + " " + localizedError(e, t));
     } finally {
       setReportGenerating(false);
     }
-  }, [finding, id, load, reportGenerating, liveUI]);
+  }, [contextTaskId, finding, id, reportGenerating, liveUI, t]);
 
   if (!finding) {
     return (
@@ -417,6 +431,10 @@ function FindingDetailInner() {
                           <span className="truncate">{finding.task_description || `#${finding.task_id}`}</span>
                           <ArrowUpRightIcon className="size-3 shrink-0" />
                         </Link>
+                      ) : !finding.task_description ? (
+                        <Badge variant="secondary" className="text-xs font-normal">
+                          Standalone (Chat)
+                        </Badge>
                       ) : (
                         <span className="text-muted-foreground">{ui("screen.06ae67d1f3260f")}</span>
                       )}

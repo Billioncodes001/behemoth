@@ -7,7 +7,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/agent/payloads"
 )
@@ -15,9 +17,21 @@ import (
 // checkSource fetches and processes a single source, and when AutoGenerate is enabled,
 // automatically generates PoC exploits and client-side payloads for discovered vulnerabilities.
 func (m *Monitor) checkSource(src PatchSource) []Vulnerability {
-	log.Printf("[patchmonitor] Checking: %s (%s)", src.Name, src.URL)
+	fetchURL := src.URL
+	if src.SourceType == "nvd" && !strings.Contains(fetchURL, "pubStartDate=") {
+		if u, err := url.Parse(fetchURL); err == nil {
+			now := time.Now().UTC()
+			start := now.Add(-30 * 24 * time.Hour)
+			q := u.Query()
+			q.Set("pubStartDate", start.Format("2006-01-02T15:04:05.000"))
+			q.Set("pubEndDate", now.Format("2006-01-02T15:04:05.000"))
+			u.RawQuery = q.Encode()
+			fetchURL = u.String()
+		}
+	}
+	log.Printf("[patchmonitor] Checking: %s (%s)", src.Name, fetchURL)
 
-	req, err := http.NewRequest(http.MethodGet, src.URL, nil)
+	req, err := http.NewRequest(http.MethodGet, fetchURL, nil)
 	if err != nil {
 		m.updateSourceStatus(src.ID, "error", fmt.Sprintf("request error: %v", err))
 		return nil

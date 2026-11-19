@@ -114,7 +114,7 @@ func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetO
 				switch u.Name {
 				case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send",
 					"run_security_tool", "browser_inspect", "multi_engine_search", "exploit_search",
-					"import_and_test_proxies", "manage_proxy_pool",
+					"import_and_test_proxies", "manage_proxy_pool", "match_vuln_targets", "update_exploit_target_status",
 					"check_patch_feeds", "generate_vuln_exploit", "generate_payload", "search_ios_exploits":
 					turnHadExec = true
 				}

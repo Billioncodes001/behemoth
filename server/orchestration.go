@@ -1200,20 +1200,45 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v1"
+	const flag = "proxy_pool_agent_tools_v2"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
 	proxyKeys := []string{"import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
-	for _, agKey := range []string{"auto", "pentest", "worker", "mainagent"} {
+	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyKeys)
 	}
-	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
-		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
-			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
-				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+	patchTargetKeys := []string{"match_vuln_targets", "update_exploit_target_status", "update_finding_report", "list_security_arsenal", "run_security_tool", "browser_inspect"}
+	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, patchTargetKeys)
+	}
+	for _, agKey := range []string{"auto", "patch_watch"} {
+		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
+			if tmpl := agent.BuiltinPromptSeeds()[agKey]; tmpl != "" {
+				if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+					_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+				}
 			}
 		}
 	}
+
+	// Ensure built-in Playwright browser MCP has root-safe flags, is enabled, and discovers its tools
+	if servers, err := s.m.pg.ListMCP(); err == nil {
+		for _, srv := range servers {
+			if srv.Name == browserMCPName && len(srv.Tools) == 0 {
+				srv.Args = encodeJSON(ensureBrowserMCPArgs(decodeStrSlice(srv.Args), true))
+				srv.Enabled = true
+				if id, serr := s.m.pg.SaveMCP(srv); serr == nil {
+					for _, agKey := range []string{"auto", "pentest", "worker", "mainagent", "patch_watch", "reporter"} {
+						if ag, aerr := s.m.pg.GetAgentByKey(agKey); aerr == nil && ag != nil {
+							_, _ = s.m.pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, ag.ID, id)
+						}
+					}
+					go s.discoverEmptyMCPsOnStartup()
+				}
+			}
+		}
+	}
+
 	_ = s.m.pg.SetSetting(flag, "true")
 }

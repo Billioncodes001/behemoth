@@ -1460,6 +1460,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/patch-monitor/exploits", s.handlePatchMonitorExploits)
 	mux.HandleFunc("GET /api/patch-monitor/targets", s.handlePatchMonitorTargets)
 	mux.HandleFunc("POST /api/patch-monitor/targets", s.handlePatchMonitorAddTarget)
+	mux.HandleFunc("POST /api/patch-monitor/targets/auto-match", s.handlePatchMonitorAutoMatchTargets)
 	mux.HandleFunc("DELETE /api/patch-monitor/targets/{id}", s.handlePatchMonitorDeleteTarget)
 	mux.HandleFunc("POST /api/patch-monitor/start", s.handlePatchMonitorStart)
 	mux.HandleFunc("POST /api/patch-monitor/stop", s.handlePatchMonitorStop)
@@ -2890,9 +2891,8 @@ func findingProvenanceInTask(contextTask *Task, findingTaskID *int64) (sourceTas
 }
 
 // findingLineage returns the exploration sub-DAG from the task root to this
-// finding's node — the finding node + all its ancestors + edges among them — so
-// the detail page can show "how this finding was reached". Empty {nodes,edges}
-// when the finding has no node/task (e.g. the originating task was deleted).
+// finding's node — or synthesizes an authentic Asset -> PoC Verification -> Finding
+// lineage graph when the finding was created standalone in Chat (or after task cleanup).
 func (s *Server) findingLineage(w http.ResponseWriter, r *http.Request) {
 	id := int64(atoiDefault(r.PathValue("id"), 0))
 	if id <= 0 {
@@ -2908,22 +2908,129 @@ func (s *Server) findingLineage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "finding not found")
 		return
 	}
-	empty := map[string]any{"nodes": []any{}, "edges": []any{}}
-	if f.NodeID == nil || f.TaskID == nil {
-		writeJSON(w, 200, empty)
-		return
+	if f.NodeID != nil && f.TaskID != nil {
+		if t := s.m.ResolveTask(i64s(*f.TaskID)); t != nil {
+			nodes, edges, lerr := t.Store.FindingLineage(*f.NodeID)
+			if lerr != nil {
+				writeErr(w, 500, lerr.Error())
+				return
+			}
+			if len(nodes) > 0 {
+				writeJSON(w, 200, map[string]any{"nodes": taskNodeDTOs(nodes), "edges": edgeDTOs(edges)})
+				return
+			}
+		}
 	}
-	t := s.m.ResolveTask(i64s(*f.TaskID))
-	if t == nil {
-		writeJSON(w, 200, empty)
-		return
+	nodes, edges := s.buildStandaloneFindingLineage(f)
+	writeJSON(w, 200, map[string]any{"nodes": nodes, "edges": edges})
+}
+
+func (s *Server) buildStandaloneFindingLineage(f *db.DBFinding) ([]TaskNodeDTO, []EdgeDTO) {
+	ts := rfc3339(f.CreatedAt)
+	dto := findingFromDB(f, s.resolveFindingAssets([]*db.DBFinding{f}))
+
+	originSummary := "Standalone Security Assessment (Chat Agent)"
+	if strings.TrimSpace(f.TaskDescription) != "" {
+		originSummary = f.TaskDescription
 	}
-	nodes, edges, err := t.Store.FindingLineage(*f.NodeID)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
+	originPayload, _ := json.Marshal(map[string]any{
+		"summary":     originSummary,
+		"description": f.Summary,
+	})
+	nodes := []TaskNodeDTO{
+		{
+			ID:       "origin-1",
+			Type:     "fact",
+			State:    "origin",
+			Origin:   "agent",
+			Priority: 5,
+			Payload:  string(originPayload),
+			TS:       ts,
+		},
 	}
-	writeJSON(w, 200, map[string]any{"nodes": taskNodeDTOs(nodes), "edges": edgeDTOs(edges)})
+	var edges []EdgeDTO
+
+	var assetNodeIDs []string
+	for idx, a := range dto.Assets {
+		nid := fmt.Sprintf("asset-%d", idx+1)
+		p, _ := json.Marshal(map[string]any{
+			"summary":    fmt.Sprintf("[%s] %s", a.Type, a.Label),
+			"asset_id":   a.ID,
+			"asset_type": a.Type,
+			"label":      a.Label,
+		})
+		nodes = append(nodes, TaskNodeDTO{
+			ID:       nid,
+			Type:     "fact",
+			State:    "confirmed",
+			Origin:   "recon",
+			Priority: 5,
+			Payload:  string(p),
+			TS:       ts,
+		})
+		edges = append(edges, EdgeDTO{Src: "origin-1", Dst: nid, Rel: "spawns"})
+		assetNodeIDs = append(assetNodeIDs, nid)
+	}
+
+	pocSummary := "Active Vulnerability Probing & PoC Verification"
+	if evLine := firstLine(strings.TrimSpace(f.Evidence), 140); evLine != "" {
+		pocSummary = evLine
+	}
+	pocPayload, _ := json.Marshal(map[string]any{
+		"summary":  pocSummary,
+		"evidence": f.Evidence,
+	})
+	nodes = append(nodes, TaskNodeDTO{
+		ID:       "poc-1",
+		Type:     "intent",
+		State:    "done",
+		Origin:   "auto",
+		Priority: 7,
+		Payload:  string(pocPayload),
+		TS:       ts,
+	})
+	if len(assetNodeIDs) > 0 {
+		for _, aid := range assetNodeIDs {
+			edges = append(edges, EdgeDTO{Src: aid, Dst: "poc-1", Rel: "spawns"})
+		}
+	} else {
+		edges = append(edges, EdgeDTO{Src: "origin-1", Dst: "poc-1", Rel: "spawns"})
+	}
+
+	prio := 5
+	switch strings.ToLower(f.Severity) {
+	case "critical":
+		prio = 10
+	case "high":
+		prio = 8
+	case "medium":
+		prio = 6
+	case "low":
+		prio = 3
+	}
+	title := strings.TrimSpace(f.Name)
+	if title == "" {
+		title = f.VulnClass
+	}
+	findingPayload, _ := json.Marshal(map[string]any{
+		"name":      title,
+		"vulnclass": f.VulnClass,
+		"severity":  f.Severity,
+		"summary":   f.Summary,
+		"evidence":  f.Evidence,
+	})
+	findingNodeID := fmt.Sprintf("finding-%d", f.ID)
+	nodes = append(nodes, TaskNodeDTO{
+		ID:       findingNodeID,
+		Type:     "finding",
+		State:    f.Status,
+		Origin:   "auto",
+		Priority: prio,
+		Payload:  string(findingPayload),
+		TS:       ts,
+	})
+	edges = append(edges, EdgeDTO{Src: "poc-1", Dst: findingNodeID, Rel: "yields"})
+	return nodes, edges
 }
 
 // patchFinding partially updates a finding: any subset of {status, severity}.
@@ -4422,7 +4529,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		if globalProxyValue == "" && (s.m.proxyPool == nil || len(s.m.proxyPoolEntries()) == 0) {
 			s.proxyReconnectSuccessWithGuards(proxyGuards, nil)
 		}
-		s.syncV1ToProxyPoolV2()
+		if ppV2 == nil || ppV2.Pool == nil || ppV2.Pool.GetStats().Total == 0 {
+			s.syncV1ToProxyPoolV2()
+		}
 		changed = true
 	}
 	if req.ProxyReconnectMax != nil || req.ProxyReconnectInterval != nil {
@@ -5208,47 +5317,65 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 	if s == nil || s.m == nil {
 		return
 	}
+	poolEnabled := cfg != nil && cfg.Enabled
 	entries := make([]proxyPoolEntry, 0, len(proxies))
-	for _, px := range proxies {
-		rawURL := px.BuildProxyURL()
-		enabled := px.Active && px.Status != proxyv2.StatusDisabled
-		if cfg != nil && !cfg.Enabled && px.ID != "proxy-legacy" {
-			enabled = false
+	if poolEnabled {
+		for _, px := range proxies {
+			rawURL := px.BuildProxyURL()
+			enabled := px.Active && px.Status != proxyv2.StatusDisabled
+			health := "unknown"
+			switch px.Status {
+			case proxyv2.StatusHealthy, proxyv2.StatusInUse:
+				health = "healthy"
+			case proxyv2.StatusUnhealthy, proxyv2.StatusUnhealthyCool:
+				health = "unhealthy-cooling"
+			case proxyv2.StatusDisabled:
+				health = "disabled"
+			}
+			entries = append(entries, proxyPoolEntry{
+				ProxyPoolEntry: ProxyPoolEntry{
+					ID:                  px.ID,
+					URL:                 maskSecrets(rawURL),
+					Name:                px.Name,
+					Remark:              px.Notes,
+					Enabled:             enabled,
+					EgressIP:            px.ResponseIP,
+					LatencyMS:           px.Latency.Milliseconds(),
+					LastCheckedAt:       px.LastChecked,
+					ConsecutiveFailures: px.ConsecutiveFailures,
+					Health:              health,
+				},
+				RawURL: rawURL,
+			})
 		}
-		health := "unknown"
-		switch px.Status {
-		case proxyv2.StatusHealthy, proxyv2.StatusInUse:
-			health = "healthy"
-		case proxyv2.StatusUnhealthy, proxyv2.StatusUnhealthyCool:
-			health = "unhealthy-cooling"
-		case proxyv2.StatusDisabled:
-			health = "disabled"
-		}
-		entries = append(entries, proxyPoolEntry{
-			ProxyPoolEntry: ProxyPoolEntry{
-				ID:                  px.ID,
-				URL:                 maskSecrets(rawURL),
-				Name:                px.Name,
-				Remark:              px.Notes,
-				Enabled:             enabled,
-				EgressIP:            px.ResponseIP,
-				LatencyMS:           px.Latency.Milliseconds(),
-				LastCheckedAt:       px.LastChecked,
-				ConsecutiveFailures: px.ConsecutiveFailures,
-				Health:              health,
-			},
-			RawURL: rawURL,
-		})
 	}
 	effectiveActive := activeID
-	if cfg != nil && !cfg.Enabled {
+	if !poolEnabled {
 		effectiveActive = ""
+	} else if effectiveActive == "" {
+		for _, e := range entries {
+			if e.Enabled && e.Health == "healthy" {
+				effectiveActive = e.ID
+				break
+			}
+		}
+		if effectiveActive == "" {
+			for _, e := range entries {
+				if e.Enabled {
+					effectiveActive = e.ID
+					break
+				}
+			}
+		}
 	}
 	_ = s.m.setProxyPoolEntries(entries, effectiveActive)
 	if cfg != nil {
 		strategy := "sequential"
-		if cfg.RotationMode == proxyv2.RotationRandom {
+		switch cfg.RotationMode {
+		case proxyv2.RotationRandom:
 			strategy = "random"
+		case proxyv2.RotationLeastUsed:
+			strategy = "least_used"
 		}
 		interval := cfg.RotationIntervalSeconds
 		if interval < minProxyRotateInterval {
@@ -5266,7 +5393,17 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 		if healthInt < 1 {
 			healthInt = defaultProxyHealthInterval
 		}
-		_ = s.m.SetProxyPoolSettings(cfg.Enabled, interval, cfg.AutoRotateOnFailure || cfg.FailoverEnabled, strategy, threshold, cooldown, healthInt)
+		// When SessionSticky is enabled, keep the active proxy sticky across requests
+		// and rotate only on failure (or manual/agent rotate); when SessionSticky is
+		// false, also rotate automatically on the configured timer interval.
+		timedRotate := poolEnabled && !cfg.SessionSticky
+		_ = s.m.SetProxyPoolSettings(timedRotate, interval, poolEnabled && (cfg.AutoRotateOnFailure || cfg.FailoverEnabled), strategy, threshold, cooldown, healthInt)
+	}
+	if poolEnabled && s.proxyPoolWake != nil {
+		select {
+		case s.proxyPoolWake <- struct{}{}:
+		default:
+		}
 	}
 	s.profMu.Lock()
 	s.profChatAgents = map[int64]*agent.ChatAgent{}

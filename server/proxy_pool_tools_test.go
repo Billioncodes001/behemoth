@@ -82,4 +82,24 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	if string(body) != "routed-via-agent-proxy" || proxyHits.Load() == 0 {
 		t.Fatalf("expected request routed through imported proxy, got body=%q hits=%d", string(body), proxyHits.Load())
 	}
+
+	// Verify disabling Proxy Pool switches to direct without clobbering proxy health,
+	// and re-enabling + configuring restores pool routing immediately.
+	disRes, err := s.toolManageProxyPool().Call(context.Background(), json.RawMessage(`{"action":"disable"}`), nil)
+	if err != nil || disRes.IsError {
+		t.Fatalf("manage_proxy_pool disable failed: err=%v res=%+v", err, disRes)
+	}
+	stRes, _ := s.toolGetProxyPoolStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
+	if !strings.Contains(stRes.Content[0].Text, `"effective_routing_mode":"direct"`) {
+		t.Fatalf("expected direct routing when pool disabled, got %s", stRes.Content[0].Text)
+	}
+
+	enRes, err := s.toolManageProxyPool().Call(context.Background(), json.RawMessage(`{"action":"enable","rotation_strategy":"least_used","session_sticky":false,"rotation_interval_seconds":15}`), nil)
+	if err != nil || enRes.IsError {
+		t.Fatalf("manage_proxy_pool enable/configure failed: err=%v res=%+v", err, enRes)
+	}
+	stRes2, _ := s.toolGetProxyPoolStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
+	if !strings.Contains(stRes2.Content[0].Text, `"effective_routing_mode":"proxy_pool"`) {
+		t.Fatalf("expected proxy_pool routing restored after re-enable, got %s", stRes2.Content[0].Text)
+	}
 }

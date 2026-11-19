@@ -51,8 +51,10 @@ export default function ProxyPoolPage() {
   const [testing, setTesting] = React.useState<string | null>(null);
   const [testingAll, setTestingAll] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
+  const [savingConfig, setSavingConfig] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
 
+  const [poolEnabled, setPoolEnabled] = React.useState(false);
   const [rotationStrategy, setRotationStrategy] = React.useState<string>("round_robin");
   const [rotationInterval, setRotationInterval] = React.useState("30");
   const [autoRotateOnFailure, setAutoRotateOnFailure] = React.useState(true);
@@ -87,9 +89,11 @@ export default function ProxyPoolPage() {
       setLogs(Array.isArray(switchLogs) ? switchLogs : []);
       if (poolConfig) {
         setConfig(poolConfig);
-        setRotationStrategy(poolConfig.rotation_strategy || "round_robin");
+        setPoolEnabled(Boolean(poolConfig.enabled));
+        const mode = (poolConfig as any).rotation_mode || poolConfig.rotation_strategy || "round_robin";
+        setRotationStrategy(mode);
         setRotationInterval(String(poolConfig.rotation_interval_seconds ?? 30));
-        setAutoRotateOnFailure(Boolean(poolConfig.auto_rotate_on_failure));
+        setAutoRotateOnFailure(poolConfig.auto_rotate_on_failure !== false);
         setHealthInterval(String(poolConfig.health_check_interval_seconds ?? 30));
         setMaxFailures(String(poolConfig.max_consecutive_failures ?? 3));
         setCooldown(String(poolConfig.cooldown_seconds ?? 60));
@@ -278,23 +282,48 @@ export default function ProxyPoolPage() {
     }
   };
 
-  const handleSaveConfig = async () => {
+  const persistPoolConfig = async (nextEnabled: boolean, showToast = true) => {
+    const rotSec = Math.max(5, parseInt(rotationInterval) || 30);
+    const hlthSec = Math.max(10, parseInt(healthInterval) || 30);
+    const maxF = Math.max(1, parseInt(maxFailures) || 3);
+    const coolSec = Math.max(10, parseInt(cooldown) || 60);
+    setSavingConfig(true);
     try {
       await api.proxyV2.updateConfig({
-        enabled: config?.enabled ?? false,
+        enabled: nextEnabled,
         rotation_strategy: rotationStrategy as any,
-        rotation_interval_seconds: parseInt(rotationInterval) || 30,
+        rotation_interval_seconds: rotSec,
         auto_rotate_on_failure: autoRotateOnFailure,
-        health_check_interval_seconds: parseInt(healthInterval) || 30,
-        max_consecutive_failures: parseInt(maxFailures) || 3,
-        cooldown_seconds: parseInt(cooldown) || 60,
+        health_check_interval_seconds: hlthSec,
+        max_consecutive_failures: maxF,
+        cooldown_seconds: coolSec,
         session_sticky: sessionSticky,
       });
-      toast.success("Proxy pool configuration saved");
+      setPoolEnabled(nextEnabled);
+      setConfig((prev) => (prev ? { ...prev, enabled: nextEnabled } : ({ enabled: nextEnabled } as ProxyV2Config)));
+      if (showToast) {
+        toast.success("Proxy pool configuration saved");
+      }
       await fetchData();
     } catch (e: any) {
       toast.error("Save failed: " + (e?.message || String(e)));
+    } finally {
+      setSavingConfig(false);
     }
+  };
+
+  const handleTogglePoolEnabled = async (checked: boolean) => {
+    setPoolEnabled(checked);
+    await persistPoolConfig(checked, false);
+    toast.success(
+      checked
+        ? "Proxy Pool enabled — outbound target & scanner traffic now routes through the pool"
+        : "Proxy Pool disabled — target traffic connects directly (unless a static Global Proxy is set)",
+    );
+  };
+
+  const handleSaveConfig = async () => {
+    await persistPoolConfig(poolEnabled, true);
   };
 
   const handleForceRotate = async () => {
@@ -328,7 +357,7 @@ export default function ProxyPoolPage() {
     return (
       <div className="flex items-center gap-1.5">
         <Badge variant={s.variant} className="gap-1">{s.icon}<span>{s.label}</span></Badge>
-        {isActiveEgress && config?.enabled && (
+        {isActiveEgress && poolEnabled && (
           <Badge variant="outline" className="border-emerald-500/50 text-emerald-500 gap-1 text-[10px]">
             <ShieldCheck className="w-3 h-3" /> Active
           </Badge>
@@ -388,11 +417,9 @@ export default function ProxyPoolPage() {
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <CardTitle>Proxy List</CardTitle>
-                {config && (
-                  <Badge variant={config.enabled ? "default" : "secondary"} className="text-xs">
-                    {config.enabled ? "Pool Active" : "Pool Disabled"}
-                  </Badge>
-                )}
+                <Badge variant={poolEnabled ? "default" : "secondary"} className="text-xs">
+                  {poolEnabled ? "Pool Active" : "Pool Disabled"}
+                </Badge>
               </div>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -565,7 +592,7 @@ export default function ProxyPoolPage() {
                     const isActiveEgress = stats.active_proxy_id === p.id;
                     const exitIP = p.response_ip || p.egress_ip;
                     return (
-                      <TableRow key={p.id} className={isActiveEgress && config?.enabled ? "bg-emerald-500/5" : undefined}>
+                      <TableRow key={p.id} className={isActiveEgress && poolEnabled ? "bg-emerald-500/5" : undefined}>
                         <TableCell>{statusBadge(p.status as ProxyStatus, isActiveEgress)}</TableCell>
                         <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{p.url}</code></TableCell>
                         <TableCell>{exitIP ? <code className="text-xs font-mono">{exitIP}</code> : "-"}</TableCell>
@@ -577,8 +604,8 @@ export default function ProxyPoolPage() {
                         <TableCell className="text-xs text-muted-foreground">{p.last_checked_at ? new Date(p.last_checked_at).toLocaleString() : "-"}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="ghost" onClick={() => handleActivate(p.id)} disabled={isActiveEgress && !!config?.enabled}>
-                              {isActiveEgress && config?.enabled ? "In Use" : "Use"}
+                            <Button size="sm" variant="ghost" onClick={() => handleActivate(p.id)} disabled={isActiveEgress && poolEnabled}>
+                              {isActiveEgress && poolEnabled ? "In Use" : "Use"}
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => handleToggle(p.id)}>
                               {p.status === "disabled" || p.active === false ? "Enable" : "Disable"}
@@ -602,44 +629,95 @@ export default function ProxyPoolPage() {
 
         <TabsContent value="config">
           <Card>
-            <CardHeader><CardTitle>Pool Configuration</CardTitle></CardHeader>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Pool Configuration</CardTitle>
+                <Badge variant={poolEnabled ? "default" : "secondary"}>
+                  {poolEnabled ? "Routing Active" : "Pool Disabled"}
+                </Badge>
+              </div>
+            </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <h3 className="font-medium flex items-center gap-2"><Settings className="w-4 h-4" /> Rotation Settings</h3>
                   <div className="flex items-center justify-between rounded-lg border p-3">
-                    <Label>Enable Proxy Pool</Label>
-                    <Switch checked={config?.enabled ?? false} onCheckedChange={(checked) => setConfig(prev => prev ? {...prev, enabled: checked} : null)} />
+                    <div className="space-y-0.5 pr-4">
+                      <Label htmlFor="pool-enabled-switch" className="cursor-pointer">Enable Proxy Pool</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Takes effect immediately across Agents, Bash, WebFetch, Scanners, and Browser Inspection. Overrides any single static Global Proxy while enabled.
+                      </p>
+                    </div>
+                    <Switch
+                      id="pool-enabled-switch"
+                      checked={poolEnabled}
+                      disabled={savingConfig}
+                      onCheckedChange={(checked) => void handleTogglePoolEnabled(checked)}
+                    />
                   </div>
-                  <div>
+                  <div className="space-y-1.5">
                     <Label>Rotation Strategy</Label>
                     <Select value={rotationStrategy} onValueChange={setRotationStrategy}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="round_robin">Round Robin</SelectItem>
+                        <SelectItem value="round_robin">Round Robin (Sequential)</SelectItem>
                         <SelectItem value="random">Random</SelectItem>
                         <SelectItem value="least_used">Least Used</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div><Label>Rotation Interval (seconds)</Label><Input type="number" min={5} value={rotationInterval} onChange={e => setRotationInterval(e.target.value)} /></div>
+                  <div className="space-y-1.5">
+                    <Label>Rotation Interval (seconds)</Label>
+                    <Input
+                      type="number"
+                      min={5}
+                      value={rotationInterval}
+                      disabled={sessionSticky}
+                      onChange={e => setRotationInterval(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {sessionSticky
+                        ? "Timed rotation is paused while Session Sticky is enabled (rotates only on failure or Force Rotate)."
+                        : "Automatically rotates to the next healthy proxy at this interval."}
+                    </p>
+                  </div>
                   <div className="flex items-center justify-between rounded-lg border p-3">
-                    <Label>Auto-rotate on Failure</Label>
+                    <div className="space-y-0.5 pr-4">
+                      <Label>Auto-rotate on Failure</Label>
+                      <p className="text-xs text-muted-foreground">Automatically fail over to another healthy proxy when consecutive failures hit threshold.</p>
+                    </div>
                     <Switch checked={autoRotateOnFailure} onCheckedChange={setAutoRotateOnFailure} />
                   </div>
                   <div className="flex items-center justify-between rounded-lg border p-3">
-                    <Label>Session Sticky</Label>
+                    <div className="space-y-0.5 pr-4">
+                      <Label>Session Sticky</Label>
+                      <p className="text-xs text-muted-foreground">Keep a consistent exit IP during authenticated target workflows; turn off to rotate on a timer.</p>
+                    </div>
                     <Switch checked={sessionSticky} onCheckedChange={setSessionSticky} />
                   </div>
                 </div>
                 <div className="space-y-4">
                   <h3 className="font-medium flex items-center gap-2"><Activity className="w-4 h-4" /> Health Check</h3>
-                  <div><Label>Check Interval (seconds)</Label><Input type="number" min={10} value={healthInterval} onChange={e => setHealthInterval(e.target.value)} /></div>
-                  <div><Label>Max Consecutive Failures</Label><Input type="number" min={1} value={maxFailures} onChange={e => setMaxFailures(e.target.value)} /></div>
-                  <div><Label>Cooldown (seconds)</Label><Input type="number" min={10} value={cooldown} onChange={e => setCooldown(e.target.value)} /></div>
+                  <div className="space-y-1.5">
+                    <Label>Check Interval (seconds)</Label>
+                    <Input type="number" min={10} value={healthInterval} onChange={e => setHealthInterval(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">Background connectivity &amp; GeoIP probe frequency.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Max Consecutive Failures</Label>
+                    <Input type="number" min={1} value={maxFailures} onChange={e => setMaxFailures(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">Number of failed probes before cooling down a proxy and failing over.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Cooldown (seconds)</Label>
+                    <Input type="number" min={10} value={cooldown} onChange={e => setCooldown(e.target.value)} />
+                    <p className="text-xs text-muted-foreground">Wait time before re-probing a failed proxy to check recovery.</p>
+                  </div>
                 </div>
               </div>
-              <Button onClick={handleSaveConfig}>Save Configuration</Button>
+              <Button onClick={() => void handleSaveConfig()} disabled={savingConfig}>
+                {savingConfig ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Saving...</> : "Save Configuration"}
+              </Button>
             </CardContent>
           </Card>
         </TabsContent>

@@ -119,6 +119,9 @@ func (m *Monitor) RunCheckCycle(forceAll bool) (int, int, int64) {
 	wg.Wait()
 
 	checkedCount := len(due)
+	if m.AutoTargetEnabled() {
+		_, _ = m.AutoMatchAuthorizedTargets(allAdded)
+	}
 	m.mu.Lock()
 	m.lastScanAt = &now
 	cb := m.onAgentWatch

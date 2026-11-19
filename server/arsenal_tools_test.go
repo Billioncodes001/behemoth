@@ -3,12 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/server/patchmonitor"
 	"github.com/Autumn-27/artex/server/tools"
 )
 
@@ -100,5 +103,42 @@ func TestStandaloneFindingReportUpdateAndInterceptRuleGovernance(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("expected non-host rule update to succeed, got %+v", res)
 		}
+	}
+
+	// 3) Verify standalone finding lineage graph returns non-empty nodes & edges
+	req := httptest.NewRequest(http.MethodGet, "/api/exploration/findings/"+i64s(fid)+"/lineage", nil)
+	req.SetPathValue("id", i64s(fid))
+	w := httptest.NewRecorder()
+	s.findingLineage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("findingLineage status=%d body=%s", w.Code, w.Body.String())
+	}
+	var lineage struct {
+		Nodes []TaskNodeDTO `json:"nodes"`
+		Edges []EdgeDTO     `json:"edges"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &lineage); err != nil || len(lineage.Nodes) < 3 || len(lineage.Edges) < 2 {
+		t.Fatalf("expected synthetic standalone lineage graph, got err=%v lineage=%+v", err, lineage)
+	}
+
+	// 4) Verify Patch Monitor AutoMatchAuthorizedTargets correlates registered Assets by technology
+	var assetID int64
+	if err := pg.QueryRow(`INSERT INTO assets(type, domain, url, service_name, technologies) VALUES('service', 'portal.example.org', 'https://portal.example.org', 'PHP/8.2 Apache', ARRAY['PHP','Apache']) RETURNING id`).Scan(&assetID); err != nil {
+		t.Fatalf("insert test asset: %v", err)
+	}
+	pm := patchmonitor.NewMonitor(pg.DB)
+	matched, err := pm.AutoMatchAuthorizedTargets(nil)
+	if err != nil {
+		t.Fatalf("AutoMatchAuthorizedTargets: %v", err)
+	}
+	foundPortal := false
+	for _, m := range matched {
+		if m.Host == "portal.example.org" {
+			foundPortal = true
+			break
+		}
+	}
+	if !foundPortal {
+		t.Fatalf("expected portal.example.org (asset #%d) auto-matched into exploit_targets, got %+v", assetID, matched)
 	}
 }

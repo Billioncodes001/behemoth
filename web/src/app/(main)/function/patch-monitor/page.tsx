@@ -83,17 +83,19 @@ export default function PatchMonitorPage() {
   const { t } = useLiveTranslation();
   const [loading, setLoading] = React.useState(false);
   const [scanningNow, setScanningNow] = React.useState(false);
+  const [matchingTargets, setMatchingTargets] = React.useState(false);
   const [monitorRunning, setMonitorRunning] = React.useState(false);
   const [autoPayload, setAutoPayload] = React.useState(true);
+  const [autoTarget, setAutoTarget] = React.useState(true);
   const [selectedProfileId, setSelectedProfileId] = React.useState<string>("default");
   const [llmProfiles, setLlmProfiles] = React.useState<LLMProfileItem[]>([]);
   const [lastConvId, setLastConvId] = React.useState<number>(0);
   const [sources, setSources] = React.useState<PatchSource[]>([]);
   const [vulns, setVulns] = React.useState<Vulnerability[]>([]);
   const [exploits, setExploits] = React.useState<GeneratedExploitItem[]>([]);
-  const [selectedExploit, setSelectedExploit] = React.useState<GeneratedExploitItem | null>(null);
+  const [expandedExploitId, setExpandedExploitId] = React.useState<number | null>(null);
   const [targets, setTargets] = React.useState<ExploitTarget[]>([]);
-  const [selectedVuln, setSelectedVuln] = React.useState<Vulnerability | null>(null);
+  const [expandedVulnId, setExpandedVulnId] = React.useState<number | null>(null);
   const [generatedPoC, setGeneratedPoC] = React.useState<string>("");
   const [generatingPoC, setGeneratingPoC] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -139,9 +141,10 @@ export default function PatchMonitorPage() {
 
   async function checkStatus() {
     try {
-      const s = await fetchAPI<{ running: boolean; auto_payload?: boolean; llm_profile_id?: number; last_conversation_id?: number }>("/status");
+      const s = await fetchAPI<{ running: boolean; auto_payload?: boolean; auto_target?: boolean; llm_profile_id?: number; last_conversation_id?: number }>("/status");
       setMonitorRunning(!!s?.running);
       if (typeof s?.auto_payload === "boolean") setAutoPayload(s.auto_payload);
+      if (typeof s?.auto_target === "boolean") setAutoTarget(s.auto_target);
       if (s?.llm_profile_id) setSelectedProfileId(String(s.llm_profile_id));
       if (s?.last_conversation_id) setLastConvId(s.last_conversation_id);
     } catch {}
@@ -152,9 +155,9 @@ export default function PatchMonitorPage() {
       const profId = selectedProfileId !== "default" ? Number(selectedProfileId) : null;
       const s = await fetchAPI<{ running?: boolean; last_conversation_id?: number }>(start ? "/start" : "/stop", {
         method: "POST",
-        body: JSON.stringify({ llm_profile_id: profId, auto_payload: autoPayload }),
+        body: JSON.stringify({ llm_profile_id: profId, auto_payload: autoPayload, auto_target: autoTarget }),
       });
-      toast.success(start ? "Patch Monitor & AI Watcher started (Auto-Payload active)" : "Patch Monitor stopped");
+      toast.success(start ? "Patch Monitor & AI Watcher started (Auto-Payload & Auto-Targeting active)" : "Patch Monitor stopped");
       setMonitorRunning(start);
       if (s?.last_conversation_id) setLastConvId(s.last_conversation_id);
       setTimeout(() => { loadAll(); checkStatus(); }, 1500);
@@ -167,7 +170,7 @@ export default function PatchMonitorPage() {
       const profId = selectedProfileId !== "default" ? Number(selectedProfileId) : null;
       const res = await fetchAPI<{ sources_checked: number; new_vulns: number; conversation_id?: number }>("/check-now", {
         method: "POST",
-        body: JSON.stringify({ llm_profile_id: profId, auto_payload: autoPayload }),
+        body: JSON.stringify({ llm_profile_id: profId, auto_payload: autoPayload, auto_target: autoTarget }),
       });
       if (res.conversation_id) setLastConvId(res.conversation_id);
       toast.success(`Polled ${res.sources_checked} security feeds (${res.new_vulns} new advisories) & launched Patch Watch AI Agent`);
@@ -176,6 +179,26 @@ export default function PatchMonitorPage() {
       toast.error("Feed scan failed");
     } finally {
       setScanningNow(false);
+    }
+  }
+
+  async function handleAutoMatchTargets() {
+    setMatchingTargets(true);
+    try {
+      const res = await fetchAPI<{ matched: number; added: number }>("/targets/auto-match", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (res.matched > 0) {
+        toast.success(`Matched ${res.matched} authorized asset(s) by technology (${res.added} newly added to Targets)`);
+      } else {
+        toast.info("No new authorized assets matched tracked technologies yet (add or scan scope assets first).");
+      }
+      await loadAll();
+    } catch {
+      toast.error("Auto-target matching failed");
+    } finally {
+      setMatchingTargets(false);
     }
   }
 
@@ -324,7 +347,12 @@ export default function PatchMonitorPage() {
 
             <div className="flex items-center gap-2">
               <Switch checked={autoPayload} onCheckedChange={setAutoPayload} id="auto-payload-toggle" />
-              <Label htmlFor="auto-payload-toggle" className="cursor-pointer text-xs">Auto-Generate Payloads</Label>
+              <Label htmlFor="auto-payload-toggle" className="cursor-pointer text-xs">Auto-Generate PoCs</Label>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch checked={autoTarget} onCheckedChange={setAutoTarget} id="auto-target-toggle" />
+              <Label htmlFor="auto-target-toggle" className="cursor-pointer text-xs">Auto-Target Scope Assets</Label>
             </div>
 
             {lastConvId > 0 && (
@@ -346,7 +374,6 @@ export default function PatchMonitorPage() {
           <TabsTrigger value="exploits"><Code2 className="mr-1 size-4" /> Auto-Generated Exploits & Payloads ({exploits.length})</TabsTrigger>
           <TabsTrigger value="sources"><Download className="mr-1 size-4" /> Watch Feeds ({sources.length})</TabsTrigger>
           <TabsTrigger value="targets"><Target className="mr-1 size-4" /> Targets ({targets.length})</TabsTrigger>
-          <TabsTrigger value="payloads"><Bug className="mr-1 size-4" /> Payload Studio</TabsTrigger>
         </TabsList>
 
         <TabsContent value="vulnerabilities" className="mt-4">
@@ -384,20 +411,62 @@ export default function PatchMonitorPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredVulns.map((vuln) => (
-                      <TableRow key={vuln.id} className="cursor-pointer" onClick={() => { setSelectedVuln(vuln); setGeneratedPoC(""); }}>
-                        <TableCell>{statusIcon(vuln.status)}</TableCell>
-                        <TableCell>{severityBadge(vuln.severity, vuln.cvss_score)}</TableCell>
-                        <TableCell className="font-mono text-sm">{vuln.cve_id || "-"}</TableCell>
-                        <TableCell className="max-w-md truncate">{vuln.title}</TableCell>
-                        <TableCell><Badge variant="outline">{vuln.source_name}</Badge></TableCell>
-                        <TableCell>{vuln.cvss_score?.toFixed(1) || "-"}</TableCell>
-                        <TableCell className="text-muted-foreground text-xs">{new Date(vuln.discovered_at).toLocaleDateString()}</TableCell>
-                        <TableCell onClick={(e) => { e.stopPropagation(); setSelectedVuln(vuln); setGeneratedPoC(""); }}>
-                          <Button variant="ghost" size="sm"><Eye className="size-4" /></Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filteredVulns.map((vuln) => {
+                      const isExpanded = expandedVulnId === vuln.id;
+                      const toggleRow = () => {
+                        setExpandedVulnId((prev) => (prev === vuln.id ? null : vuln.id));
+                        setGeneratedPoC("");
+                      };
+                      return (
+                        <React.Fragment key={vuln.id}>
+                          <TableRow className={isExpanded ? "cursor-pointer bg-muted/40" : "cursor-pointer"} onClick={toggleRow}>
+                            <TableCell>{statusIcon(vuln.status)}</TableCell>
+                            <TableCell>{severityBadge(vuln.severity, vuln.cvss_score)}</TableCell>
+                            <TableCell className="font-mono text-sm">{vuln.cve_id || "-"}</TableCell>
+                            <TableCell className="max-w-md truncate">{vuln.title}</TableCell>
+                            <TableCell><Badge variant="outline">{vuln.source_name}</Badge></TableCell>
+                            <TableCell>{vuln.cvss_score?.toFixed(1) || "-"}</TableCell>
+                            <TableCell className="text-muted-foreground text-xs">{new Date(vuln.discovered_at).toLocaleDateString()}</TableCell>
+                            <TableCell onClick={(e) => { e.stopPropagation(); toggleRow(); }}>
+                              <Button variant={isExpanded ? "secondary" : "ghost"} size="sm" title={isExpanded ? "Hide details" : "Inspect advisory"}>
+                                {isExpanded ? <X className="size-4" /> : <Eye className="size-4" />}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow className="bg-muted/20 hover:bg-muted/20">
+                              <TableCell colSpan={8} className="p-4 whitespace-normal">
+                                <div className="space-y-4 rounded-lg border bg-card p-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <h4 className="font-semibold text-sm">{vuln.cve_id ? `${vuln.cve_id} — ` : ""}{vuln.title}</h4>
+                                      <p className="mt-1 text-muted-foreground text-xs leading-relaxed">{vuln.description || "No description"}</p>
+                                    </div>
+                                    <Button variant="ghost" size="sm" onClick={() => setExpandedVulnId(null)}><X className="size-4" /></Button>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                                    <div><Label className="text-muted-foreground text-[11px]">Severity</Label><div className="mt-1">{severityBadge(vuln.severity, vuln.cvss_score)}</div></div>
+                                    <div><Label className="text-muted-foreground text-[11px]">CVSS Score</Label><div className="mt-1 font-mono">{vuln.cvss_score?.toFixed(1) || "N/A"}</div></div>
+                                    <div><Label className="text-muted-foreground text-[11px]">Affected Versions</Label><div className="mt-1">{vuln.affected_versions || "N/A"}</div></div>
+                                    <div><Label className="text-muted-foreground text-[11px]">Patched Version</Label><div className="mt-1">{vuln.patched_version || "N/A"}</div></div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                                    <Button size="sm" onClick={() => handleGenerateExploit(vuln.id)} disabled={generatingPoC}>
+                                      {generatingPoC ? <><Loader2 className="mr-1.5 size-4 animate-spin" /> Generating PoC...</> : <><Terminal className="mr-1.5 size-4" /> Generate PoC Exploit</>}
+                                    </Button>
+                                  </div>
+                                  {generatedPoC && (
+                                    <pre className="max-h-80 overflow-auto rounded-md bg-gray-950 p-4 text-green-400 text-xs">
+                                      <code>{generatedPoC}</code>
+                                    </pre>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                     {filteredVulns.length === 0 && (
                       <TableRow><TableCell colSpan={8} className="py-12 text-center text-muted-foreground">No vulnerabilities found</TableCell></TableRow>
                     )}
@@ -406,84 +475,94 @@ export default function PatchMonitorPage() {
               )}
             </CardContent>
           </Card>
-          {selectedVuln && (
-            <Card className="mt-4">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{selectedVuln.cve_id || "Details"}</CardTitle>
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedVuln(null)}><X className="size-4" /></Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div><h4 className="mb-1 font-semibold">{selectedVuln.title}</h4><p className="text-muted-foreground text-sm">{selectedVuln.description || "No description"}</p></div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div><Label className="text-muted-foreground text-xs">Severity</Label><div className="mt-1">{severityBadge(selectedVuln.severity, selectedVuln.cvss_score)}</div></div>
-                  <div><Label className="text-muted-foreground text-xs">CVSS Score</Label><div className="mt-1 font-mono">{selectedVuln.cvss_score?.toFixed(1) || "N/A"}</div></div>
-                  <div><Label className="text-muted-foreground text-xs">Affected Versions</Label><div className="mt-1 text-sm">{selectedVuln.affected_versions || "N/A"}</div></div>
-                  <div><Label className="text-muted-foreground text-xs">Patched Version</Label><div className="mt-1 text-sm">{selectedVuln.patched_version || "N/A"}</div></div>
-                </div>
-                <div className="flex items-center gap-2 pt-2">
-                  <Button size="sm" onClick={() => handleGenerateExploit(selectedVuln.id)} disabled={generatingPoC}>
-                    {generatingPoC ? <><Loader2 className="mr-1.5 size-4 animate-spin" /> Generating PoC...</> : <><Terminal className="mr-1.5 size-4" /> Generate PoC Exploit</>}
-                  </Button>
-                </div>
-                {generatedPoC && (
-                  <pre className="max-h-80 overflow-auto rounded-md bg-gray-950 p-4 text-green-400 text-xs">
-                    <code>{generatedPoC}</code>
-                  </pre>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </TabsContent>
 
         <TabsContent value="exploits" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Auto-Generated PoC Exploits & Client-Side Payloads</CardTitle>
-              <CardDescription>Automatically synthesized by Patch Monitor & the Patch Watch AI Agent when security updates arrive</CardDescription>
+              <CardTitle>Auto-Generated PoC Exploits & Agent Payloads</CardTitle>
+              <CardDescription>Automatically synthesized by Patch Monitor &amp; AI Agents. Click the eye button on any row to expand its code inline directly beneath that row.</CardDescription>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>ID</TableHead><TableHead>CVE / Advisory</TableHead><TableHead>Type</TableHead>
-                    <TableHead>Language</TableHead><TableHead>Confidence</TableHead><TableHead>Created</TableHead><TableHead></TableHead>
+                    <TableHead>Language</TableHead><TableHead>Confidence</TableHead><TableHead>Created</TableHead><TableHead className="text-right">Code</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {exploits.map((ex) => (
-                    <TableRow key={ex.id} className="cursor-pointer" onClick={() => setSelectedExploit(ex)}>
-                      <TableCell className="font-mono text-xs">#{ex.id}</TableCell>
-                      <TableCell className="font-mono text-sm">{ex.cve_id || `Vuln #${ex.vuln_id}`}</TableCell>
-                      <TableCell><Badge variant={ex.exploit_type.startsWith("payload:") ? "default" : "outline"}>{ex.exploit_type}</Badge></TableCell>
-                      <TableCell><Badge variant="secondary">{ex.language}</Badge></TableCell>
-                      <TableCell>{Math.round((ex.confidence || 0.7) * 100)}%</TableCell>
-                      <TableCell className="text-muted-foreground text-xs">{new Date(ex.created_at).toLocaleString()}</TableCell>
-                      <TableCell onClick={(e) => { e.stopPropagation(); setSelectedExploit(ex); }}>
-                        <Button variant="ghost" size="sm"><Eye className="size-4" /></Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {exploits.map((ex) => {
+                    const isOpen = expandedExploitId === ex.id;
+                    const toggleExploit = () => setExpandedExploitId((prev) => (prev === ex.id ? null : ex.id));
+                    return (
+                      <React.Fragment key={ex.id}>
+                        <TableRow className={isOpen ? "cursor-pointer bg-muted/40" : "cursor-pointer"} onClick={toggleExploit}>
+                          <TableCell className="font-mono text-xs">#{ex.id}</TableCell>
+                          <TableCell className="font-mono text-sm">{ex.cve_id || `Vuln #${ex.vuln_id}`}</TableCell>
+                          <TableCell><Badge variant={ex.exploit_type.startsWith("payload:") ? "default" : "outline"}>{ex.exploit_type}</Badge></TableCell>
+                          <TableCell><Badge variant="secondary">{ex.language}</Badge></TableCell>
+                          <TableCell>{Math.round((ex.confidence || 0.7) * 100)}%</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{new Date(ex.created_at).toLocaleString()}</TableCell>
+                          <TableCell className="text-right" onClick={(e) => { e.stopPropagation(); toggleExploit(); }}>
+                            <Button variant={isOpen ? "secondary" : "ghost"} size="sm" title={isOpen ? "Hide code" : "View code"}>
+                              {isOpen ? <X className="size-4" /> : <Eye className="size-4" />}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                        {isOpen && (
+                          <TableRow className="bg-muted/20 hover:bg-muted/20">
+                            <TableCell colSpan={7} className="p-4 whitespace-normal">
+                              <div className="space-y-2.5 rounded-lg border bg-card p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="font-semibold text-sm">
+                                    {ex.cve_id || `Vuln #${ex.vuln_id}`} — {ex.exploit_type} ({ex.language})
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(ex.code);
+                                        toast.success("Copied to clipboard");
+                                      }}
+                                    >
+                                      Copy Code
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        const ext = ex.language === "javascript" ? "js" : ex.language === "python" ? "py" : "txt";
+                                        const blob = new Blob([ex.code], { type: "text/plain" });
+                                        const a = document.createElement("a");
+                                        a.href = URL.createObjectURL(blob);
+                                        a.download = `${(ex.cve_id || `exploit-${ex.id}`).replace(/[^a-zA-Z0-9_-]/g, "_")}.${ext}`;
+                                        a.click();
+                                      }}
+                                    >
+                                      <Download className="mr-1 size-3.5" /> Download
+                                    </Button>
+                                    <Button variant="ghost" size="sm" onClick={() => setExpandedExploitId(null)}>
+                                      <X className="size-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                                <pre className="max-h-96 overflow-auto rounded-md bg-gray-950 p-4 text-green-400 text-xs">
+                                  <code>{ex.code}</code>
+                                </pre>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                   {exploits.length === 0 && (
                     <TableRow><TableCell colSpan={7} className="py-12 text-center text-muted-foreground">No auto-generated exploits or payloads yet</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
-              {selectedExploit && (
-                <div className="mt-4 space-y-2 rounded-lg border p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold text-sm">{selectedExploit.cve_id || `Vuln #${selectedExploit.vuln_id}`} — {selectedExploit.exploit_type} ({selectedExploit.language})</div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(selectedExploit.code); toast.success("Copied to clipboard"); }}>Copy Code</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setSelectedExploit(null)}><X className="size-4" /></Button>
-                    </div>
-                  </div>
-                  <pre className="max-h-96 overflow-auto rounded-md bg-gray-950 p-4 text-green-400 text-xs">
-                    <code>{selectedExploit.code}</code>
-                  </pre>
-                </div>
-              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -549,15 +628,25 @@ export default function PatchMonitorPage() {
         <TabsContent value="targets" className="mt-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div><CardTitle>Exploit Targets</CardTitle><CardDescription>Managed targets for security testing</CardDescription></div>
-                <Button size="sm" onClick={() => setShowAddTarget(true)}><Plus className="mr-1 size-4" /> Add Target</Button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <CardTitle>Exploit Targets &amp; Auto-Matched Scope Assets</CardTitle>
+                  <CardDescription>
+                    Automatically matches tracked CVEs &amp; generated PoCs against registered authorized Assets &amp; Scope by technology stack, and dispatches the Patch Watch AI Agent to verify exposure.
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="secondary" size="sm" onClick={handleAutoMatchTargets} disabled={matchingTargets}>
+                    {matchingTargets ? <><Loader2 className="mr-1.5 size-4 animate-spin" /> Matching...</> : <><Sparkles className="mr-1.5 size-4" /> Auto-Match Scope Assets</>}
+                  </Button>
+                  <Button size="sm" onClick={() => setShowAddTarget(true)}><Plus className="mr-1 size-4" /> Add Target</Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
               {showAddTarget && (
                 <Card className="mb-4 border-dashed">
-                  <CardHeader className="pb-3"><CardTitle className="text-base">Add New Target</CardTitle></CardHeader>
+                  <CardHeader className="pb-3"><CardTitle className="text-base">Add Authorized Target</CardTitle></CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 gap-4">
                       <div><Label>Name</Label><Input placeholder="Target name" value={newTarget.name || ""} onChange={(e) => setNewTarget({ ...newTarget, name: e.target.value })} /></div>
@@ -580,7 +669,13 @@ export default function PatchMonitorPage() {
                 </Card>
               )}
               <Table>
-                <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Host:Port</TableHead><TableHead>Service</TableHead><TableHead>Version</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>Host:Port</TableHead>
+                    <TableHead>Service / Tech</TableHead><TableHead>Version</TableHead><TableHead>Matched Advisories</TableHead>
+                    <TableHead>Status</TableHead><TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
                 <TableBody>
                   {targets.map((t) => (
                     <TableRow key={t.id}>
@@ -589,110 +684,36 @@ export default function PatchMonitorPage() {
                       <TableCell className="font-mono text-sm">{t.host}:{t.port}</TableCell>
                       <TableCell>{t.service || "-"}</TableCell>
                       <TableCell className="font-mono text-xs">{t.version || "-"}</TableCell>
-                      <TableCell><Badge variant={t.status === "online" ? "default" : t.status === "offline" ? "destructive" : "secondary"}>{t.status}</Badge></TableCell>
+                      <TableCell className="max-w-xs truncate text-xs text-muted-foreground" title={t.notes || ""}>{t.notes || "-"}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            t.status === "verified_vulnerable"
+                              ? "destructive"
+                              : t.status === "online" || t.status === "matched"
+                                ? "default"
+                                : "secondary"
+                          }
+                        >
+                          {t.status}
+                        </Badge>
+                      </TableCell>
                       <TableCell><Button variant="ghost" size="sm" onClick={() => handleDeleteTarget(t.id)}><Trash2 className="size-4 text-red-400" /></Button></TableCell>
                     </TableRow>
                   ))}
-                  {targets.length === 0 && <TableRow><TableCell colSpan={7} className="py-12 text-center text-muted-foreground">No targets configured</TableCell></TableRow>}
+                  {targets.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-12 text-center text-muted-foreground">
+                        No targets enrolled yet. Click <strong>Auto-Match Scope Assets</strong> to correlate your Assets inventory against tracked CVEs, or click <strong>Add Target</strong>.
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
           </Card>
         </TabsContent>
-
-        <TabsContent value="payloads" className="mt-4">
-          <PayloadGeneratorTab />
-        </TabsContent>
       </Tabs>
-    </div>
-  );
-}
-
-// ---------- Payload Generator Component ----------
-
-function PayloadGeneratorTab() {
-  const [payloadType, setPayloadType] = React.useState("cc_skimmer");
-  const [generatedPayload, setGeneratedPayload] = React.useState("");
-  const [generating, setGenerating] = React.useState(false);
-  const [config, setConfig] = React.useState<Record<string, string>>({});
-
-  const payloadTypes = [
-    { value: "cc_skimmer", label: "CC Skimmer", desc: "JS credit card form grabber" },
-    { value: "cookie_exfil", label: "Cookie Exfil", desc: "Cookie stealer with HttpOnly bypass" },
-    { value: "crypto_swap_dom", label: "Crypto Swap DOM", desc: "DOM-based crypto address swapper" },
-    { value: "crypto_swap_clipboard", label: "Crypto Clipboard", desc: "Clipboard address replacer" },
-    { value: "screen_exfil", label: "Screen Exfil", desc: "Screenshot capture & exfil" },
-  ];
-
-  async function generatePayload() {
-    setGenerating(true);
-    try {
-      const res = await apiFetch("/api/payloads/generate", {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ type: payloadType, config }),
-      });
-      const data = await res.json();
-      if (data.payload) { setGeneratedPayload(data.payload); toast.success("Payload generated"); }
-      else throw new Error(data.error || "Failed");
-    } catch { toast.error("Generation failed"); }
-    finally { setGenerating(false); }
-  }
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Terminal /> Payload Generator</CardTitle>
-          <CardDescription>Generate client-side attack payloads for security testing</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div><Label>Payload Type</Label>
-            <Select value={payloadType} onValueChange={setPayloadType}>
-              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {payloadTypes.map((pt) => (<SelectItem key={pt.value} value={pt.value}>{pt.label} — {pt.desc}</SelectItem>))}
-              </SelectContent>
-            </Select>
-          </div>
-          {(payloadType === "cc_skimmer" || payloadType === "cookie_exfil" || payloadType === "screen_exfil") && (
-            <div><Label>Exfiltration URL</Label>
-              <Input placeholder="https://attacker.com/exfil" value={config.exfil_url || ""} onChange={(e) => setConfig({ ...config, exfil_url: e.target.value })} />
-            </div>
-          )}
-          {(payloadType === "crypto_swap_dom" || payloadType === "crypto_swap_clipboard") && (
-            <div className="grid grid-cols-2 gap-4">
-              <div><Label>Attacker BTC</Label><Input placeholder="bc1q..." value={config.attacker_btc || ""} onChange={(e) => setConfig({ ...config, attacker_btc: e.target.value })} /></div>
-              <div><Label>Attacker ETH</Label><Input placeholder="0x..." value={config.attacker_eth || ""} onChange={(e) => setConfig({ ...config, attacker_eth: e.target.value })} /></div>
-            </div>
-          )}
-          <Button onClick={generatePayload} disabled={generating}>
-            {generating ? <><Loader2 className="mr-2 size-4 animate-spin" /> Generating...</> : <><Bug className="mr-2 size-4" /> Generate Payload</>}
-          </Button>
-        </CardContent>
-      </Card>
-      {generatedPayload && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Generated Payload</CardTitle>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(generatedPayload); toast.success("Copied!"); }}>Copy</Button>
-                <Button variant="outline" size="sm" onClick={() => {
-                  const blob = new Blob([generatedPayload], { type: "application/javascript" });
-                  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-                  a.download = `${payloadType}_${Date.now()}.js`; a.click();
-                }}><Download className="mr-1 size-4" /> Download</Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <pre className="max-h-96 overflow-auto rounded-md bg-gray-950 p-4 text-green-400 text-xs">
-              <code>{generatedPayload}</code>
-            </pre>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

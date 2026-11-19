@@ -350,7 +350,7 @@ func (m *Manager) applyActiveProxyLockedWithHealth(id, reason string, allowUnhea
 func (m *Manager) selectHealthyLocked(exclude string) string {
 	strategy := "sequential"
 	if m.pg != nil {
-		if v, ok, _ := m.pg.GetSetting(settingProxyRotateStrategy); ok && v == "random" {
+		if v, ok, _ := m.pg.GetSetting(settingProxyRotateStrategy); ok && (v == "random" || v == "least_used") {
 			strategy = v
 		}
 	}
@@ -372,6 +372,27 @@ func (m *Manager) selectHealthyLocked(exclude string) string {
 	}
 	if strategy == "random" {
 		return pool[rand.Intn(len(pool))]
+	}
+	if strategy == "least_used" && ppV2 != nil && ppV2.Pool != nil {
+		raw, _, _ := ppV2.Pool.GetRawState()
+		allowed := make(map[string]bool, len(pool))
+		for _, id := range pool {
+			allowed[id] = true
+		}
+		var bestID string
+		var bestUsed time.Time
+		for _, px := range raw {
+			if !allowed[px.ID] {
+				continue
+			}
+			if bestID == "" || px.LastUsed.Before(bestUsed) {
+				bestID = px.ID
+				bestUsed = px.LastUsed
+			}
+		}
+		if bestID != "" {
+			return bestID
+		}
 	}
 	start := 0
 	for i, e := range m.proxyPool.entries {
@@ -460,13 +481,13 @@ func (m *Manager) proxyHealthConfig() (threshold int, cooldown, interval time.Du
 
 func (m *Manager) SetProxyPoolSettings(timed bool, interval int, onFailure bool, strategy string, threshold, cooldown, healthInterval int) error {
 	if interval < minProxyRotateInterval {
-		return fmt.Errorf("定时轮换间隔不能小于 %d 秒", minProxyRotateInterval)
+		return fmt.Errorf("Rotation interval must be at least %d seconds", minProxyRotateInterval)
 	}
-	if strategy != "sequential" && strategy != "random" {
-		return errors.New("proxy_rotate_strategy 必须是 sequential 或 random")
+	if strategy != "sequential" && strategy != "random" && strategy != "least_used" {
+		return errors.New("proxy_rotate_strategy must be sequential, random, or least_used")
 	}
 	if threshold < 1 || cooldown < 1 || healthInterval < 1 {
-		return errors.New("健康检查参数必须大于 0")
+		return errors.New("Health check parameters must be greater than 0")
 	}
 	return m.pg.SetSettingsAtomic(context.Background(), map[string]string{settingProxyRotateTimed: fmt.Sprint(timed), settingProxyRotateInterval: fmt.Sprint(interval), settingProxyRotateFailure: fmt.Sprint(onFailure), settingProxyRotateStrategy: strategy, settingProxyHealthThreshold: fmt.Sprint(threshold), settingProxyHealthCooldown: fmt.Sprint(cooldown), settingProxyHealthInterval: fmt.Sprint(healthInterval)})
 }
@@ -477,7 +498,7 @@ func (m *Manager) proxyRotateConfig() (bool, time.Duration, bool, string) {
 	}
 	return m.pg.GetBool(settingProxyRotateTimed, false), time.Duration(proxyIntSetting(m.pg, settingProxyRotateInterval, defaultProxyRotateInterval)) * time.Second, m.pg.GetBool(settingProxyRotateFailure, false), func() string {
 		v, ok, _ := m.pg.GetSetting(settingProxyRotateStrategy)
-		if ok && v == "random" {
+		if ok && (v == "random" || v == "least_used") {
 			return v
 		}
 		return "sequential"

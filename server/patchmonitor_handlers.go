@@ -121,6 +121,28 @@ func (s *Server) handlePatchMonitorDeleteTarget(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
+func (s *Server) handlePatchMonitorAutoMatchTargets(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		return
+	}
+	matched, err := s.patchMon.AutoMatchAuthorizedTargets(nil)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "auto-match failed: "+err.Error())
+		return
+	}
+	added := 0
+	for _, m := range matched {
+		if m.NewlyAdded {
+			added++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"matched": len(matched),
+		"added":   added,
+		"items":   matched,
+	})
+}
+
 func (s *Server) handlePatchMonitorGenerateExploit(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		return
@@ -146,11 +168,15 @@ func (s *Server) handlePatchMonitorStart(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		LLMProfileID *int64 `json:"llm_profile_id"`
 		AutoPayload  *bool  `json:"auto_payload"`
+		AutoTarget   *bool  `json:"auto_target"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	autoPayload := true
 	if req.AutoPayload != nil {
 		autoPayload = *req.AutoPayload
+	}
+	if req.AutoTarget != nil {
+		s.patchMon.SetAutoTarget(*req.AutoTarget)
 	}
 	s.patchMon.Configure(req.LLMProfileID, autoPayload)
 
@@ -160,7 +186,7 @@ func (s *Server) handlePatchMonitorStart(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.patchMon.Start(r.Context())
-	log.Printf("[api] Patch monitor started (profile=%v, auto_payload=%v)", req.LLMProfileID, autoPayload)
+	log.Printf("[api] Patch monitor started (profile=%v, auto_payload=%v, auto_target=%v)", req.LLMProfileID, autoPayload, s.patchMon.AutoTargetEnabled())
 	json.NewEncoder(w).Encode(s.patchMon.StatusSnapshot())
 }
 
@@ -186,8 +212,12 @@ func (s *Server) handlePatchMonitorCheckNow(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		LLMProfileID *int64 `json:"llm_profile_id"`
 		AutoPayload  *bool  `json:"auto_payload"`
+		AutoTarget   *bool  `json:"auto_target"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.AutoTarget != nil {
+		s.patchMon.SetAutoTarget(*req.AutoTarget)
+	}
 	if req.LLMProfileID != nil || req.AutoPayload != nil {
 		autoPayload := s.patchMon.AutoPayloadEnabled()
 		if req.AutoPayload != nil {
@@ -338,11 +368,12 @@ func (s *Server) launchPatchWatchAgentRun(profileID *int64, newVulns []patchmoni
 	prompt := fmt.Sprintf(
 		"Patch Monitor Watch Cycle triggered (%d vendor security feeds polled: Windows MSRC, macOS/iOS, CISA KEV, Chrome, Linux Kernel, Ubuntu, RHEL, Cisco, Fortinet, Palo Alto, AWS, NVD, GitHub, Exploit-DB).\n\n"+
 			"Tracked High/Critical Security Patches & CVEs:\n%s\n\n"+
-			"Execute your autonomous Patch Watch workflow now:\n"+
-			"1. Call `check_patch_feeds` to review the latest vulnerabilities and feed statuses.\n"+
-			"2. Call `generate_vuln_exploit` on the highest-priority vulnerability ID to synthesize a PoC exploit.\n"+
-			"3. Call `generate_payload` (e.g. `cookie_exfil` or `cc_skimmer`) so a client-side payload is ready for web/browser advisories.\n"+
-			"4. Output a concise intelligence briefing summarizing the watched vendor updates, generated PoC exploit, and generated payload.",
+			"Execute your autonomous Patch Watch & Scope-Aware Auto-Targeting workflow now:\n"+
+			"1. Call `get_proxy_pool_status` first to check if Proxy Pool or Global Proxy is enabled, and rotate/test via `manage_proxy_pool` if any active proxy is degraded.\n"+
+			"2. Call `check_patch_feeds` to review the latest vulnerabilities and `generate_vuln_exploit` on the highest-priority vulnerability ID to synthesize a PoC exploit.\n"+
+			"3. Call `match_vuln_targets` to correlate the exploited technology/software against ARTEX's registered authorized Assets & Scope inventory (`assets` & `exploit_targets`).\n"+
+			"4. If authorized targets in the platform inventory match an affected technology (or need non-destructive tech-stack fingerprinting), verify their exposed headers/versions strictly within authorized scope, test applicable PoCs safely, update each target via `update_exploit_target_status`, and call `report_finding` if an exploitable vulnerability is confirmed.\n"+
+			"5. Output a concise intelligence briefing summarizing watched advisories, generated PoCs, matched authorized targets, and verification results.",
 		sourcesChecked, strings.Join(summaryLines, "\n"),
 	)
 
@@ -364,10 +395,64 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 		s.toolGeneratePayload(),
 		s.toolCheckPatchFeeds(),
 		s.toolGenerateVulnExploit(),
+		s.toolMatchVulnTargets(),
+		s.toolUpdateExploitTargetStatus(),
 		s.toolSearchIOSExploits(),
 		s.toolMultiEngineSearch(),
 		s.toolExploitSearch(),
 	}
+}
+
+func (s *Server) toolMatchVulnTargets() actool.CoreTool {
+	return wrTool("match_vuln_targets",
+		"Correlate tracked CVEs and generated exploits against ARTEX's registered authorized Assets & Scope inventory by technology/product fingerprint, auto-enroll matching in-scope websites/services into Patch Monitor Targets, and return the full target list.",
+		objSchema(map[string]any{}),
+		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
+			if s.patchMon == nil {
+				return actool.Errorf("patch monitor is not initialized"), nil
+			}
+			matched, err := s.patchMon.AutoMatchAuthorizedTargets(nil)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			targets, _ := s.patchMon.GetTargets()
+			return jsonResult(map[string]any{
+				"matched_count": len(matched),
+				"matched":       matched,
+				"all_targets":   targets,
+			})
+		})
+}
+
+func (s *Server) toolUpdateExploitTargetStatus() actool.CoreTool {
+	return wrTool("update_exploit_target_status",
+		"Update a Patch Monitor target's verification status (e.g. verified_vulnerable, not_affected, patched, online, offline), fingerprinted service/version, and technical notes after testing.",
+		objSchema(map[string]any{
+			"target_id": map[string]any{"type": "integer", "description": "Target ID from match_vuln_targets"},
+			"status":    strParam("Status: verified_vulnerable | not_affected | patched | matched | online | offline"),
+			"service":   strParam("Detected technology/service name (e.g. nginx, Apache, PHP/CodeIgniter)"),
+			"version":   strParam("Detected software version"),
+			"notes":     strParam("Verification summary and CVE test result"),
+		}, "target_id", "status"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.patchMon == nil {
+				return actool.Errorf("patch monitor is not initialized"), nil
+			}
+			var a struct {
+				TargetID int64  `json:"target_id"`
+				Status   string `json:"status"`
+				Service  string `json:"service"`
+				Version  string `json:"version"`
+				Notes    string `json:"notes"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil || a.TargetID <= 0 || strings.TrimSpace(a.Status) == "" {
+				return actool.Errorf("target_id and status are required"), nil
+			}
+			if err := s.patchMon.UpdateTargetVerification(a.TargetID, a.Status, a.Service, a.Version, a.Notes); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(map[string]any{"ok": true, "target_id": a.TargetID, "status": a.Status})
+		})
 }
 
 func (s *Server) toolGeneratePayload() actool.CoreTool {

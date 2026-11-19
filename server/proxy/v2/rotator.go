@@ -494,6 +494,28 @@ func (p *Pool) ToggleProxyActive(id string) error {
 	return fmt.Errorf("proxy not found: %s", id)
 }
 
+// SetProxyActive explicitly enables or disables a single proxy by ID and automatically
+// rotates activeID if the currently active proxy was disabled.
+func (p *Pool) SetProxyActive(id string, active bool) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	for i := range p.state.proxies {
+		if p.state.proxies[i].ID == id {
+			p.state.proxies[i].Active = active
+			if !active {
+				p.state.proxies[i].Status = StatusDisabled
+				if p.state.activeID == id {
+					p.state.activeID = ""
+				}
+			} else if p.state.proxies[i].Status == StatusDisabled {
+				p.state.proxies[i].Status = StatusUntested
+			}
+			return p.persistLocked()
+		}
+	}
+	return fmt.Errorf("proxy not found: %s", id)
+}
+
 // ForceRotate forces rotation to next proxy.
 func (p *Pool) ForceRotate(reason string) (*ProxyInfo, error) {
 	p.state.mu.Lock()

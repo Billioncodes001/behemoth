@@ -96,6 +96,7 @@ type Monitor struct {
 	mu                 sync.RWMutex
 	running            bool
 	autoPayload        bool
+	autoTarget         bool
 	llmProfileID       *int64
 	lastConversationID int64
 	lastScanAt         *time.Time
@@ -138,6 +139,7 @@ func NewMonitor(db *sql.DB) *Monitor {
 	m := &Monitor{
 		db:          db,
 		autoPayload: true,
+		autoTarget:  true,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -164,6 +166,20 @@ func (m *Monitor) Configure(profileID *int64, autoPayload bool) {
 	m.autoPayload = autoPayload
 }
 
+// SetAutoTarget updates whether automatic scope/asset target matching is enabled.
+func (m *Monitor) SetAutoTarget(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.autoTarget = enabled
+}
+
+// AutoTargetEnabled reports whether automatic target matching is enabled.
+func (m *Monitor) AutoTargetEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.autoTarget
+}
+
 // AutoPayloadEnabled reports whether automatic exploit & payload generation is enabled.
 func (m *Monitor) AutoPayloadEnabled() bool {
 	m.mu.RLock()
@@ -178,6 +194,7 @@ func (m *Monitor) StatusSnapshot() map[string]interface{} {
 	return map[string]interface{}{
 		"running":              m.running,
 		"auto_payload":         m.autoPayload,
+		"auto_target":          m.autoTarget,
 		"llm_profile_id":       m.llmProfileID,
 		"last_conversation_id": m.lastConversationID,
 		"last_scan_at":         m.lastScanAt,

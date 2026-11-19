@@ -135,6 +135,9 @@ INSERT INTO patch_vulnerabilities (source_id, cve_id, title, description, severi
 ON CONFLICT DO NOTHING`, srcID)
 	}
 
+	// Remove legacy un-windowed NVD 1999 rows so the table reflects modern advisories
+	_, _ = m.db.Exec(`DELETE FROM patch_vulnerabilities WHERE cve_id LIKE 'CVE-1999-%' OR cve_id LIKE 'CVE-2000-%'`)
+
 	// Ensure baseline auto-generated exploits & payloads exist for initial vulnerabilities
 	var expCount int
 	if err := m.db.QueryRow(`SELECT COUNT(*) FROM generated_exploits`).Scan(&expCount); err == nil && expCount == 0 {

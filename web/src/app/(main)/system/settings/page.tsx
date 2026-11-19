@@ -69,19 +69,8 @@ export default function SystemSettingsPage() {
   const [savingProxy, setSavingProxy] = React.useState(false);
   const [globalProxyInput, setGlobalProxyInput] = React.useState("");
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
-  const [proxyPool, setProxyPool] = React.useState<ProxyPoolEntry[]>([]);
-  const [proxyPoolActiveId, setProxyPoolActiveId] = React.useState("");
-  const [proxyPoolText, setProxyPoolText] = React.useState("");
-  const [proxyPoolTimed, setProxyPoolTimed] = React.useState(false);
-  const [proxyPoolInterval, setProxyPoolInterval] = React.useState("30");
-  const [proxyPoolFailure, setProxyPoolFailure] = React.useState(false);
-  const [proxyPoolStrategy, setProxyPoolStrategy] = React.useState<"sequential" | "random">("sequential");
-  const [proxyPoolThreshold, setProxyPoolThreshold] = React.useState("3");
-  const [proxyPoolCooldown, setProxyPoolCooldown] = React.useState("60");
-  const [proxyPoolHealthInterval, setProxyPoolHealthInterval] = React.useState("30");
-  const [proxyPoolLogs, setProxyPoolLogs] = React.useState<
-    Array<{ at: string; from: string; to: string; reason: string }>
-  >([]);
+  const [v2PoolManaged, setV2PoolManaged] = React.useState(false);
+  const [v2PoolStats, setV2PoolStats] = React.useState<{ total: number; healthy: number } | null>(null);
   const [proxyReconnectMax, setProxyReconnectMax] = React.useState("5");
   const [proxyReconnectInterval, setProxyReconnectInterval] = React.useState("30");
   const [savingEgressVisibility, setSavingEgressVisibility] = React.useState(false);
@@ -157,16 +146,6 @@ export default function SystemSettingsPage() {
     setProxyInput(s.web_search_proxy ?? "");
     const savedProxy = s.global_proxy ?? "";
     setGlobalProxyInput(savedProxy);
-    setProxyPool(s.proxy_pool ?? []);
-    setProxyPoolActiveId(s.proxy_pool_active_id ?? "");
-    setProxyPoolTimed(!!s.proxy_rotate_timed_enabled);
-    setProxyPoolInterval(String(s.proxy_rotate_interval_seconds ?? 30));
-    setProxyPoolFailure(!!s.proxy_rotate_on_failure);
-    setProxyPoolStrategy(s.proxy_rotate_strategy === "random" ? "random" : "sequential");
-    setProxyPoolThreshold(String(s.proxy_health_fail_threshold ?? 3));
-    setProxyPoolCooldown(String(s.proxy_health_cooldown_seconds ?? 60));
-    setProxyPoolHealthInterval(String(s.proxy_health_check_interval_seconds ?? 30));
-    setProxyPoolLogs(s.proxy_pool_switch_log ?? []);
     setProxyReconnectMax(String(s.proxy_reconnect_max_attempts ?? 5));
     setProxyReconnectInterval(String(s.proxy_reconnect_interval_seconds ?? 30));
     setEgressProbeUrl(s.egress_probe_url ?? "");
@@ -260,14 +239,15 @@ export default function SystemSettingsPage() {
       .then((s) => {
         apply(s);
         setSettingsLoaded(true);
-        void api
-          .proxyPool()
-          .then((pool) => {
-            setProxyPool(pool.entries);
-            setProxyPoolActiveId(pool.active_id);
-            setProxyPoolLogs(pool.switch_log);
-          })
-          .catch(() => undefined);
+        void Promise.all([
+          api.proxyV2.getConfig().catch(() => null),
+          api.proxyV2.getStats().catch(() => null),
+        ]).then(([cfg, st]) => {
+          const total = st?.total ?? 0;
+          const healthy = st?.healthy ?? 0;
+          setV2PoolStats({ total, healthy });
+          setV2PoolManaged(Boolean(cfg?.enabled && total > 0));
+        });
       })
       .catch(() => {
         setSettingsLoaded(false);
@@ -503,7 +483,7 @@ export default function SystemSettingsPage() {
   };
 
   const saveGlobalProxy = () => {
-    if (proxyPool.length > 0) {
+    if (v2PoolManaged) {
       toast.info(t("settings.poolOverridesProxy"));
       return;
     }
@@ -512,7 +492,6 @@ export default function SystemSettingsPage() {
       .setSettings({ global_proxy: globalProxyInput.trim() })
       .then((s) => {
         apply(s);
-        // 保存后链路变了，旧结果（尤其"尚未保存"）立刻失效。
         clearEgressReport();
         if (showEgressIp) void probeEgress().catch(() => undefined);
         toast.success(globalProxyInput.trim() ? t("settings.globalProxySaved") : t("settings.globalProxyCleared"));
@@ -520,81 +499,6 @@ export default function SystemSettingsPage() {
       .catch((e) => toast.error(t("settings.saveFailedPrefix") + localizedError(e, t)))
       .finally(() => setSavingGlobalProxy(false));
   };
-
-  const importProxyPool = () => {
-    api
-      .importProxyPool({ text: proxyPoolText })
-      .then((r) => {
-        setProxyPool(r.entries);
-        setProxyPoolActiveId(r.active_id);
-        setProxyPoolLogs(r.switch_log);
-        setProxyPoolText("");
-        if (r.errors.length)
-          toast.error(
-            r.errors.map((e) => t("settings.importLineError", { line: e.line, message: e.error })).join("；"),
-          );
-        else toast.success(t("settings.proxyPoolImported"));
-      })
-      .catch((e) => toast.error(t("settings.importFailedPrefix") + localizedError(e, t)));
-  };
-  const saveProxyPoolStrategy = () => {
-    const interval = Number(proxyPoolInterval);
-    if (!Number.isFinite(interval) || !Number.isInteger(interval) || interval < 3) {
-      toast.error(t("settings.invalidRotationInterval"));
-      return;
-    }
-    api
-      .setSettings({
-        proxy_rotate_timed_enabled: proxyPoolTimed,
-        proxy_rotate_interval_seconds: Number(proxyPoolInterval),
-        proxy_rotate_on_failure: proxyPoolFailure,
-        proxy_rotate_strategy: proxyPoolStrategy,
-        proxy_health_fail_threshold: Number(proxyPoolThreshold),
-        proxy_health_cooldown_seconds: Number(proxyPoolCooldown),
-        proxy_health_check_interval_seconds: Number(proxyPoolHealthInterval),
-      })
-      .then((s) => {
-        apply(s);
-        toast.success(t("settings.rotationSaved"));
-      })
-      .catch((e) => toast.error(t("settings.saveFailedPrefix") + localizedError(e, t)));
-  };
-  const testAllProxyPool = () =>
-    api
-      .testAllProxyPool()
-      .then((r) => {
-        setProxyPool(r.entries);
-        setProxyPoolActiveId(r.active_id);
-        setProxyPoolLogs(r.switch_log);
-        toast.success(t("settings.allProxiesTested"));
-      })
-      .catch((e) => toast.error(t("settings.probeFailedPrefix") + localizedError(e, t)));
-  const testOneProxyPool = (id: string) =>
-    api
-      .testProxyPoolEntry(id)
-      .then(() => api.proxyPool())
-      .then((r) => {
-        setProxyPool(r.entries);
-        setProxyPoolActiveId(r.active_id);
-        setProxyPoolLogs(r.switch_log);
-      })
-      .catch((e) => toast.error(t("settings.probeFailedPrefix") + localizedError(e, t)));
-  const refreshProxyPool = () =>
-    api.proxyPool().then((r) => {
-      setProxyPool(r.entries);
-      setProxyPoolActiveId(r.active_id);
-      setProxyPoolLogs(r.switch_log);
-    });
-  const toggleProxyPoolEntry = (entry: ProxyPoolEntry) =>
-    api
-      .updateProxyPool(entry.id, { enabled: !entry.enabled })
-      .then(() => refreshProxyPool())
-      .catch((e) => toast.error(t("settings.updateFailedPrefix") + localizedError(e, t)));
-  const deleteProxyPoolEntry = (id: string) =>
-    api
-      .deleteProxyPool(id)
-      .then(() => refreshProxyPool())
-      .catch((e) => toast.error(t("settings.deleteFailedPrefix") + localizedError(e, t)));
 
   const saveProxyReconnect = () => {
     api
@@ -911,13 +815,26 @@ export default function SystemSettingsPage() {
               className={`${isSettingVisible("traffic", "settings.keywords.globalProxy") ? "" : "hidden"} mb-4 break-inside-avoid md:mb-6`}
             >
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <RadioTowerIcon className="size-4" />
-                  {t("settings.globalProxy")}
-                </CardTitle>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <RadioTowerIcon className="size-4" />
+                    {t("settings.globalProxy")}
+                  </CardTitle>
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/system/proxy">{t("settings.manageInProxyPool")}</Link>
+                  </Button>
+                </div>
                 <CardDescription>{t("settings.globalProxyHelp")}</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-5">
+                {v2PoolManaged && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+                    <span>
+                      {t("settings.proxyPoolManagedNotice")}
+                      {v2PoolStats ? ` (${v2PoolStats.healthy}/${v2PoolStats.total} healthy)` : ""}
+                    </span>
+                  </div>
+                )}
                 <section className="space-y-2">
                   <Label htmlFor="global-proxy" className="text-sm font-normal text-muted-foreground">
                     {t("settings.proxyAddress")}
@@ -928,15 +845,14 @@ export default function SystemSettingsPage() {
                       className="min-w-0 flex-1"
                       autoComplete="off"
                       placeholder={t("settings.globalProxyPlaceholder")}
-                      value={globalProxyInput}
-                      disabled={!loaded || savingGlobalProxy}
+                      value={v2PoolManaged ? "" : globalProxyInput}
+                      disabled={!loaded || savingGlobalProxy || v2PoolManaged}
                       onChange={(e) => {
                         setGlobalProxyInput(e.target.value);
-                        // 旧结果对应的是上一次的地址，留着会让人以为新值已经测过。
                         clearEgressReport();
                       }}
                     />
-                    <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy}>
+                    <Button type="button" onClick={saveGlobalProxy} disabled={!loaded || savingGlobalProxy || v2PoolManaged}>
                       {t("settings.save")}
                     </Button>
                     {/* 测表单里当前的值，不要求先保存。 */}
@@ -945,7 +861,11 @@ export default function SystemSettingsPage() {
                     </Button>
                   </div>
                   <p className="text-muted-foreground text-xs">
-                    {globalProxyInput.trim() ? t("settings.proxyConfigured") : t("settings.proxyUnconfigured")}
+                    {v2PoolManaged
+                      ? t("settings.proxyConfigured")
+                      : globalProxyInput.trim()
+                        ? t("settings.proxyConfigured")
+                        : t("settings.proxyUnconfigured")}
                   </p>
                   <details className="text-xs">
                     <summary className="text-muted-foreground cursor-pointer select-none">
@@ -1120,235 +1040,6 @@ export default function SystemSettingsPage() {
                     ))}
                   </div>
                 )}
-                <section className="space-y-3 border-t pt-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium">
-                        {t("settings.proxyPool")}{" "}
-                        <span className="text-muted-foreground font-normal">{proxyPool.length}</span>
-                      </p>
-                      <p className="text-muted-foreground mt-1 text-xs">
-                        {t("settings.currentProxyPrefix")}
-                        {proxyPool.find((entry) => entry.id === proxyPoolActiveId)?.name ??
-                          (proxyPoolActiveId ? t("settings.selectedProxy") : t("settings.direct"))}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button asChild variant="outline" size="sm">
-                        <Link href="/system/proxy">Open Proxy Pool v2 →</Link>
-                      </Button>
-                      <Button type="button" variant="outline" size="sm" onClick={testAllProxyPool}>
-                        {t("settings.testAll")}
-                      </Button>
-                    </div>
-                  </div>
-                  <details className="rounded-md border px-3 py-2 text-xs">
-                    <summary className="text-muted-foreground cursor-pointer select-none">
-                      {t("settings.importProxies")}
-                    </summary>
-                    <Textarea
-                      className="mt-3 font-mono"
-                      rows={3}
-                      placeholder={t("settings.importPlaceholder")}
-                      value={proxyPoolText}
-                      onChange={(e) => setProxyPoolText(e.target.value)}
-                    />
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" onClick={importProxyPool} disabled={!proxyPoolText.trim()}>
-                        {t("settings.import")}
-                      </Button>
-                      <span className="text-muted-foreground">{t("settings.proxyCredentialsHidden")}</span>
-                    </div>
-                  </details>
-                  <div className="space-y-2">
-                    {proxyPool.length === 0 ? (
-                      <p className="text-muted-foreground text-xs">{t("settings.emptyProxyPool")}</p>
-                    ) : (
-                      proxyPool.map((entry) => (
-                        <div
-                          key={entry.id}
-                          className="grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                        >
-                          <div className="flex min-w-0 items-start gap-3">
-                            <Switch
-                              checked={entry.enabled}
-                              onCheckedChange={() => toggleProxyPoolEntry(entry)}
-                              aria-label={t("settings.enableProxy")}
-                            />
-                            <div className="grid min-w-0 flex-1 gap-x-5 gap-y-2 text-xs sm:grid-cols-2">
-                              <div className="min-w-0">
-                                <p className="text-muted-foreground">{t("settings.proxyAddress")}</p>
-                                <p className="truncate font-mono" title={entry.url}>
-                                  {entry.name ? `${entry.name} · ` : ""}
-                                  {entry.url}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">{t("settings.testOutboundIp")}</p>
-                                <p className="break-all font-mono">
-                                  {entry.egress_ip ||
-                                    (entry.last_error ? t("settings.probeFailed") : t("settings.notTested"))}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                <span
-                                  className={
-                                    entry.health === "healthy"
-                                      ? "text-emerald-600"
-                                      : entry.health === "disabled"
-                                        ? "text-muted-foreground"
-                                        : "text-amber-600"
-                                  }
-                                >
-                                  {!entry.enabled
-                                    ? t("settings.disabled")
-                                    : entry.health === "healthy"
-                                      ? t("settings.healthy")
-                                      : entry.health === "unhealthy-cooling"
-                                        ? t("settings.coolingDown")
-                                        : t("settings.pendingCheck")}
-                                </span>
-                                {entry.id === proxyPoolActiveId && (
-                                  <span className="text-primary">{t("settings.activeProxy")}</span>
-                                )}
-                                <span className="text-muted-foreground">
-                                  {t("settings.failureCount", { count: entry.consecutive_failures })}
-                                </span>
-                              </div>
-                              <div className="text-muted-foreground">
-                                {entry.latency_ms != null ? `${entry.latency_ms} ms` : t("settings.noLatency")}
-                                {entry.last_checked_at &&
-                                  !entry.last_checked_at.startsWith("0001-") &&
-                                  ` · ${new Date(entry.last_checked_at).toLocaleTimeString(i18n.resolvedLanguage)}`}
-                                {entry.last_error && <span className="text-destructive"> · {entry.last_error}</span>}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex justify-end gap-1">
-                            <Button type="button" variant="ghost" size="sm" onClick={() => testOneProxyPool(entry.id)}>
-                              {t("settings.test")}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => deleteProxyPoolEntry(entry.id)}
-                            >
-                              {t("settings.delete")}
-                            </Button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  <details className="rounded-md border px-3 py-2 text-xs">
-                    <summary className="text-muted-foreground cursor-pointer select-none">
-                      {t("settings.rotationHealth")}
-                    </summary>
-                    <div className="mt-3 space-y-3">
-                      <p className="text-muted-foreground">{t("settings.rotationHealthHelp")}</p>
-                      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 border-b pb-3">
-                        <div className="flex items-center gap-3">
-                          <Label htmlFor="proxy-pool-timed">{t("settings.timedRotation")}</Label>
-                          <Switch id="proxy-pool-timed" checked={proxyPoolTimed} onCheckedChange={setProxyPoolTimed} />
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <Label htmlFor="proxy-pool-failure">{t("settings.failureRotation")}</Label>
-                          <Switch
-                            id="proxy-pool-failure"
-                            checked={proxyPoolFailure}
-                            onCheckedChange={setProxyPoolFailure}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid max-w-2xl grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label htmlFor="proxy-pool-strategy">{t("settings.rotationOrder")}</Label>
-                          <Select
-                            value={proxyPoolStrategy}
-                            onValueChange={(v) => setProxyPoolStrategy(v as "sequential" | "random")}
-                          >
-                            <SelectTrigger id="proxy-pool-strategy" className="w-full">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="sequential">{t("settings.sequential")}</SelectItem>
-                              <SelectItem value="random">{t("settings.random")}</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="proxy-pool-interval">{t("settings.rotationInterval")}</Label>
-                          <Input
-                            id="proxy-pool-interval"
-                            type="number"
-                            min={3}
-                            value={proxyPoolInterval}
-                            onChange={(e) => setProxyPoolInterval(e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="proxy-pool-threshold">{t("settings.failureThreshold")}</Label>
-                          <Input
-                            id="proxy-pool-threshold"
-                            type="number"
-                            min={1}
-                            value={proxyPoolThreshold}
-                            onChange={(e) => setProxyPoolThreshold(e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="proxy-pool-cooldown">{t("settings.cooldown")}</Label>
-                          <Input
-                            id="proxy-pool-cooldown"
-                            type="number"
-                            min={1}
-                            value={proxyPoolCooldown}
-                            onChange={(e) => setProxyPoolCooldown(e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="proxy-pool-health-interval">{t("settings.healthInterval")}</Label>
-                          <Input
-                            id="proxy-pool-health-interval"
-                            type="number"
-                            min={1}
-                            value={proxyPoolHealthInterval}
-                            onChange={(e) => setProxyPoolHealthInterval(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <div className="flex justify-end border-t pt-3">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full sm:w-auto"
-                          onClick={saveProxyPoolStrategy}
-                        >
-                          {t("settings.saveRotation")}
-                        </Button>
-                      </div>
-                    </div>
-                  </details>
-                  {proxyPoolLogs.length > 0 && (
-                    <details className="text-xs">
-                      <summary className="text-muted-foreground cursor-pointer select-none">
-                        {t("settings.switchHistory", { count: proxyPoolLogs.length })}
-                      </summary>
-                      <div className="mt-2 space-y-1">
-                        {proxyPoolLogs
-                          .slice(-5)
-                          .reverse()
-                          .map((log) => (
-                            <p key={`${log.at}-${log.to}`} className="text-muted-foreground">
-                              {new Date(log.at).toLocaleTimeString(i18n.resolvedLanguage)} ·{" "}
-                              {log.from || t("settings.direct")} → {log.to || t("settings.direct")} · {log.reason}
-                            </p>
-                          ))}
-                      </div>
-                    </details>
-                  )}
-                </section>
               </CardContent>
             </Card>
 

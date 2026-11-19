@@ -48,6 +48,25 @@ export const errorMessages = {
   "error.payload_too_large": ["请求正文过大", "Request payload is too large"],
   "error.company_exists": ["企业名称已存在", "Company name already exists"],
   "error.template_exists": ["模板名称已存在", "Template name already exists"],
+  "error.finding_no_node": [
+    "漏洞没有可用的探索节点，无法生成复现步骤",
+    "This finding has no exploration node available for step generation",
+  ],
+  "error.reporter_disabled": [
+    "报告 Agent 未启用，请在 Agent 管理中启用 reporter",
+    "The Report Writer agent (reporter) is disabled — enable it under System → Agents",
+  ],
+  "error.retester_disabled": [
+    "漏洞复测 Agent 不存在或未启用，请在 Agent 管理中配置 retester",
+    "The Finding Retest agent (retester) is disabled — enable it under System → Agents",
+  ],
+  "error.server_shutting_down": ["服务正在停止", "Server is shutting down"],
+  "error.inherited_finding_readonly": [
+    "继承漏洞只读，请在来源任务中修改",
+    "Inherited findings are read-only; modify them in the source task",
+  ],
+  "error.file_not_found": ["文件不存在", "File not found"],
+  "error.invalid_path": ["非法路径", "Invalid path"],
   "update.available": ["新版本", "Update available"],
   "update.hint": ["发现新版本 {{version}}，点击前往更新", "Version {{version}} is available. Click to update."],
 } satisfies Record<string, readonly [string, string]>;
