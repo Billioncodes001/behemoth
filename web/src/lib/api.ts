@@ -1301,8 +1301,33 @@ export const api = {
       put<{ ok: boolean }>(`/v2/proxy-pool/config`, cfg),
     listProxies: () =>
       get<ProxyV2Entry[]>(`/v2/proxy-pool/proxies`),
-    importProxies: (payload: { data: string; default_type?: string }) =>
-      post<ProxyV2ImportResult>(`/v2/proxy-pool/import`, payload),
+    importProxies: (payload: {
+      data: string;
+      default_type?: string;
+      auto_test?: boolean;
+      replace_existing?: boolean;
+    }) => post<ProxyV2ImportResult>(`/v2/proxy-pool/import`, payload),
+    uploadProxiesFiles: async (
+      files: File[],
+      opts?: { data?: string; default_type?: string; auto_test?: boolean; replace_existing?: boolean },
+    ): Promise<ProxyV2ImportResult> => {
+      if (MOCK) return { imported: files.length, skipped: 0, errors: [] };
+      const fd = new FormData();
+      for (const f of files) fd.append("file", f);
+      if (opts?.data) fd.append("data", opts.data);
+      if (opts?.default_type) fd.append("default_type", opts.default_type);
+      if (opts?.auto_test) fd.append("auto_test", "true");
+      if (opts?.replace_existing) fd.append("replace_existing", "true");
+      const token = getToken();
+      const r = await apiFetch(`/api/v2/proxy-pool/import`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body?.error || `Proxy upload failed (${r.status})`);
+      return body as ProxyV2ImportResult;
+    },
     getProxy: (id: string) =>
       get<ProxyV2Entry>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
     updateProxy: (id: string, payload: Partial<ProxyV2Entry>) =>
@@ -1310,11 +1335,13 @@ export const api = {
     deleteProxy: (id: string) =>
       del<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
     proxyAction: (id: string, action: "activate" | "deactivate" | "test" | "toggle") =>
-      post<{ ok?: boolean; status?: string; success?: boolean; latency_ms?: number; error?: string }>(`/v2/proxy-pool/action`, { id, action }),
+      post<{ ok?: boolean; status?: string; success?: boolean; latency_ms?: number; response_ip?: string; error?: string }>(`/v2/proxy-pool/action`, { id, action }),
     testAll: () =>
-      post<ProxyV2TestResult[]>(`/v2/proxy-pool/test-all`, {}),
+      post<{ results: ProxyV2TestResult[]; summary: { total: number; passed: number; failed: number } }>(`/v2/proxy-pool/test-all`, {}),
     clearFailed: () =>
       post<{ cleared: number }>(`/v2/proxy-pool/clear-failed`, {}),
+    clearAll: () =>
+      post<{ cleared: number }>(`/v2/proxy-pool/clear-all`, {}),
     forceRotate: () =>
       get<ProxyV2Entry | null>(`/v2/proxy-pool/rotate`),
     getStats: () =>

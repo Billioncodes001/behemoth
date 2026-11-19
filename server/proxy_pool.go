@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
 	"github.com/Autumn-27/artex/traffic"
 )
 
@@ -85,6 +86,11 @@ func ParseProxyBatch(raw string) ([]ProxyPoolEntry, []ProxyImportError) {
 		}
 		parts := strings.SplitN(line, "|", 3)
 		rawURL := strings.TrimSpace(parts[0])
+		if !strings.Contains(rawURL, "://") {
+			if normURL, _, _, nerr := proxyv2.NormalizeProxyLineToURL(rawURL, "http"); nerr == nil {
+				rawURL = normURL
+			}
+		}
 		u, err := traffic.ValidateProxyURL(rawURL)
 		if err != nil {
 			errs = append(errs, ProxyImportError{Line: n + 1, Input: maskSecrets(line), Error: maskSecrets(err.Error())})

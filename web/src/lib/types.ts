@@ -1110,7 +1110,9 @@ export interface ProxyV2Entry {
   city?: string;
   isp?: string;
   egress_ip?: string;
-  
+  response_ip?: string;
+  active?: boolean;
+
   // Timestamps
   created_at: string;
   updated_at: string;
@@ -1118,8 +1120,13 @@ export interface ProxyV2Entry {
 
 export interface ProxyV2ImportResult {
   imported: number;
-  errors: Array<{ line: number; input: string; error: string }>;
-  proxies: ProxyV2Entry[];
+  skipped?: number;
+  tested?: number;
+  healthy?: number;
+  failed?: number;
+  active_proxy_id?: string;
+  errors?: Array<{ line: number; input: string; error: string }>;
+  proxies?: ProxyV2Entry[];
 }
 
 export interface ProxyV2TestResult {

@@ -4,6 +4,9 @@ package proxyv2
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -115,35 +118,41 @@ func DefaultPoolConfig() *ProxyPoolConfig {
 
 // PoolStats contains aggregate statistics.
 type PoolStats struct {
-	Total     int `json:"total"`
-	Active    int `json:"active"`
-	Healthy   int `json:"healthy"`
-	Unhealthy int `json:"unhealthy"`
-	Untested  int `json:"untested"`
-	Unknown   int `json:"unknown"`
-	InUse     int `json:"in_use"`
-	Disabled  int `json:"disabled"`
-	AvgLatency   time.Duration `json:"avg_latency"`
-	AvgLatencyMS int64         `json:"avg_latency_ms"`
+	Total         int           `json:"total"`
+	Active        int           `json:"active"`
+	Healthy       int           `json:"healthy"`
+	Unhealthy     int           `json:"unhealthy"`
+	Untested      int           `json:"untested"`
+	Unknown       int           `json:"unknown"`
+	InUse         int           `json:"in_use"`
+	Disabled      int           `json:"disabled"`
+	ActiveProxyID string        `json:"active_proxy_id,omitempty"`
+	AvgLatency    time.Duration `json:"avg_latency"`
+	AvgLatencyMS  int64         `json:"avg_latency_ms"`
 }
 
 // TestResult represents a single proxy test result.
 type TestResult struct {
-	ProxyID string `json:"proxy_id"`
-	Success bool   `json:"success"`
-	Latency time.Duration `json:"latency_ms"`
-	ResponseIP string `json:"response_ip,omitempty"`
-	Error      string `json:"error,omitempty"`
-	CheckedAt  time.Time `json:"checked_at"`
-	Country    string `json:"country,omitempty"`
-	City       string `json:"city,omitempty"`
+	ProxyID    string        `json:"proxy_id"`
+	Success    bool          `json:"success"`
+	Latency    time.Duration `json:"-"`
+	LatencyMS  int64         `json:"latency_ms"`
+	ResponseIP string        `json:"response_ip,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	CheckedAt  time.Time     `json:"checked_at"`
+	Country    string        `json:"country,omitempty"`
+	City       string        `json:"city,omitempty"`
 }
 
 // ImportResult represents bulk import results.
 type ImportResult struct {
-	Imported int           `json:"imported"`
-	Skipped  int           `json:"skipped"`
-	Errors   []ImportError `json:"errors,omitempty"`
+	Imported      int           `json:"imported"`
+	Skipped       int           `json:"skipped"`
+	Tested        int           `json:"tested,omitempty"`
+	Healthy       int           `json:"healthy,omitempty"`
+	Failed        int           `json:"failed,omitempty"`
+	ActiveProxyID string        `json:"active_proxy_id,omitempty"`
+	Errors        []ImportError `json:"errors,omitempty"`
 }
 
 // ImportError represents a parse error.
@@ -187,12 +196,24 @@ func (p *ProxyInfo) BuildProxyURL() string {
 	return p.buildProxyURL()
 }
 
-// buildProxyURL constructs a URL string from a ProxyInfo.
+// buildProxyURL constructs a properly URL-encoded proxy URL string from a ProxyInfo.
 func (p *ProxyInfo) buildProxyURL() string {
-	if p.Username != "" && p.Password != "" {
-		return fmt.Sprintf("%s://%s:%s@%s:%d", p.Type, p.Username, p.Password, p.Host, p.Port)
+	scheme := string(p.Type)
+	if scheme == "" {
+		scheme = string(ProxyTypeHTTP)
 	}
-	return fmt.Sprintf("%s://%s:%d", p.Type, p.Host, p.Port)
+	u := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),
+	}
+	if p.Username != "" {
+		if p.Password != "" {
+			u.User = url.UserPassword(p.Username, p.Password)
+		} else {
+			u.User = url.User(p.Username)
+		}
+	}
+	return u.String()
 }
 
 // maskURL returns a masked version for API responses.

@@ -35,6 +35,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Pool actions
 	mux.HandleFunc("POST /api/v2/proxy-pool/test-all", h.handleTestAll)
 	mux.HandleFunc("POST /api/v2/proxy-pool/clear-failed", h.handleClearFailed)
+	mux.HandleFunc("POST /api/v2/proxy-pool/clear-all", h.handleClearAll)
 	mux.HandleFunc("POST /api/v2/proxy-pool/rotate", h.handleForceRotate)
 	mux.HandleFunc("GET /api/v2/proxy-pool/rotate", h.handleForceRotate)
 	// Stats & logs
@@ -66,21 +67,91 @@ func (h *Handler) handleListProxies(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.pool.GetProxies())
 }
 
-// handleImportProxies imports proxies from text data.
+// handleImportProxies imports proxies from JSON text data or multipart file upload,
+// optionally replacing existing entries and running concurrent health checks.
 func (h *Handler) handleImportProxies(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Data       string     `json:"data"`
-		DefaultType ProxyType `json:"default_type"`
+	var data string
+	defaultType := ProxyTypeHTTP
+	autoTest := false
+	replaceExisting := false
+
+	ct := strings.ToLower(r.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid multipart upload: "+err.Error())
+			return
+		}
+		if dt := strings.TrimSpace(r.FormValue("default_type")); dt != "" {
+			defaultType = ProxyType(dt)
+		}
+		autoTest = r.FormValue("auto_test") == "true" || r.FormValue("auto_test") == "1"
+		replaceExisting = r.FormValue("replace_existing") == "true" || r.FormValue("replace_existing") == "1"
+		var parts []string
+		if rawText := strings.TrimSpace(r.FormValue("data")); rawText != "" {
+			parts = append(parts, rawText)
+		}
+		for _, fhList := range r.MultipartForm.File {
+			for _, fh := range fhList {
+				f, err := fh.Open()
+				if err != nil {
+					continue
+				}
+				var sb strings.Builder
+				buf := make([]byte, 32*1024)
+				for {
+					n, rerr := f.Read(buf)
+					if n > 0 {
+						sb.Write(buf[:n])
+					}
+					if rerr != nil {
+						break
+					}
+				}
+				_ = f.Close()
+				if sb.Len() > 0 {
+					parts = append(parts, sb.String())
+				}
+			}
+		}
+		data = strings.Join(parts, "\n")
+	} else {
+		var req struct {
+			Data            string    `json:"data"`
+			DefaultType     ProxyType `json:"default_type"`
+			AutoTest        bool      `json:"auto_test"`
+			ReplaceExisting bool      `json:"replace_existing"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		data = req.Data
+		if req.DefaultType != "" {
+			defaultType = req.DefaultType
+		}
+		autoTest = req.AutoTest
+		replaceExisting = req.ReplaceExisting
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid JSON")
-		return
+
+	if replaceExisting {
+		_, _ = h.pool.ClearAllProxies()
 	}
-	if req.DefaultType == "" { req.DefaultType = ProxyTypeHTTP }
-	result, err := h.pool.ImportProxies(req.Data, req.DefaultType)
+	result, err := h.pool.ImportProxies(data, defaultType)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if autoTest && result.Imported > 0 {
+		testRes, _ := h.pool.TestAllProxies(r.Context())
+		result.Tested = len(testRes)
+		for _, tr := range testRes {
+			if tr.Success {
+				result.Healthy++
+			} else {
+				result.Failed++
+			}
+		}
+		result.ActiveProxyID = h.pool.GetStats().ActiveProxyID
 	}
 	respondJSON(w, http.StatusOK, result)
 }
@@ -172,7 +243,13 @@ func (h *Handler) handleProxyActionBody(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		respondJSON(w, http.StatusOK, result)
-	case "toggle", "activate", "deactivate":
+	case "activate":
+		if err := h.pool.ActivateProxy(req.ID); err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"ok": true, "status": "activated", "active_proxy_id": req.ID})
+	case "toggle", "deactivate":
 		if err := h.pool.ToggleProxyActive(req.ID); err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
 			return
@@ -181,6 +258,16 @@ func (h *Handler) handleProxyActionBody(w http.ResponseWriter, r *http.Request) 
 	default:
 		respondError(w, http.StatusBadRequest, "unknown action: "+req.Action)
 	}
+}
+
+// handleClearAll removes all proxies from the pool.
+func (h *Handler) handleClearAll(w http.ResponseWriter, r *http.Request) {
+	removed, err := h.pool.ClearAllProxies()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"removed": removed, "cleared": removed})
 }
 
 // handleClearFailed removes all failed proxies.

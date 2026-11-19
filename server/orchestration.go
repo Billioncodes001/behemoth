@@ -82,7 +82,8 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolBindFindingTraffic(),
 	}, s.findingCaseTools()...)
 	out = append(out, s.patchMonitorTools()...)
-	return append(out, s.arsenalTools()...)
+	out = append(out, s.arsenalTools()...)
+	return append(out, s.proxyPoolAgentTools()...)
 }
 
 // --- schema helpers ---
@@ -562,6 +563,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedFindingWorkflowTools()
 	s.seedFindingCaseTools()
 	s.seedArsenalAndAutoUpgradeV1()
+	s.seedProxyPoolAgentToolsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -1187,6 +1189,25 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 	_, _ = s.m.pg.Exec(`UPDATE agents SET run_seconds = 0 WHERE key = 'auto' AND run_seconds = 1200`)
 
 	// Refresh Auto's system prompt to the tool-maximizing v2 prompt.
+	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
+		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
+			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+			}
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+func (s *Server) seedProxyPoolAgentToolsV1() {
+	const flag = "proxy_pool_agent_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	proxyKeys := []string{"import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
+	for _, agKey := range []string{"auto", "pentest", "worker", "mainagent"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyKeys)
+	}
 	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
 		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
 			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {

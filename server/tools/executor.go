@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -47,12 +48,19 @@ func DefaultExecutorConfig() ExecutorConfig {
 
 // ToolExecutor executes security tools safely.
 type ToolExecutor struct {
-	config  ExecutorConfig
-	catalog *Catalog
-	mu      sync.Mutex
-	running map[string]*ExecutionResult
-	sem     chan struct{}
-	history []*ExecutionResult
+	config      ExecutorConfig
+	catalog     *Catalog
+	envProvider func() []string
+	mu          sync.Mutex
+	running     map[string]*ExecutionResult
+	sem         chan struct{}
+	history     []*ExecutionResult
+}
+
+func (e *ToolExecutor) SetEnvProvider(fn func() []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.envProvider = fn
 }
 
 // NewToolExecutor creates a new tool executor.
@@ -112,6 +120,14 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolID string, params map[st
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, tool.Command, args...)
+	e.mu.Lock()
+	envFn := e.envProvider
+	e.mu.Unlock()
+	if envFn != nil {
+		if extra := envFn(); len(extra) > 0 {
+			cmd.Env = append(os.Environ(), extra...)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

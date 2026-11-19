@@ -32,7 +32,7 @@ func (p *Pool) TestProxy(id string) (*TestResult, error) {
 		return nil, fmt.Errorf("proxy not found: %s", id)
 	}
 
-	success, originIP, latencyMs := testProxyDirect(target)
+	success, originIP, latencyMs, probeErr := testProxyDirect(target)
 
 	// Geo lookup on success
 	var country, city string
@@ -46,6 +46,7 @@ func (p *Pool) TestProxy(id string) (*TestResult, error) {
 		if p.state.proxies[i].ID == id {
 			p.state.proxies[i].LastChecked = time.Now()
 			p.state.proxies[i].Latency = time.Duration(latencyMs) * time.Millisecond
+			p.state.proxies[i].LatencyMS = latencyMs
 			if success {
 				if p.state.proxies[i].Status != StatusDisabled {
 					p.state.proxies[i].Active = true
@@ -73,23 +74,31 @@ func (p *Pool) TestProxy(id string) (*TestResult, error) {
 
 	return &TestResult{
 		ProxyID: id, Success: success,
-		Latency: time.Duration(latencyMs) * time.Millisecond,
+		Latency:    time.Duration(latencyMs) * time.Millisecond,
+		LatencyMS:  latencyMs,
 		ResponseIP: originIP, Country: country, City: city,
+		Error:     probeErr,
 		CheckedAt: time.Now(),
 	}, nil
 }
 
-// TestAllProxies concurrently tests all proxies in the pool.
-// Inspired by ProfGinx_custom's TestAllProxies().
+// TestAllProxies concurrently tests all proxies in the pool and selects the
+// lowest-latency healthy proxy if the current active proxy is missing or unhealthy.
 func (p *Pool) TestAllProxies(ctx context.Context) ([]TestResult, error) {
 	p.state.mu.RLock()
 	ids := make([]string, len(p.state.proxies))
-	for i, px := range p.state.proxies { ids[i] = px.ID }
+	for i, px := range p.state.proxies {
+		ids[i] = px.ID
+	}
+	conc := p.state.config.ConcurrentTests
 	p.state.mu.RUnlock()
+	if conc <= 0 {
+		conc = 10
+	}
 
 	results := make([]TestResult, len(ids))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, p.state.config.ConcurrentTests)
+	sem := make(chan struct{}, conc)
 
 	for i, id := range ids {
 		wg.Add(1)
@@ -107,61 +116,105 @@ func (p *Pool) TestAllProxies(ctx context.Context) ([]TestResult, error) {
 		}(i, id)
 	}
 	wg.Wait()
+
+	// Ensure activeID points to a verified healthy proxy (preferring lowest latency)
+	p.state.mu.Lock()
+	activeHealthy := false
+	for _, px := range p.state.proxies {
+		if px.ID == p.state.activeID && px.Active && px.Status == StatusHealthy {
+			activeHealthy = true
+			break
+		}
+	}
+	if !activeHealthy {
+		var bestID string
+		var bestLat time.Duration
+		for _, px := range p.state.proxies {
+			if px.Active && px.Status == StatusHealthy {
+				if bestID == "" || (px.Latency > 0 && px.Latency < bestLat) {
+					bestID = px.ID
+					bestLat = px.Latency
+				}
+			}
+		}
+		if bestID != "" {
+			p.state.activeID = bestID
+		}
+	}
+	_ = p.persistLocked()
+	p.state.mu.Unlock()
+
 	return results, nil
 }
 
-// testProxyDirect performs an actual HTTP test through a proxy.
-// Returns: success, origin IP, latency in milliseconds.
-func testProxyDirect(px *ProxyInfo) (bool, string, int64) {
-	start := time.Now()
-
-	// Build proxy URL
+// testProxyDirect performs an actual HTTPS tunnel test through a proxy across
+// reliable global IP-echo endpoints so temporary upstream 5xxs don't false-fail.
+func testProxyDirect(px *ProxyInfo) (bool, string, int64, string) {
 	proxyURLStr := px.buildProxyURL()
 	parsed, err := url.Parse(proxyURLStr)
 	if err != nil {
-		return false, "", 0
+		return false, "", 0, err.Error()
 	}
-
-	testURL := "https://httpbin.org/ip" // Default test URL
 
 	var client *http.Client
-
 	switch px.Type {
 	case ProxyTypeSOCKS4, ProxyTypeSOCKS5, ProxyTypeSOCKS5H:
-		// SOCKS proxy requires golang.org/x/net/proxy
 		dialer, err := proxy.FromURL(parsed, proxy.Direct)
 		if err != nil {
-			return false, "", 0
+			return false, "", 0, err.Error()
 		}
 		transport := &http.Transport{Dial: dialer.Dial}
+		defer transport.CloseIdleConnections()
 		client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	default:
-		// HTTP/HTTPS proxy
 		transport := &http.Transport{Proxy: http.ProxyURL(parsed)}
+		defer transport.CloseIdleConnections()
 		client = &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	}
 
-	resp, err := client.Get(testURL)
-	if err != nil {
-		return false, "", int64(time.Since(start).Milliseconds())
+	endpoints := []string{
+		"https://api.ipify.org?format=json",
+		"https://checkip.amazonaws.com",
+		"https://httpbin.org/ip",
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, "", int64(time.Since(start).Milliseconds())
+	var lastErr string
+	for _, testURL := range endpoints {
+		start := time.Now()
+		resp, err := client.Get(testURL)
+		lat := time.Since(start).Milliseconds()
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Sprintf("HTTP %d from %s", resp.StatusCode, testURL)
+			continue
+		}
+		if rerr != nil {
+			return true, "", lat, ""
+		}
+		var ipResp struct {
+			IP     string `json:"ip"`
+			Origin string `json:"origin"`
+		}
+		if json.Unmarshal(body, &ipResp) == nil {
+			if ipResp.IP != "" {
+				return true, strings.TrimSpace(ipResp.IP), lat, ""
+			}
+			if ipResp.Origin != "" {
+				origin, _, _ := strings.Cut(ipResp.Origin, ",")
+				return true, strings.TrimSpace(origin), lat, ""
+			}
+		}
+		plain := strings.TrimSpace(string(body))
+		if len(plain) <= 64 && !strings.Contains(plain, "<") {
+			return true, plain, lat, ""
+		}
+		return true, "", lat, ""
 	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return true, "", int64(time.Since(start).Milliseconds())
-	}
-
-	// Parse response to get exit IP
-	var ipResp struct { Origin string `json:"origin"` }
-	if json.Unmarshal(body, &ipResp) == nil && ipResp.Origin != "" {
-		return true, ipResp.Origin, int64(time.Since(start).Milliseconds())
-	}
-
-	return true, strings.TrimSpace(string(body)), int64(time.Since(start).Milliseconds())
+	return false, "", 0, lastErr
 }
 
 // lookupGeoIP fetches geographic location for an IP address.

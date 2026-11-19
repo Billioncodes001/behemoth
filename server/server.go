@@ -253,6 +253,20 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Initialize Tool Catalog & Executor (HexStrike-inspired)
 	s.toolCatalog = tools.NewCatalog()
 	s.toolExecutor = tools.NewToolExecutor(s.toolCatalog, tools.DefaultExecutorConfig())
+	s.toolExecutor.SetEnvProvider(func() []string {
+		if strings.TrimSpace(s.m.GlobalProxy()) == "" && !s.m.TrafficEnabled() {
+			return nil
+		}
+		px := s.m.SessionProxyAddr()
+		if px == "" {
+			return nil
+		}
+		return []string{
+			"HTTP_PROXY=" + px, "HTTPS_PROXY=" + px, "ALL_PROXY=" + px,
+			"http_proxy=" + px, "https_proxy=" + px, "all_proxy=" + px,
+			"NO_PROXY=127.0.0.1,localhost,::1", "no_proxy=127.0.0.1,localhost,::1",
+		}
+	})
 	s.targets = make(map[string]targets.TargetConnector)
 	s.ensureDefaultWordlists()
 	log.Printf("[tools] Tool catalog loaded: %d tools", s.toolCatalog.Count())
@@ -358,6 +372,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		if v, ok, _ := m.pg.GetSetting("browser_use_local_chrome"); ok && strings.TrimSpace(v) != "" {
 			browserCfg.UseLocalChrome = strings.TrimSpace(v) == "true" || strings.TrimSpace(v) == "1"
 		}
+	}
+	browserCfg.ProxyProvider = func() string {
+		if strings.TrimSpace(s.m.GlobalProxy()) != "" || s.m.TrafficEnabled() {
+			return s.m.SessionProxyAddr()
+		}
+		return ""
 	}
 	s.browserScraper = browser.NewScraper(browserCfg)
 	log.Printf("[browser] Browser automation initialized (local: %v, scraper: %v)",
@@ -757,8 +777,8 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	// chat agent serves MANY custom agents by key → it holds the GLOBAL opts
 	// (backend/key) and gates Enabled per-conversation-agent at Chat time. 对话始终用激活配置。
 	s.chatAgent = agent.NewChatAgent(prov, cfg.Model, s.m.dir, tx, win) // chat page runner
-	s.chatAgent.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
-	s.chatAgent.SetProxyProvider(s.m.ProxyAddr)
+	s.chatAgent.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
+	s.chatAgent.SetProxyProvider(s.m.SessionProxyAddr)
 	s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	s.chatAgent.SetGuard(s.chatGuard())
 	s.chatAgent.SetNonStreaming(nonStreamingResolver(cfg))
@@ -964,8 +984,8 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	}
 	tx := transcript.NewStore(filepath.Join(s.m.dir, "transcripts"))
 	ca := agent.NewChatAgent(s.poolForBinding(id, prov, cfg), cfg.Model, s.m.dir, tx, cfg.CompactionWindow())
-	ca.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
-	ca.SetProxyProvider(s.m.ProxyAddr)
+	ca.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
+	ca.SetProxyProvider(s.m.SessionProxyAddr)
 	ca.SetWebSearch(s.m.WebSearchOpts())
 	ca.SetGuard(s.chatGuard())
 	ca.SetNonStreaming(nonStreamingResolver(cfg))

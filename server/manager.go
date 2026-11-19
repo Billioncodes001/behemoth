@@ -1068,6 +1068,21 @@ func (m *Manager) ProxyAddr() string {
 	return maskSecrets(global)
 }
 
+// SessionProxyAddr returns the proxy URL injected into interactive/worker agent
+// sessions (Bash HTTP_PROXY/HTTPS_PROXY + WebFetch). When traffic capture is off
+// and the local dynamic forward proxy is available, it always returns that stable
+// 127.0.0.1 forwarder (which falls back to direct when no upstream proxy is set
+// and immediately switches to any newly imported/activated proxy mid-session).
+func (m *Manager) SessionProxyAddr() string {
+	if m.traffic != nil && m.TrafficEnabled() {
+		return m.traffic.ProxyAddr()
+	}
+	if m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return m.ProxyAddr()
+}
+
 // ProxyCACert returns the CA cert path agents must trust to verify HTTPS through
 // the egress proxy. Non-empty ONLY when traffic capture is on (the MITM re-signs
 // certs): the global proxy used directly (capture off) is a plain forwarder that

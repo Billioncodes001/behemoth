@@ -138,7 +138,11 @@ func (p *Pool) GetProxies() []ProxyInfo {
 func (p *Pool) GetStats() *PoolStats {
 	p.state.mu.RLock()
 	defer p.state.mu.RUnlock()
-	stats := &PoolStats{}
+	stats := &PoolStats{
+		ActiveProxyID: p.state.activeID,
+	}
+	var latSum time.Duration
+	var latCount int
 	for _, px := range p.state.proxies {
 		stats.Total++
 		switch px.Status {
@@ -154,8 +158,19 @@ func (p *Pool) GetStats() *PoolStats {
 		case StatusDisabled:
 			stats.Disabled++
 		}
-		if px.Active { stats.Active++ }
-		if px.InUse { stats.InUse++ }
+		if px.Active {
+			stats.Active++
+		}
+		if px.InUse {
+			stats.InUse++
+		}
+		if px.Latency > 0 && px.Status == StatusHealthy {
+			latSum += px.Latency
+			latCount++
+		}
+	}
+	if latCount > 0 {
+		stats.AvgLatency = latSum / time.Duration(latCount)
 	}
 	stats.AvgLatencyMS = stats.AvgLatency.Milliseconds()
 	return stats
@@ -339,10 +354,7 @@ func (p *Pool) ReleaseProxyBySession(sessionID string) {
 	}
 }
 
-// AddProxy adds a new proxy to the pool.
-func (p *Pool) AddProxy(px ProxyInfo) error {
-	p.state.mu.Lock()
-	defer p.state.mu.Unlock()
+func (p *Pool) appendProxyNoPersistLocked(px ProxyInfo) {
 	if px.ID == "" {
 		px.ID = fmt.Sprintf("px-%d-%d", time.Now().UnixNano(), len(p.state.proxies))
 	}
@@ -360,6 +372,55 @@ func (p *Pool) AddProxy(px ProxyInfo) error {
 	p.state.proxies = append(p.state.proxies, px)
 	if p.state.activeID == "" && px.Active {
 		p.state.activeID = px.ID
+	}
+}
+
+// AddProxy adds a new proxy to the pool.
+func (p *Pool) AddProxy(px ProxyInfo) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.appendProxyNoPersistLocked(px)
+	return p.persistLocked()
+}
+
+// ClearAllProxies removes all proxies from the pool.
+func (p *Pool) ClearAllProxies() (int, error) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	n := len(p.state.proxies)
+	p.state.proxies = []ProxyInfo{}
+	p.state.activeID = ""
+	return n, p.persistLocked()
+}
+
+// ActivateProxy enables the pool, marks id active, and selects it as the active egress proxy.
+func (p *Pool) ActivateProxy(id string) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	found := false
+	for i := range p.state.proxies {
+		if p.state.proxies[i].ID == id {
+			p.state.proxies[i].Active = true
+			if p.state.proxies[i].Status == StatusDisabled {
+				p.state.proxies[i].Status = StatusUntested
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("proxy not found: %s", id)
+	}
+	oldID := p.state.activeID
+	p.state.activeID = id
+	p.state.config.Enabled = true
+	if oldID != id {
+		p.state.logs = append(p.state.logs, SwitchLog{
+			At: time.Now(), From: oldID, To: id, Reason: "manual_activate",
+		})
+		if len(p.state.logs) > 100 {
+			p.state.logs = p.state.logs[len(p.state.logs)-100:]
+		}
 	}
 	return p.persistLocked()
 }

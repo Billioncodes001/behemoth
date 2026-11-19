@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,7 +36,16 @@ func (s *Scraper) localExtractContent(ctx context.Context, targetURL string) (st
 	}
 
 	// Fallback to basic HTTP
-	client := &http.Client{Timeout: 30 * time.Second}
+	tr := &http.Transport{}
+	if s.config != nil && s.config.ProxyProvider != nil {
+		if px := s.config.ProxyProvider(); px != "" {
+			if pu, err := url.Parse(px); err == nil {
+				tr.Proxy = http.ProxyURL(pu)
+			}
+		}
+	}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Timeout: 30 * time.Second, Transport: tr}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return "", "", err

@@ -78,6 +78,9 @@ type Config struct {
 
 	// MaxContentSize is the max content size in bytes.
 	MaxContentSize int64 `json:"max_content_size"`
+
+	// ProxyProvider optionally returns the active HTTP/SOCKS proxy URL for outbound navigation.
+	ProxyProvider func() string `json:"-"`
 }
 
 // DefaultConfig returns sensible defaults for browser config.

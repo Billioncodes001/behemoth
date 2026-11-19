@@ -41,6 +41,11 @@ func (c *ChromeDP) TakeScreenshot(ctx context.Context, targetURL string) (string
 	if c.config.ChromePath != "" {
 		opts = append(opts, chromedp.ExecPath(c.config.ChromePath))
 	}
+	if c.config.ProxyProvider != nil {
+		if px := c.config.ProxyProvider(); px != "" {
+			opts = append(opts, chromedp.ProxyServer(px), chromedp.Flag("ignore-certificate-errors", true))
+		}
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
@@ -85,6 +90,11 @@ func (c *ChromeDP) ExtractContent(ctx context.Context, targetURL string) (string
 
 	if c.config.ChromePath != "" {
 		opts = append(opts, chromedp.ExecPath(c.config.ChromePath))
+	}
+	if c.config.ProxyProvider != nil {
+		if px := c.config.ProxyProvider(); px != "" {
+			opts = append(opts, chromedp.ProxyServer(px), chromedp.Flag("ignore-certificate-errors", true))
+		}
 	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
