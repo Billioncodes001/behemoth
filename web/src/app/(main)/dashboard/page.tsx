@@ -29,19 +29,15 @@ import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 import type {
   Activity,
-  Agent,
   ConvTokenSummary,
   Finding,
   InterceptPending,
   LLMProfile,
-  MCPServer,
   Settings,
-  SkillItem,
   Stats,
   SystemMetrics,
   Task,
   TokenTotal,
-  Tool,
   TrafficExchange,
   UsageStats,
 } from "@/lib/types";
@@ -188,16 +184,13 @@ export default function DashboardPage() {
   const [usageStats, setUsageStats] = React.useState<UsageStats | null>(null);
   const [assetCounts, setAssetCounts] = React.useState<Record<string, number>>({});
   const [traffic, setTraffic] = React.useState<TrafficExchange[]>([]);
-  const [agents, setAgents] = React.useState<Agent[]>([]);
-  const [mcpServers, setMcpServers] = React.useState<MCPServer[]>([]);
-  const [skills, setSkills] = React.useState<SkillItem[]>([]);
-  const [tools, setTools] = React.useState<Tool[]>([]);
   const [llmProfiles, setLLMProfiles] = React.useState<LLMProfile[]>([]);
   const [systemMetrics, setSystemMetrics] = React.useState<SystemMetrics | null>(null);
 
   React.useEffect(() => {
     let alive = true;
     const load = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const next = await api.systemMetrics();
         if (alive) setSystemMetrics(next);
@@ -206,7 +199,7 @@ export default function DashboardPage() {
       }
     };
     void load();
-    const timer = setInterval(load, 5000);
+    const timer = setInterval(load, 8000);
     return () => {
       alive = false;
       clearInterval(timer);
@@ -220,7 +213,7 @@ export default function DashboardPage() {
     let loading = false;
     let signature = "";
     const load = async () => {
-      if (loading) return;
+      if (loading || (typeof document !== "undefined" && document.hidden)) return;
       loading = true;
       try {
         const tr = await api.tasks();
@@ -237,7 +230,7 @@ export default function DashboardPage() {
       }
     };
     void load();
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, 8000);
     return () => {
       alive = false;
       clearInterval(t);
@@ -249,7 +242,7 @@ export default function DashboardPage() {
     let alive = true;
     let loading = false;
     const load = async () => {
-      if (loading) return;
+      if (loading || (typeof document !== "undefined" && document.hidden)) return;
       loading = true;
       try {
         const [findings, stats, settings, pending, activity, tokens, conversationTokens] = await Promise.all([
@@ -276,35 +269,28 @@ export default function DashboardPage() {
       }
     };
     void load();
-    const timer = setInterval(load, 5000);
+    const timer = setInterval(load, 8000);
     return () => {
       alive = false;
       clearInterval(timer);
     };
   }, []);
 
-  // slow poll: traffic, assets, system-static (every 15s)
+  // slow poll: traffic, assets, LLM profiles & usage ledger (every 15s)
   React.useEffect(() => {
     let alive = true;
     const load = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
-        const [traf, counts, agentList, mcpList, skillList, toolList, profileList, usage] = await Promise.all([
+        const [traf, counts, profileList, usage] = await Promise.all([
           api.traffic(0, 50),
           api.assetCounts(),
-          api.agents(),
-          api.mcpServers(),
-          api.skills(),
-          api.tools(),
           api.llmProfiles(),
           api.usageStats(365),
         ]);
         if (!alive) return;
         setTraffic(traf.exchanges ?? []);
         setAssetCounts(counts ?? {});
-        setAgents(agentList);
-        setMcpServers(mcpList);
-        setSkills(skillList);
-        setTools(toolList);
         setLLMProfiles(profileList);
         setUsageStats(usage);
       } catch {
@@ -386,7 +372,6 @@ export default function DashboardPage() {
 
   // system
   const activeProfile = llmProfiles.find((p) => p.is_default);
-  const enabledTools = tools.filter((t) => t.enabled);
   const pendingCount = pending.length;
 
   // ── token stats per LLM profile ──────────────────────────────────────────

@@ -3,11 +3,20 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
+	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // webuiDist holds the statically-exported frontend (built with
@@ -18,9 +27,93 @@ import (
 //go:embed all:webui/dist
 var webuiDist embed.FS
 
-// webuiHandler serves the embedded SPA. Public (no JWT) — auth is enforced
-// client-side and on /api. Serves the exported per-route index.html files and
-// falls back to index.html so client-side routing still resolves unknown paths.
+type cachedEmbeddedAsset struct {
+	raw   []byte
+	gz    []byte
+	ctype string
+	etag  string
+}
+
+var webuiAssetCache sync.Map // map[string]*cachedEmbeddedAsset
+
+func shouldPrecompressAsset(ext string, size int) bool {
+	if size < 256 {
+		return false
+	}
+	switch ext {
+	case ".js", ".mjs", ".css", ".html", ".txt", ".json", ".svg", ".xml", ".ico", ".map":
+		return true
+	default:
+		return false
+	}
+}
+
+func detectAssetContentType(name string, raw []byte) string {
+	ext := strings.ToLower(path.Ext(name))
+	switch ext {
+	case ".js", ".mjs":
+		return "application/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".woff2":
+		return "font/woff2"
+	case ".png":
+		return "image/png"
+	case ".ico":
+		return "image/x-icon"
+	}
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct
+	}
+	return http.DetectContentType(raw)
+}
+
+func loadEmbeddedAsset(fsys fs.FS, name string) (*cachedEmbeddedAsset, bool) {
+	if v, ok := webuiAssetCache.Load(name); ok {
+		return v.(*cachedEmbeddedAsset), true
+	}
+	f, err := fsys.Open(name)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		return nil, false
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil, false
+	}
+	sum := sha256.Sum256(raw)
+	entry := &cachedEmbeddedAsset{
+		raw:   raw,
+		ctype: detectAssetContentType(name, raw),
+		etag:  `"` + hex.EncodeToString(sum[:8]) + `"`,
+	}
+	if shouldPrecompressAsset(strings.ToLower(path.Ext(name)), len(raw)) {
+		var buf bytes.Buffer
+		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if err == nil {
+			if _, werr := zw.Write(raw); werr == nil && zw.Close() == nil && buf.Len() < len(raw) {
+				entry.gz = buf.Bytes()
+			}
+		}
+	}
+	actual, _ := webuiAssetCache.LoadOrStore(name, entry)
+	return actual.(*cachedEmbeddedAsset), true
+}
+
+// webuiHandler serves the embedded SPA with in-memory gzip precompression,
+// ETag conditional GETs, and immutable browser caching for hashed static bundles.
 func (s *Server) webuiHandler() http.Handler {
 	root, err := fs.Sub(webuiDist, "webui/dist")
 	if err != nil {
@@ -28,33 +121,80 @@ func (s *Server) webuiHandler() http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-		if p == "" {
+		if p == "" || p == "." {
 			p = "index.html"
 		}
-		// 1) exact file (assets: _next/*, favicon.ico, ...)
-		// 2) route dir → <p>/index.html (trailingSlash export)
-		// 3) <p>.html
-		// 4) SPA 兜底 → index.html（交给客户端路由）
+		gated := s.basicAuth.snapshot().Enabled
 		for _, cand := range []string{p, p + "/index.html", p + ".html"} {
-			if serveFileIfExists(w, r, root, cand) {
+			if serveEmbeddedAsset(w, r, root, cand, gated) {
 				return
 			}
 		}
-		http.ServeFileFS(w, r, root, "index.html")
+		_ = serveEmbeddedAsset(w, r, root, "index.html", gated)
 	})
 }
 
-// serveFileIfExists serves name from fsys when it exists as a regular file.
-func serveFileIfExists(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) bool {
-	f, err := fsys.Open(name)
-	if err != nil {
+func setStaticCacheHeaders(w http.ResponseWriter, name string, gated bool) {
+	// Respect explicit Cache-Control: no-store if already set by outer auth middleware
+	// (e.g. initial Set-Cookie response or HTML document behind Basic Auth).
+	if w.Header().Get("Cache-Control") != "" {
+		return
+	}
+	scope := "public"
+	if gated {
+		scope = "private"
+	}
+	switch {
+	case strings.HasPrefix(name, "_next/static/"):
+		w.Header().Set("Cache-Control", scope+", max-age=31536000, immutable")
+	case strings.HasSuffix(name, ".woff2"), strings.HasSuffix(name, ".png"), strings.HasSuffix(name, ".ico"), strings.HasSuffix(name, ".svg"):
+		w.Header().Set("Cache-Control", scope+", max-age=86400, stale-while-revalidate=604800")
+	case strings.HasSuffix(name, ".txt"):
+		// Next.js App Router RSC flight payloads carry a build-specific ?_rsc= query.
+		w.Header().Set("Cache-Control", "private, max-age=300, stale-while-revalidate=3600")
+	default:
+		w.Header().Set("Cache-Control", "private, no-cache")
+	}
+}
+
+func etagMatches(ifNoneMatch, etag string) bool {
+	if ifNoneMatch == "" || etag == "" {
 		return false
 	}
-	st, statErr := f.Stat()
-	_ = f.Close()
-	if statErr != nil || st.IsDir() {
+	for _, item := range strings.Split(ifNoneMatch, ",") {
+		cand := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(item), "W/"))
+		if cand == "*" || cand == etag {
+			return true
+		}
+	}
+	return false
+}
+
+func serveEmbeddedAsset(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string, gated bool) bool {
+	entry, ok := loadEmbeddedAsset(fsys, name)
+	if !ok {
 		return false
 	}
-	http.ServeFileFS(w, r, fsys, name)
+	setStaticCacheHeaders(w, name, gated)
+	w.Header().Set("ETag", entry.etag)
+	if len(entry.gz) > 0 {
+		w.Header().Add("Vary", "Accept-Encoding")
+	}
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && etagMatches(r.Header.Get("If-None-Match"), entry.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	if len(entry.gz) > 0 && requestAcceptsGzip(r) {
+		w.Header().Set("Content-Type", entry.ctype)
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.gz)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(entry.gz)
+		}
+		return true
+	}
+	w.Header().Set("Content-Type", entry.ctype)
+	http.ServeContent(w, r, path.Base(name), time.Time{}, bytes.NewReader(entry.raw))
 	return true
 }

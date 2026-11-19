@@ -134,6 +134,20 @@ func (s *Server) setBasicAuthCookie(w http.ResponseWriter, r *http.Request, cfg 
 	return nil
 }
 
+func isBrowserCacheableAssetPath(p string) bool {
+	if strings.HasPrefix(p, "/_next/static/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/api/") {
+		return false
+	}
+	return strings.HasSuffix(p, ".txt") ||
+		strings.HasSuffix(p, ".woff2") ||
+		strings.HasSuffix(p, ".png") ||
+		strings.HasSuffix(p, ".ico") ||
+		strings.HasSuffix(p, ".svg")
+}
+
 func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.basicAuth.snapshot()
@@ -143,11 +157,16 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
 		if s.validBasicAuthCookie(r, cfg) {
+			// Allow authenticated browsers to cache content-hashed static bundles
+			// privately in memory (never shared proxies), while keeping API & HTML uncached.
+			if !isBrowserCacheableAssetPath(r.URL.Path) {
+				w.Header().Set("Cache-Control", "no-store")
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store")
 		username, password, ok := r.BasicAuth()
 		if !ok || len(password) > maxPasswordBytes || username != cfg.Username ||
 			bcrypt.CompareHashAndPassword([]byte(cfg.PasswordHash), []byte(password)) != nil {

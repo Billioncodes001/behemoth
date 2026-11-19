@@ -66,11 +66,12 @@ export function EgressIpProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (!enabled) return;
     const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       void api
         .settings()
         .then((settings) => probeForProxy(settings.global_proxy ?? ""))
         .catch(() => undefined);
-    }, 10000);
+    }, 60000);
     return () => window.clearInterval(timer);
   }, [enabled, probeForProxy]);
 

@@ -2242,12 +2242,12 @@
   "screen.61e2ed5f4d43e5": ["如 x-session-id（留空=不发送）", "e.g. x-session-id (blank = do not send)"],
   "screen.b71d704f632bf3": [
     "填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为",
-    "Each request sends this header with the value set to the"
+    "Each request sends this header with the value set to the "
   ],
   "screen.b6b1d20850b049": ["当前会话的 session id", "current session ID"],
   "screen.ce053ce3d5ec1a": [
     "（chat 会话如 conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 / 粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。",
-    "(e.g. conv-12 for chat, exp3-worker-i87 for Workers). Useful for prompt caching and sticky routing; stable within a session and distinct across sessions. Leave blank to omit."
+    " (e.g. conv-12 for chat, exp3-worker-i87 for Workers). Useful for prompt caching and sticky routing; stable within a session and distinct across sessions. Leave blank to omit."
   ],
   "screen.d717c6180a8bd7": ["已设置（{{v0}}），留空保持不变", "Configured ({{v0}}); leave blank to retain"],
   "screen.5056d3f98eb0a0": ["每秒限速", "Requests per second"],

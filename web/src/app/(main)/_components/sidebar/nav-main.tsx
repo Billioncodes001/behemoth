@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
 import { api } from "@/lib/api";
@@ -161,13 +161,14 @@ function NavItem({ item, isItemActive, isSubItemActive, isSubmenuOpen }: NavItem
   );
 }
 
-// InterceptPendingBadge polls /api/intercept/pending every 5 s and shows a red
+// InterceptPendingBadge polls /api/intercept/pending every 10 s while visible and shows a
 // count badge when there are unresolved approval requests.
 function InterceptPendingBadge() {
   const [count, setCount] = React.useState(0);
   React.useEffect(() => {
     let live = true;
     async function poll() {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const list = await api.interceptPending();
         if (live) setCount(list.length);
@@ -176,8 +177,16 @@ function InterceptPendingBadge() {
     void poll();
     const t = setInterval(() => {
       void poll();
-    }, 5000);
-    return () => { live = false; clearInterval(t); };
+    }, 10000);
+    const onVis = () => {
+      if (!document.hidden) void poll();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
   if (count === 0) return null;
   return (
@@ -188,12 +197,20 @@ function InterceptPendingBadge() {
 }
 
 function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
+  const router = useRouter();
+  const warmRoute = React.useCallback(() => {
+    if (!item.newTab && !item.disabled) {
+      router.prefetch(item.url);
+    }
+  }, [item.disabled, item.newTab, item.url, router]);
+
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild aria-disabled={item.disabled} tooltip={item.title} isActive={isActive}>
         <Link
-          prefetch={false}
           href={item.url}
+          onMouseEnter={warmRoute}
+          onFocus={warmRoute}
           target={item.newTab ? "_blank" : undefined}
           rel={item.newTab ? "noreferrer" : undefined}
         >
@@ -241,7 +258,6 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
               return (
                 <DropdownMenuItem key={subItem.id} asChild disabled={subItem.disabled}>
                   <Link
-                    prefetch={false}
                     href={subItem.url}
                     target={subItem.newTab ? "_blank" : undefined}
                     rel={subItem.newTab ? "noreferrer" : undefined}
@@ -289,7 +305,6 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
                     isActive={isSubItemActive(subItem.url)}
                   >
                     <Link
-                      prefetch={false}
                       href={subItem.url}
                       target={subItem.newTab ? "_blank" : undefined}
                       rel={subItem.newTab ? "noreferrer" : undefined}

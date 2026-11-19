@@ -151,7 +151,19 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	buildCmd := exec.CommandContext(ctx, "bash", "-c", `
 		set -e
 		if command -v npm >/dev/null 2>&1 && [ -d web ]; then
-			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist && npm run build)
+			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist)
+			if [ -f /etc/nginx/sites-enabled/artex.conf ]; then
+				# Nginx fronts the embedded Go binary on :8787 directly; reclaim any idle :3000 Node server RAM.
+				if [ -f /tmp/artex-web.pid ]; then
+					kill "$(cat /tmp/artex-web.pid)" 2>/dev/null || true
+					rm -f /tmp/artex-web.pid
+				fi
+				if command -v tmux >/dev/null 2>&1; then
+					tmux kill-window -t artex:frontend 2>/dev/null || true
+				fi
+			elif pgrep -f "next start" >/dev/null 2>&1; then
+				(cd web && npm run build)
+			fi
 		fi
 		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.2.0)"
 		BUILD_VER="${BUILD_VER#v}"

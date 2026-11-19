@@ -92,9 +92,15 @@ start_tmux_all() {
   pkill -f "next start -p ${WEB_PORT}" 2>/dev/null || true
   sleep 1
 
+  local run_next=1
+  if [ -f /etc/nginx/sites-enabled/artex.conf ] && [ "${ARTEX_FORCE_NEXT_SERVER:-0}" != "1" ]; then
+    # Nginx serves the embedded single-binary UI directly on :8787; skip duplicate Node server.
+    run_next=0
+  fi
+
   if command -v tmux >/dev/null 2>&1; then
     tmux new-session -d -s "$TMUX_SESSION" -n "backend" "cd '$SCRIPT_DIR' && ./start.sh -addr :${ARTEX_PORT} 2>&1 | tee -a /tmp/artex-server.log"
-    if [ -d "$SCRIPT_DIR/web/.next" ]; then
+    if [ "$run_next" -eq 1 ] && [ -d "$SCRIPT_DIR/web/.next" ]; then
       tmux new-window -t "$TMUX_SESSION:1" -n "frontend" "cd '$SCRIPT_DIR/web' && while :; do NODE_OPTIONS='--max-http-header-size=65536' npx next start -p ${WEB_PORT} 2>&1 | tee -a /tmp/artex-web.log; sleep 2; done"
     fi
     tmux new-window -t "$TMUX_SESSION:2" -n "logs" "tail -f /tmp/artex-server.log"
@@ -105,7 +111,7 @@ start_tmux_all() {
     warn "tmux not installed; starting ARTEX services as background daemons"
     nohup "$SCRIPT_DIR/start.sh" -addr ":${ARTEX_PORT}" >>/tmp/artex-server.log 2>&1 &
     echo $! >/tmp/artex-backend.pid
-    if [ -d "$SCRIPT_DIR/web/.next" ]; then
+    if [ "$run_next" -eq 1 ] && [ -d "$SCRIPT_DIR/web/.next" ]; then
       ( cd "$SCRIPT_DIR/web" && NODE_OPTIONS="--max-http-header-size=65536" nohup npx next start -p "${WEB_PORT}" >>/tmp/artex-web.log 2>&1 & echo $! >/tmp/artex-web.pid )
     fi
     sleep 1
@@ -127,6 +133,13 @@ server {
     server_name ${domain};
 
     client_max_body_size 100M;
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 512;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types text/plain text/css text/javascript application/javascript application/json image/svg+xml application/xml;
+
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
@@ -140,7 +153,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_buffering off;
+        # SSE endpoints explicitly send X-Accel-Buffering: no; keep proxy buffering
+        # enabled for multi-megabyte JS/CSS bundles so WAN transfers don't stall.
         proxy_cache off;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;

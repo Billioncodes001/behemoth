@@ -1451,7 +1451,7 @@ func (s *Server) Handler() http.Handler {
 	// /api/* goes through Security -> CORS + JWT; everything else is served by the embedded
 	// frontend (no JWT required; the optional Basic Auth gate wraps both). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
-	api := cors(s.requireAuth(s.securityMiddleware(mux)))
+	api := gzipAPI(cors(s.requireAuth(s.securityMiddleware(mux))))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
