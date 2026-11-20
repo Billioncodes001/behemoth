@@ -4,13 +4,21 @@ import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
-import { ArrowLeftIcon, ArrowUpRightIcon, BotIcon, FileTextIcon, Loader2Icon, ShieldAlertIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  BotIcon,
+  DownloadIcon,
+  FileTextIcon,
+  Loader2Icon,
+  ShieldAlertIcon,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
 import { FindingAutoChat } from "@/components/finding-auto-chat";
-import { FindingReproductionPanel } from "@/components/finding-reproduction-panel";
+import { downloadMarkdownReport, FindingReproductionPanel } from "@/components/finding-reproduction-panel";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { Markdown } from "@/components/markdown";
@@ -50,9 +58,8 @@ function fmtTime(ts: string, ui: UITranslate) {
 
 function usesStructuredReproduction(report: string) {
   return (
-    /^##\s+(?:Reproduction Steps|Step-by-Step Reproduction|Testing Process|复现步骤|测试过程|复现过程)\s*$/im.test(
-      report,
-    ) && /^\s*(?:###\s*)?(?:Step|步骤)\s*\d+[.、:：)）\s-]/im.test(report)
+    /^##\s+(?:Reproduction Steps|Step-by-Step Reproduction|Testing Process)\s*$/im.test(report) &&
+    /^\s*(?:###\s*)?Step\s*\d+[.:\s)-]/im.test(report)
   );
 }
 
@@ -78,6 +85,8 @@ function FindingDetailInner() {
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
   const [reportGenerating, setReportGenerating] = React.useState(false);
+  const [reportPolling, setReportPolling] = React.useState(false);
+  const pollTimerRef = React.useRef<number | null>(null);
   const [autoChatOpen, setAutoChatOpen] = React.useState(false);
   const [reportChatOpen, setReportChatOpen] = React.useState(false);
   const title = finding?.name || finding?.vulnclass || ui("screen.54b89f90127458");
@@ -131,27 +140,54 @@ function FindingDetailInner() {
     [finding, id, t, liveUI],
   );
 
+  React.useEffect(() => {
+    return () => {
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+      }
+    };
+  }, []);
+
   const generateReport = React.useCallback(async () => {
-    if (!finding || finding.inherited || reportGenerating) return;
+    if (!finding || finding.inherited || reportGenerating || reportPolling) return;
+    const prevReport = finding.report || "";
     setReportGenerating(true);
     try {
-      await api.generateFindingReport(id);
+      const resp = await api.generateFindingReport(id);
+      if (resp?.conversation_id) {
+        setFinding((cur) => (cur ? { ...cur, report_conversation_id: Number(resp.conversation_id) } : cur));
+      }
       toast.success(liveUI("screen.111a2943460953"));
-      // Poll briefly in the background so the newly authored report appears automatically
-      // as soon as the Report Writer agent saves it via update_finding_report.
+      setReportPolling(true);
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+      }
       let checks = 0;
-      const timer = window.setInterval(() => {
+      pollTimerRef.current = window.setInterval(() => {
         checks += 1;
         api
           .getFinding(id, contextTaskId || undefined)
           .then((f) => {
             setFinding(f);
-            if ((f.report && f.report !== finding.report) || checks >= 20) {
-              window.clearInterval(timer);
+            if ((f.report && f.report !== prevReport) || checks >= 30) {
+              if (pollTimerRef.current !== null) {
+                window.clearInterval(pollTimerRef.current);
+                pollTimerRef.current = null;
+              }
+              setReportPolling(false);
+              if (f.report && f.report !== prevReport) {
+                toast.success(`Vulnerability report saved for Finding #${f.id}`);
+              }
             }
           })
           .catch(() => {
-            if (checks >= 20) window.clearInterval(timer);
+            if (checks >= 30) {
+              if (pollTimerRef.current !== null) {
+                window.clearInterval(pollTimerRef.current);
+                pollTimerRef.current = null;
+              }
+              setReportPolling(false);
+            }
           });
       }, 3000);
     } catch (e) {
@@ -159,7 +195,7 @@ function FindingDetailInner() {
     } finally {
       setReportGenerating(false);
     }
-  }, [contextTaskId, finding, id, reportGenerating, liveUI, t]);
+  }, [contextTaskId, finding, id, reportGenerating, reportPolling, liveUI, t]);
 
   if (!finding) {
     return (
@@ -251,6 +287,20 @@ function FindingDetailInner() {
             <div className="grid gap-4 lg:grid-cols-3">
               {/* 左栏 */}
               <div className="flex flex-col gap-4 lg:col-span-2">
+                {reportPolling ? (
+                  <Alert className="border-primary/40 bg-primary/5">
+                    <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2Icon className="size-3.5 animate-spin text-primary" />
+                        Report Writer is authoring the structured steps &amp; Markdown report in the background. This
+                        page updates automatically when complete.
+                      </span>
+                      <Button type="button" variant="outline" size="sm" onClick={() => setReportChatOpen(true)}>
+                        View live progress
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-sm">{ui("screen.21c04b2eeeb431")}</CardTitle>
@@ -262,7 +312,12 @@ function FindingDetailInner() {
                   </CardContent>
                 </Card>
                 {structuredReproduction ? (
-                  <FindingReproductionPanel finding={finding} contextTask={contextTaskId || undefined} />
+                  <FindingReproductionPanel
+                    finding={finding}
+                    contextTask={contextTaskId || undefined}
+                    onRegenerate={() => void generateReport()}
+                    regenerating={reportGenerating || reportPolling}
+                  />
                 ) : (
                   <>
                     <Card>
@@ -288,20 +343,42 @@ function FindingDetailInner() {
                     />
                     <Card>
                       <CardHeader className="flex-row items-center justify-between">
-                        <CardTitle className="text-sm">{ui("screen.566e5ab4ab0638")}</CardTitle>
+                        <div>
+                          <CardTitle className="text-sm">{ui("screen.566e5ab4ab0638")}</CardTitle>
+                          {finding.report ? (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Also exported to Workspace:{" "}
+                              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                                reports/finding-{finding.id}-report.md
+                              </code>
+                            </p>
+                          ) : null}
+                        </div>
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           {finding.report && (
-                            <CopyButton text={finding.report} successMessage={ui("screen.10a2e40390af5f")} />
+                            <>
+                              <CopyButton text={finding.report} successMessage={ui("screen.10a2e40390af5f")} />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => downloadMarkdownReport(finding.id, finding.report || "")}
+                                title="Download Markdown report (.md)"
+                              >
+                                <DownloadIcon data-icon="inline-start" />
+                                Download .md
+                              </Button>
+                            </>
                           )}
                           {!finding.inherited ? (
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => void generateReport()}
-                              disabled={reportGenerating}
+                              disabled={reportGenerating || reportPolling}
                               title={ui("screen.3f97843e926552")}
                             >
-                              {reportGenerating ? (
+                              {reportGenerating || reportPolling ? (
                                 <Loader2Icon data-icon="inline-start" className="animate-spin" />
                               ) : (
                                 <FileTextIcon data-icon="inline-start" />

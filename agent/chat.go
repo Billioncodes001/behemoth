@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -130,47 +132,54 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	defer cleanup()
 
 	system, boundary := deferredSystem(chatSystem(agentKey, c.model, c.workDir, sessionWorkDir), def)
-	proxyAddr := c.proxyAddr
-	if c.proxyAddrFn != nil {
-		proxyAddr = c.proxyAddrFn()
+
+	resolveLiveProxy := func() string {
+		if !isActiveProbingAgent(agentKey) {
+			return ""
+		}
+		if c.proxyAddrFn != nil {
+			return c.proxyAddrFn()
+		}
+		return c.proxyAddr
 	}
+	proxyAddr := resolveLiveProxy()
+	allTools := wrapDynamicProxyEnvTools(append(tools, deepSeekTools(ws)...), resolveLiveProxy, c.proxyCACert)
+	boundToolMap := make(map[string]bool, len(allTools))
+	for _, t := range allTools {
+		boundToolMap[t.Name()] = true
+	}
+
 	opts := agentcore.Options{
 		Provider:        c.prov,
 		SystemPrompt:    system,
 		DynamicBoundary: boundary,
-		Tools:           append(tools, deepSeekTools(ws)...),
+		Tools:           allTools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
+		EnableWebFetch:  true,
 		WebFetchProxy:   proxyAddr,
 		WebFetchCACert:  c.proxyCACert,
-		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
-		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。
 		EnableWebSearch:    ws.Enabled && ws.Backend != "deepseek",
 		WebSearchBackend:   ws.Backend,
 		BraveSearchAPIKey:  ws.BraveKey,
 		TavilySearchAPIKey: ws.TavilyKey,
 		WebSearchProxy:     ws.Proxy,
-		BashEnv:            proxyEnv(proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
+		BashEnv:            proxyEnv(proxyAddr, c.proxyCACert),
 		WorkingDir:         sessionWorkDir,
 		MaxTurns:           maxTurns,
 		MaxDuration:        maxDuration,
 		Compaction:         compactionConfig(c.window),
 		Todos:              actool.NewTodoStore(),
-		// large tool output spills to cmd-output/ under the session dir.
-		// 截断上限用 SDK 默认(tool.Capture 的 30000 字符)。
 		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
-		// 命中预算(步数)→ SDK 跑收尾:输出一句总结。Prompt 与收尾轮数按本 agent key 后台可编辑
-		// (自定义 agent 各自一份;留空/0 用通用默认:10 轮)。
 		Settlement:   wrapupSettlement(agentKey, nil),
-		NonStreaming: c.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:    c.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
+		NonStreaming: c.nonStreaming(),
+		MaxTokens:    c.maxTokens(),
 	}
 	if c.guard != nil {
 		opts.Hooks = c.guard.Hooks()
 	}
-	opts.Hooks = WrapContinuationHooks(opts.Hooks, message, agentKey+"-"+sessionID, 8)
+	opts.Hooks = WrapChatContinuationHooks(opts.Hooks, agentKey, boundToolMap, message, agentKey+"-"+sessionID, 8)
 	if c.tx != nil { // persist raw human↔AI conversation; one accumulating file per thread
 		opts.Transcript = c.tx
 		opts.SessionID = sessionID
@@ -196,3 +205,55 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	})
 	return text, err
 }
+
+// dynamicProxyEnvTool refreshes tc.Env right before each tool call so mid-turn proxy
+// changes (e.g. calling import_and_test_proxies or manage_proxy_pool(disable) inside
+// the same Chat turn) immediately inject or strip HTTP_PROXY/HTTPS_PROXY/ALL_PROXY.
+type dynamicProxyEnvTool struct {
+	actool.CoreTool
+	resolveProxy func() string
+	caCert       string
+}
+
+func (d *dynamicProxyEnvTool) AcceptsRawInput() bool {
+	if ra, ok := d.CoreTool.(rawInputAcceptor); ok {
+		return ra.AcceptsRawInput()
+	}
+	return false
+}
+
+func (d *dynamicProxyEnvTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+	if tc != nil && d.resolveProxy != nil {
+		liveAddr := d.resolveProxy()
+		cleaned := make([]string, 0, len(tc.Env)+12)
+		for _, kv := range tc.Env {
+			k := kv
+			if eq := strings.IndexByte(kv, '='); eq >= 0 {
+				k = kv[:eq]
+			}
+			switch strings.ToUpper(k) {
+			case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY",
+				"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS":
+				continue
+			}
+			cleaned = append(cleaned, kv)
+		}
+		cleaned = append(cleaned, proxyEnv(liveAddr, d.caCert)...)
+		tcCopy := *tc
+		tcCopy.Env = cleaned
+		tc = &tcCopy
+	}
+	return d.CoreTool.Call(ctx, in, tc)
+}
+
+func wrapDynamicProxyEnvTools(tools []actool.CoreTool, resolveProxy func() string, caCert string) []actool.CoreTool {
+	if resolveProxy == nil {
+		return tools
+	}
+	out := make([]actool.CoreTool, len(tools))
+	for i, t := range tools {
+		out[i] = &dynamicProxyEnvTool{CoreTool: t, resolveProxy: resolveProxy, caCert: caCert}
+	}
+	return out
+}
+

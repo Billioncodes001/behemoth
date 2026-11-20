@@ -47,7 +47,7 @@ func caseHTTPError(w http.ResponseWriter, err error) {
 func decodeCaseRequest(w http.ResponseWriter, r *http.Request, a any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(a); err != nil {
-		writeErr(w, 400, "无效请求正文")
+		writeErr(w, 400, "Invalid request body")
 		return false
 	}
 	return true
@@ -122,18 +122,18 @@ func (s *Server) findingCaseAccess(w http.ResponseWriter, r *http.Request, mutat
 		return nil, false
 	}
 	if c == nil {
-		writeErr(w, 404, "漏洞组不存在")
+		writeErr(w, 404, "Finding group not found")
 		return nil, false
 	}
 	if ctx := r.URL.Query().Get("context_task"); ctx != "" {
 		t := s.m.ResolveTask(ctx)
 		_, inherited, allowed := findingProvenanceInTask(t, c.TaskID)
 		if !allowed {
-			writeErr(w, 404, "任务中没有该漏洞组")
+			writeErr(w, 404, "Finding group not found in this task")
 			return nil, false
 		}
 		if mutation && inherited {
-			writeErr(w, 403, "继承漏洞组只读")
+			writeErr(w, 403, "Inherited finding group is read-only")
 			return nil, false
 		}
 	}
@@ -187,7 +187,7 @@ func (s *Server) removeFindingCaseMember(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if strings.TrimSpace(body.Reason) == "" {
-		body.Reason = "人工移出归并组"
+		body.Reason = "Manually removed from merge group"
 	}
 	if err := s.m.pg.RemoveFindingCaseMember(r.Context(), c.ID, fid, body.Reason); err != nil {
 		caseHTTPError(w, err)
@@ -215,7 +215,7 @@ func (s *Server) resolveCaseSuggestion(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range a.ExcludeIDs {
 		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 		if err != nil || id <= 0 {
-			caseHTTPError(w, errors.New("无效的排除记录编号"))
+			caseHTTPError(w, errors.New("invalid excluded finding ID"))
 			return
 		}
 		exclude = append(exclude, id)
@@ -316,6 +316,17 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 	}
 	switch name {
 	case "search_finding_duplicates":
+		if f, ferr := s.m.pg.FindingCaseSummary(fid); ferr == nil && f != nil && f.TaskID == nil {
+			return map[string]any{
+				"items":        []any{},
+				"total":        0,
+				"strong_total": 0,
+				"page":         page,
+				"page_size":    20,
+				"standalone":   true,
+				"note":         "Standalone chat finding has no task container; task-scoped duplicate consolidation is not applicable. Your standalone report is already complete.",
+			}, nil
+		}
 		scope, err := s.historicalFindingReviewSelection(ctx)
 		if err != nil {
 			return nil, err
@@ -436,11 +447,11 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 	if cid := parseProfileID(a.CaseID); cid > 0 {
 		c, err := s.m.pg.GetFindingCase(cid)
 		if err != nil || c == nil || !c.Active {
-			writeErr(w, 400, "漏洞组不可用")
+			writeErr(w, 400, "Finding group is unavailable")
 			return
 		}
 		if ctx := r.URL.Query().Get("context_task"); ctx != "" && (c.TaskID == nil || ctx != i64s(*c.TaskID)) {
-			writeErr(w, 403, "继承漏洞组只读")
+			writeErr(w, 403, "Inherited finding group is read-only")
 			return
 		}
 		fs, _, err := s.m.pg.FindingCaseMembers(cid, 1, 100000)
@@ -454,19 +465,19 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(ids) == 0 || (len(a.CaseID) == 0 && len(ids) > 200) {
-		writeErr(w, 400, "请选择1至200条原始上报")
+		writeErr(w, 400, "Please select between 1 and 200 finding records")
 		return
 	}
 	reporter, err := s.m.pg.GetAgentByKey("reporter")
 	if err != nil || reporter == nil || !reporter.Enabled || s.chatAgentRef() == nil {
-		writeErr(w, 409, "报告 Agent 未启用或模型不可用")
+		writeErr(w, 409, "Report Writer agent is disabled or no LLM model is configured")
 		return
 	}
 	batches := map[int64][]int64{}
 	for _, fid := range ids {
 		f, err := s.m.pg.FindingCaseSummary(fid)
 		if err != nil || f == nil || f.TaskID == nil {
-			writeErr(w, 400, "所选漏洞来源任务不可用")
+			writeErr(w, 400, "Selected finding has no active source task (standalone findings are already independent)")
 			return
 		}
 		batches[*f.TaskID] = append(batches[*f.TaskID], fid)
@@ -476,7 +487,7 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 	for taskID := range batches {
 		t, ok := s.m.Task(i64s(taskID))
 		if !ok {
-			writeErr(w, 409, "任务不可用")
+			writeErr(w, 409, "Source task is unavailable")
 			return
 		}
 
@@ -493,7 +504,7 @@ func (s *Server) reviewFindingCases(w http.ResponseWriter, r *http.Request) {
 		taskContext := taskContexts[taskID]
 		raw, _ := json.Marshal(fids)
 		msg := fmt.Sprintf(findingCaseReviewTaskMessage, raw)
-		item := triggeredRun{agentKey: "reporter", title: "漏洞整理 · task#" + i64s(taskID), message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
+		item := triggeredRun{agentKey: "reporter", title: "Finding Review · task#" + i64s(taskID), message: msg, taskID: taskID, taskDesc: taskContext.taskDesc, taskGoal: taskContext.taskGoal, conversationID: reservation.ConversationID}
 		cfg := s.readTriggerBehavior("reporter")
 		s.queueMu.Lock()
 		s.triggerCfg["reporter"] = cfg
@@ -548,7 +559,7 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 		return err
 	}
 	if string(conclusion) != "{}" && (name == "merge_finding_records" || name == "suggest_finding_merge" || name == "update_finding_case_report") {
-		return errors.New("整理判断已提交，不能在验收后继续修改")
+		return errors.New("review verdict has already been submitted and cannot be modified after completion")
 	}
 	allowed := map[int64]bool{}
 	for _, id := range ids {
@@ -557,15 +568,15 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 	switch name {
 	case "search_finding_duplicates":
 		if !allowed[parseProfileID(a.FindingID)] {
-			return errors.New("历史整理只能检索所选记录的候选")
+			return errors.New("historical review may only search duplicate candidates for selected records")
 		}
 	case "update_finding_report", "bind_finding_traffic", "report_finding":
-		return errors.New("历史整理禁止修改原始报告、上报或证据；只能写归并关系及统一报告")
+		return errors.New("historical review cannot modify original reports, findings, or evidence; only merge relationships and unified reports may be updated")
 	case "merge_finding_records", "suggest_finding_merge":
 		checkIDs := a.ids()
 		for _, id := range checkIDs {
 			if !allowed[id] {
-				return errors.New("人工整理只能归并所选记录")
+				return errors.New("manual review may only merge selected finding records")
 			}
 		}
 	case "update_finding_case_report":
@@ -580,7 +591,7 @@ func (s *Server) checkCaseReviewScope(ctx context.Context, name string, a findin
 			}
 		}
 		if !found {
-			return errors.New("该漏洞组不属于人工所选范围")
+			return errors.New("target finding group is outside the selected manual review scope")
 		}
 	}
 	return nil

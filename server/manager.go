@@ -1047,20 +1047,36 @@ func (m *Manager) Assets() *pgdb.AssetStore  { return m.assets }
 func (m *Manager) PG() *pgdb.DB              { return m.pg }
 func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 
+// HasOutboundProxy reports whether an external outbound proxy (either a static
+// Global Proxy or an enabled Proxy Pool with at least one active entry) is configured.
+// Local traffic capture (127.0.0.1:8788) alone is NOT an outbound proxy.
+func (m *Manager) HasOutboundProxy() bool {
+	m.mu.RLock()
+	global := strings.TrimSpace(m.globalProxy)
+	m.mu.RUnlock()
+	return global != "" || m.proxyPoolConfigured.Load()
+}
+
+// ForwardProxyAddr returns the local dynamic forward-proxy listener address (if running),
+// used internally when a proxy is enabled mid-session.
+func (m *Manager) ForwardProxyAddr() string {
+	if m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return ""
+}
+
 // ProxyAddr returns the egress proxy address agents route target traffic through:
 //   - capture ON  → the recording MITM proxy (which itself exits via the global
 //     proxy when one is set); agents also get its CA (see ProxyCACert).
-//   - capture OFF → the global egress proxy directly (empty CA — real target
-//     certs), or "" when no global proxy is set (direct, no recording).
-//
-// So the global proxy takes effect in both modes: at the MITM's upstream when
-// capturing, in the agent's own bash env / WebFetch when not.
+//   - capture OFF → the global/pool egress proxy via the local forwarder when an
+//     outbound proxy is enabled, or "" when neither Proxy Pool nor Global Proxy is enabled.
 func (m *Manager) ProxyAddr() string {
 	if m.traffic != nil && m.TrafficEnabled() {
 		return m.traffic.ProxyAddr()
 	}
 	m.mu.RLock()
-	global := m.globalProxy
+	global := strings.TrimSpace(m.globalProxy)
 	m.mu.RUnlock()
 	if (global != "" || m.proxyPoolConfigured.Load()) && m.forwardProxy != nil {
 		return m.forwardProxy.Addr()
@@ -1069,17 +1085,11 @@ func (m *Manager) ProxyAddr() string {
 }
 
 // SessionProxyAddr returns the proxy URL injected into interactive/worker agent
-// sessions (Bash HTTP_PROXY/HTTPS_PROXY + WebFetch). When traffic capture is off
-// and the local dynamic forward proxy is available, it always returns that stable
-// 127.0.0.1 forwarder (which falls back to direct when no upstream proxy is set
-// and immediately switches to any newly imported/activated proxy mid-session).
+// sessions. When neither Traffic Capture, Proxy Pool, nor Global Proxy is enabled,
+// it returns "" so agents run completely direct with zero HTTP_PROXY environment
+// variables; dynamic mid-turn proxy imports/activations are picked up per-command
+// by ChatAgent's dynamic proxy env resolver.
 func (m *Manager) SessionProxyAddr() string {
-	if m.traffic != nil && m.TrafficEnabled() {
-		return m.traffic.ProxyAddr()
-	}
-	if m.forwardProxy != nil {
-		return m.forwardProxy.Addr()
-	}
 	return m.ProxyAddr()
 }
 

@@ -98,7 +98,7 @@ func (s *Server) generateFindingReport(w http.ResponseWriter, r *http.Request) {
 
 func manualFindingReportMessage(f *db.DBFinding, taskID int64, assetLabels []string) string {
 	var b strings.Builder
-	b.WriteString("[Manual Report & Reproduction Steps Generation] Author a comprehensive, structured technical vulnerability report in English for this confirmed finding. Do NOT create a new finding record and do NOT alter or delete existing evidence.\n\n")
+	b.WriteString("[Manual Report & Reproduction Steps Generation] Author a comprehensive, structured technical vulnerability report in English for this confirmed finding using ONLY the recorded finding data and captured evidence. Do NOT execute live network probes (no curl/nmap/dig/Bash against the target), do NOT call insert_assets, do NOT create a new finding record, and do NOT alter or delete existing evidence.\n\n")
 	if f.NodeID != nil && *f.NodeID > 0 {
 		fmt.Fprintf(&b, "- Standalone Finding ID (`finding_id` for `get_finding_traffic`): %d\n", f.ID)
 		fmt.Fprintf(&b, "- Exploration Node ID (`finding_node_id` for `get_task_node_detail` & `update_finding_report`): %d\n", *f.NodeID)
@@ -107,7 +107,7 @@ func manualFindingReportMessage(f *db.DBFinding, taskID int64, assetLabels []str
 		}
 	} else {
 		fmt.Fprintf(&b, "- Standalone Finding ID (`finding_id` — use this exact integer ID for both `get_finding_traffic` and `update_finding_report`): %d\n", f.ID)
-		b.WriteString("- Origin: Standalone Chat Security Assessment (no task exploration node — do NOT call `get_task_node_detail` or `list_task_worker_traces`; use the complete finding record & verbatim PoC evidence provided below plus `get_finding_traffic`).\n")
+		b.WriteString("- Origin: Standalone Chat Security Assessment (no task container — do NOT call `get_task_node_detail`, `list_task_worker_traces`, or `search_finding_duplicates`; use the complete finding record & verbatim PoC evidence provided below plus `get_finding_traffic`).\n")
 	}
 	title := strings.TrimSpace(f.Name)
 	if title == "" {
@@ -124,7 +124,7 @@ func manualFindingReportMessage(f *db.DBFinding, taskID int64, assetLabels []str
 		fmt.Fprintf(&b, "\n### Recorded Verbatim Evidence / PoC\n```\n%s\n```\n", f.Evidence)
 	}
 	b.WriteString("\n### Workflow & Required Markdown Sections\n")
-	b.WriteString("1. First call `get_finding_traffic(finding_id=" + strconv.FormatInt(f.ID, 10) + ")` to check bound HTTP packets and read `version` (an empty list is normal; proceed using the verbatim Evidence / PoC above without fabricating packets).\n")
+	b.WriteString("1. First call `get_finding_traffic(finding_id=" + strconv.FormatInt(f.ID, 10) + ")` to check bound HTTP packets and read `version` (an empty list is normal; proceed using the verbatim Evidence / PoC above without fabricating packets or running Bash).\n")
 	if f.NodeID != nil && *f.NodeID > 0 && taskID > 0 {
 		fmt.Fprintf(&b, "2. Call `get_task_node_detail(task_id=\"%d\", id=%d)` and `list_task_worker_traces(task_id=\"%d\")` if additional execution trace context is available.\n", taskID, *f.NodeID, taskID)
 	}
@@ -134,6 +134,6 @@ func manualFindingReportMessage(f *db.DBFinding, taskID int64, assetLabels []str
 	}
 	b.WriteString("3. Write a detailed Markdown report strictly in English containing these exact top-level headings:\n")
 	b.WriteString("   - `## Overview`\n   - `## Impact & Risk`\n   - `## Affected Scope`\n   - `## Reproduction Steps` (expand step-by-step using `### Step 1: ...`, `### Step 2: ...` with exact commands/requests and observed responses)\n   - `## Root Cause Analysis`\n   - `## Remediation`\n")
-	fmt.Fprintf(&b, "4. Save the finished report immediately by calling `update_finding_report(finding_id=%d, report=<Full Markdown>, evidence_version=<version read from get_finding_traffic>)`.", targetUpdateID)
+	fmt.Fprintf(&b, "4. Save the finished report immediately by calling `update_finding_report(finding_id=%d, report=<Full Markdown>, evidence_version=<version read from get_finding_traffic>)`, then conclude immediately and tell the user where the saved report can be viewed.", targetUpdateID)
 	return b.String()
 }

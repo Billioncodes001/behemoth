@@ -588,7 +588,7 @@ func TestFindingCaseCandidatesScoreAndTier(t *testing.T) {
 	if err != nil || total != 3 || strong != 1 || len(items) != 3 {
 		t.Fatalf("candidate totals %d %d %+v %v", total, strong, items, err)
 	}
-	if items[0]["finding_id"] != fmt.Sprint(ids[1]) || items[0]["score"] != 7 || items[0]["tier"] != "strong" || !reflect.DeepEqual(items[0]["hit_reasons"], []string{"同漏洞类型", "资产重叠"}) {
+	if items[0]["finding_id"] != fmt.Sprint(ids[1]) || items[0]["score"] != 7 || items[0]["tier"] != "strong" || !reflect.DeepEqual(items[0]["hit_reasons"], []string{"same_vuln_class", "asset_overlap"}) {
 		t.Fatalf("strong candidate %+v", items[0])
 	}
 	if items[1]["finding_id"] != fmt.Sprint(ids[2]) || items[1]["score"] != 2 || items[1]["tier"] != "weak" {

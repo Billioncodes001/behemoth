@@ -3,9 +3,17 @@ import * as React from "react";
 
 import { useRouter } from "next/navigation";
 
-import { ChevronDownIcon, ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  FileTextIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { CopyButton } from "@/components/copy-button";
 import { HttpCodeBlock } from "@/components/http-code-block";
 import { Markdown } from "@/components/markdown";
 import { headersFromReqHead, requestFromEvidence } from "@/components/repeater/repeater-http";
@@ -21,12 +29,11 @@ type ReproductionStep = {
   number: number;
   title: string;
   body: string;
+  rawBody: string;
 };
 
 function extractSection(report: string) {
-  const match = report.match(
-    /^##\s+(?:Reproduction Steps|Step-by-Step Reproduction|Testing Process|复现步骤|测试过程|复现过程)\s*$/im,
-  );
+  const match = report.match(/^##\s+(?:Reproduction Steps|Step-by-Step Reproduction|Testing Process)\s*$/im);
   if (!match || match.index === undefined) return "";
   const start = match.index + match[0].length;
   const tail = report.slice(start);
@@ -41,18 +48,20 @@ function withoutPacket(text: string) {
 function parseSteps(report: string, fallback: string, ui: UITranslate): ReproductionStep[] {
   const section = extractSection(report);
   if (!section) {
+    const raw = fallback.trim() || ui("screen.30041138cebbff");
     return [
       {
         number: 1,
         title: ui("screen.e481346b5979a5"),
-        body: fallback.trim() || ui("screen.30041138cebbff"),
+        body: raw,
+        rawBody: raw,
       },
     ];
   }
 
-  const markers = [...section.matchAll(/^\s*(?:###\s*)?(?:(?:Step|步骤)\s*)?(\d+)[.、:：)）\s-]\s*(.+)$/gim)];
+  const markers = [...section.matchAll(/^\s*(?:###\s*)?(?:Step\s*)?(\d+)[.:)\s-]\s*(.+)$/gim)];
   if (markers.length === 0) {
-    return [{ number: 1, title: ui("screen.95454d7e6d0dea"), body: withoutPacket(section) }];
+    return [{ number: 1, title: ui("screen.95454d7e6d0dea"), body: withoutPacket(section), rawBody: section }];
   }
 
   return markers.map((marker, index) => {
@@ -65,6 +74,7 @@ function parseSteps(report: string, fallback: string, ui: UITranslate): Reproduc
       number: Number(marker[1]),
       title: firstLine,
       body: withoutPacket(rest),
+      rawBody: rest,
     };
   });
 }
@@ -232,7 +242,29 @@ function PacketDisclosure({
   );
 }
 
-export function FindingReproductionPanel({ finding, contextTask }: { finding: Finding; contextTask?: string }) {
+export function downloadMarkdownReport(findingId: string, report: string) {
+  const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `finding-${findingId}-report.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function FindingReproductionPanel({
+  finding,
+  contextTask,
+  onRegenerate,
+  regenerating,
+}: {
+  finding: Finding;
+  contextTask?: string;
+  onRegenerate?: () => void;
+  regenerating?: boolean;
+}) {
   const { ui } = useUITranslation();
 
   const steps = React.useMemo(
@@ -241,19 +273,19 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
   );
   const [traffic, setTraffic] = React.useState<FindingTrafficBinding[] | undefined>(undefined);
   const overviewSections = [
-    { label: "Overview", aliases: ["Overview", "概述", "漏洞概述"] },
-    { label: "Impact & Risk", aliases: ["Impact & Risk", "Impact", "影响与危害", "影响"] },
-    { label: "Affected Scope", aliases: ["Affected Scope", "受影响范围"] },
+    { label: "Overview", aliases: ["Overview"] },
+    { label: "Impact & Risk", aliases: ["Impact & Risk", "Impact"] },
+    { label: "Affected Scope", aliases: ["Affected Scope"] },
     {
       label: "Discovery & Attack Chain Timeline",
-      aliases: ["Discovery & Attack Chain Timeline", "Attack Chain Timeline", "Prerequisites", "前置条件"],
+      aliases: ["Discovery & Attack Chain Timeline", "Attack Chain Timeline", "Prerequisites"],
     },
   ]
     .map((item) => ({ heading: item.label, content: reportSection(finding.report ?? "", item.aliases) }))
     .filter((item) => item.content);
-  const outcome = reportSection(finding.report ?? "", ["Evidence", "PoC", "最终结果", "证据"]);
-  const rootCause = reportSection(finding.report ?? "", ["Root Cause Analysis", "Root Cause", "根因分析"]);
-  const remediation = reportSection(finding.report ?? "", ["Remediation", "Recommendations", "修复建议"]);
+  const outcome = reportSection(finding.report ?? "", ["Evidence & PoC", "Evidence / PoC", "Evidence", "PoC"]);
+  const rootCause = reportSection(finding.report ?? "", ["Root Cause Analysis", "Root Cause"]);
+  const remediation = reportSection(finding.report ?? "", ["Remediation", "Recommendations"]);
 
   React.useEffect(() => {
     let active = true;
@@ -270,18 +302,60 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
     };
   }, [contextTask, finding.id]);
 
+  const hasAnyTraffic = (traffic?.length ?? finding.traffic_count ?? 0) > 0;
+
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <CardTitle>{ui("screen.ce3597f37f1263")}</CardTitle>
-            <CardDescription>{ui("screen.cc01d0c4b560bb")}</CardDescription>
+            <CardDescription>
+              Saved in Findings Detail &amp; Workspace (
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                reports/finding-{finding.id}-report.md
+              </code>
+              )
+            </CardDescription>
           </div>
-          <Badge variant={steps.length > 0 ? "secondary" : "outline"}>
-            {steps.length} {ui("screen.d446e6c5c34aad")}
-            {traffic?.length ?? finding.traffic_count ?? 0} {ui("screen.b1829a69fb6eb7")}
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={steps.length > 0 ? "secondary" : "outline"}>
+              {steps.length} {ui("screen.d446e6c5c34aad")}
+              {traffic?.length ?? finding.traffic_count ?? 0} {ui("screen.b1829a69fb6eb7")}
+            </Badge>
+            {finding.report ? (
+              <>
+                <CopyButton text={finding.report} successMessage={ui("screen.10a2e40390af5f")} />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadMarkdownReport(finding.id, finding.report || "")}
+                  title="Download Markdown report (.md)"
+                >
+                  <DownloadIcon data-icon="inline-start" />
+                  Download .md
+                </Button>
+              </>
+            ) : null}
+            {!finding.inherited && onRegenerate ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onRegenerate}
+                disabled={regenerating}
+                title="Regenerate reproduction steps and technical report"
+              >
+                {regenerating ? (
+                  <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <RefreshCwIcon data-icon="inline-start" />
+                )}
+                {ui("screen.f84bafca63ccf1")}
+              </Button>
+            ) : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -292,6 +366,7 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
         ))}
         {steps.map((step, index) => {
           const binding = traffic?.find((item) => item.position === index) ?? traffic?.[index];
+          const stepMarkdown = binding?.id ? step.body || step.rawBody : step.rawBody;
           return (
             <div key={`${step.number}-${step.title}`} className="relative rounded-lg border bg-background p-4">
               <div className="min-w-0">
@@ -304,8 +379,14 @@ export function FindingReproductionPanel({ finding, contextTask }: { finding: Fi
                     <h3 className="min-w-0 break-words font-semibold text-sm leading-5">{step.title}</h3>
                   </div>
                 </div>
-                {step.body ? <Markdown text={step.body} /> : null}
-                <PacketDisclosure findingId={finding.id} bindingId={binding?.id} contextTask={contextTask} />
+                {stepMarkdown ? (
+                  <div className="mt-2">
+                    <Markdown text={stepMarkdown} />
+                  </div>
+                ) : null}
+                {hasAnyTraffic || binding?.id ? (
+                  <PacketDisclosure findingId={finding.id} bindingId={binding?.id} contextTask={contextTask} />
+                ) : null}
               </div>
             </div>
           );

@@ -518,6 +518,7 @@ var primaryChatTools = map[string]bool{
 	"run_security_tool":          true,
 	"browser_inspect":            true,
 	"import_and_test_proxies":      true,
+	"check_proxy_status":           true,
 	"get_proxy_pool_status":        true,
 	"manage_proxy_pool":            true,
 	"match_vuln_targets":           true,

@@ -974,10 +974,13 @@ export const api = {
       `/exploration/findings/${id}${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
     ),
   generateFindingReport: (id: string) =>
-    post<{ queued: boolean; agent_key: "reporter"; finding_id: number; finding_node_id: number }>(
-      `/exploration/findings/${encodeURIComponent(id)}/generate-report`,
-      {},
-    ),
+    post<{
+      queued: boolean;
+      agent_key: "reporter";
+      finding_id: number;
+      finding_node_id: number;
+      conversation_id?: number;
+    }>(`/exploration/findings/${encodeURIComponent(id)}/generate-report`, {}),
   findingTraffic: (id: string, contextTask?: string) =>
     get<FindingTraffic>(
       `/exploration/findings/${id}/traffic${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,

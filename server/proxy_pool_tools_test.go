@@ -42,10 +42,21 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 		s.syncProxyPoolV2ToV1(proxies, activeID, cfg)
 	})
 
-	// Session starts BEFORE any proxy is imported — SessionProxyAddr already points to local dynamic forwarder!
-	sessionProxy := s.m.SessionProxyAddr()
-	if !strings.HasPrefix(sessionProxy, "http://127.0.0.1:") {
-		t.Fatalf("expected stable local session forwarder, got %q", sessionProxy)
+	// Before any proxy is enabled (Proxy Pool OFF, Global Proxy empty, Traffic Capture OFF):
+	// SessionProxyAddr MUST be empty ("") and check_proxy_status MUST report proxy_enabled=false!
+	if got := s.m.SessionProxyAddr(); got != "" {
+		t.Fatalf("expected empty SessionProxyAddr when all proxies are disabled, got %q", got)
+	}
+	chkRes, err := s.toolCheckProxyStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
+	if err != nil || chkRes.IsError {
+		t.Fatalf("check_proxy_status failed: err=%v res=%+v", err, chkRes)
+	}
+	var chkPayload map[string]any
+	if err := json.Unmarshal([]byte(chkRes.Content[0].Text), &chkPayload); err != nil {
+		t.Fatalf("invalid check_proxy_status JSON: %v", err)
+	}
+	if chkPayload["proxy_enabled"] != false || chkPayload["effective_routing_mode"] != "direct" {
+		t.Fatalf("expected proxy_enabled=false & direct before import, got %+v", chkPayload)
 	}
 
 	// Write a Webshare-format file in a temp workspace and call import_and_test_proxies
@@ -68,6 +79,12 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	}
 	if int(payload["imported"].(float64)) != 1 || payload["pool_enabled"] != true {
 		t.Fatalf("unexpected import payload: %+v", payload)
+	}
+
+	// Now that Proxy Pool is enabled, SessionProxyAddr immediately resolves to the local forwarder!
+	sessionProxy := s.m.SessionProxyAddr()
+	if !strings.HasPrefix(sessionProxy, "http://127.0.0.1:") {
+		t.Fatalf("expected active local session forwarder after enabling pool, got %q", sessionProxy)
 	}
 
 	// Verify subsequent HTTP traffic using the pre-existing sessionProxy routes through the newly imported proxy!

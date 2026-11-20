@@ -14,6 +14,7 @@ import (
 
 func (s *Server) proxyPoolAgentTools() []actool.CoreTool {
 	return []actool.CoreTool{
+		s.toolCheckProxyStatus(),
 		s.toolImportAndTestProxies(),
 		s.toolGetProxyPoolStatus(),
 		s.toolManageProxyPool(),
@@ -152,6 +153,87 @@ func (s *Server) toolImportAndTestProxies() actool.CoreTool {
 		})
 }
 
+func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
+	var (
+		cfg         *proxyv2.ProxyPoolConfig
+		stats       *proxyv2.PoolStats
+		proxies     []proxyv2.ProxyInfo
+		activeProxy *proxyv2.ProxyInfo
+	)
+	if ppV2 != nil && ppV2.Pool != nil {
+		cfg = ppV2.Pool.GetConfig()
+		stats = ppV2.Pool.GetStats()
+		proxies = ppV2.Pool.GetProxies()
+		if stats != nil {
+			for i := range proxies {
+				if proxies[i].ID == stats.ActiveProxyID {
+					cp := proxies[i]
+					activeProxy = &cp
+					break
+				}
+			}
+		}
+	}
+	globalRaw := ""
+	trafficCapture := false
+	if s.m != nil {
+		globalRaw = strings.TrimSpace(s.m.GlobalProxy())
+		trafficCapture = s.m.TrafficEnabled()
+	}
+	poolEnabled := cfg != nil && cfg.Enabled
+	totalInPool := 0
+	activeProxyID := ""
+	if stats != nil {
+		totalInPool = stats.Total
+		activeProxyID = stats.ActiveProxyID
+	}
+	poolActive := poolEnabled && totalInPool > 0 && activeProxy != nil
+	globalActive := globalRaw != ""
+	routingMode := "direct"
+	if poolActive {
+		routingMode = "proxy_pool"
+	} else if globalActive {
+		routingMode = "static_global_proxy"
+	}
+	anyOutbound := routingMode != "direct"
+	instruction := "NO outbound proxy is enabled (Proxy Pool is OFF and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
+	if routingMode == "proxy_pool" {
+		instruction = "Proxy Pool is ENABLED. Outbound traffic automatically routes through the active pool proxy via environment variables; do not hardcode localhost ports with -x. If a proxy times out or gets rate-limited/403'd, call manage_proxy_pool(action='rotate' or 'disable_proxy')."
+	} else if routingMode == "static_global_proxy" {
+		instruction = "Static Global Proxy is ENABLED in System Settings. Outbound traffic automatically routes through the configured Global Proxy."
+	}
+	return map[string]any{
+		"proxy_enabled":              anyOutbound,
+		"any_proxy_enabled":          anyOutbound,
+		"effective_routing_mode":     routingMode,
+		"proxy_pool_enabled":         poolEnabled,
+		"proxy_pool_active":          poolActive,
+		"global_proxy_enabled":       globalActive,
+		"static_global_proxy":        maskSecrets(globalRaw),
+		"local_traffic_capture_only": trafficCapture && !anyOutbound,
+		"traffic_capture":            trafficCapture,
+		"active_proxy_id":            activeProxyID,
+		"active_proxy":               activeProxy,
+		"instruction":                instruction,
+		"config":                     cfg,
+		"stats":                      stats,
+		"proxies":                    proxies,
+	}, nil
+}
+
+func (s *Server) toolCheckProxyStatus() actool.CoreTool {
+	return roTool("check_proxy_status",
+		"Always call this tool BEFORE attempting to use any proxy. Checks whether the user enabled Proxy Pool or configured a Global Proxy in Settings. If proxy_enabled is false, NO proxy is enabled and you must connect directly without -x / --proxy flags.",
+		objSchema(map[string]any{}),
+		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
+			payload, err := s.buildProxyStatusPayload()
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(payload)
+		})
+}
+
 func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 	return roTool("get_proxy_pool_status",
 		"Check whether outbound proxies are enabled anywhere in ARTEX (Proxy Pool or static Global Proxy), inspect active egress proxy IP/location/latency, pool health counts, rotation/sticky settings, and all configured proxies.",
@@ -160,41 +242,11 @@ func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 			if ppV2 == nil || ppV2.Pool == nil {
 				return actool.Errorf("Proxy Pool v2 is not initialized"), nil
 			}
-			cfg := ppV2.Pool.GetConfig()
-			stats := ppV2.Pool.GetStats()
-			proxies := ppV2.Pool.GetProxies()
-			var activeProxy *proxyv2.ProxyInfo
-			for i := range proxies {
-				if proxies[i].ID == stats.ActiveProxyID {
-					cp := proxies[i]
-					activeProxy = &cp
-					break
-				}
+			payload, err := s.buildProxyStatusPayload()
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
 			}
-			globalRaw := ""
-			trafficCapture := false
-			if s.m != nil {
-				globalRaw = strings.TrimSpace(s.m.GlobalProxy())
-				trafficCapture = s.m.TrafficEnabled()
-			}
-			routingMode := "direct"
-			if cfg.Enabled && stats.Total > 0 && activeProxy != nil {
-				routingMode = "proxy_pool"
-			} else if globalRaw != "" {
-				routingMode = "static_global_proxy"
-			}
-			return jsonResult(map[string]any{
-				"effective_routing_mode": routingMode,
-				"any_proxy_enabled":      routingMode != "direct",
-				"proxy_pool_enabled":     cfg.Enabled,
-				"static_global_proxy":    maskSecrets(globalRaw),
-				"traffic_capture":        trafficCapture,
-				"active_proxy_id":        stats.ActiveProxyID,
-				"active_proxy":           activeProxy,
-				"config":                 cfg,
-				"stats":                  stats,
-				"proxies":                proxies,
-			})
+			return jsonResult(payload)
 		})
 }
 

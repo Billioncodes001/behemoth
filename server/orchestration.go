@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -499,7 +501,31 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			if n == 0 {
 				return actool.Errorf(fmt.Sprintf("no vulnerability record found for finding_id=%d (register via report_finding first)", nodeID)), nil
 			}
-			return actool.Text(fmt.Sprintf("finding %d report updated (%d chars)", nodeID, len(a.Report))), nil
+			targetFindingID := fid
+			if targetFindingID <= 0 {
+				targetFindingID = nodeID
+			}
+			var savedPath string
+			if s.m != nil && strings.TrimSpace(s.m.dir) != "" {
+				reportsDir := filepath.Join(s.m.dir, "reports")
+				if mkErr := os.MkdirAll(reportsDir, 0o755); mkErr == nil {
+					rel := filepath.Join("reports", fmt.Sprintf("finding-%d-report.md", targetFindingID))
+					full := filepath.Join(s.m.dir, rel)
+					if wErr := os.WriteFile(full, []byte(a.Report), 0o644); wErr == nil {
+						savedPath = rel
+					}
+				}
+			}
+			if savedPath != "" {
+				return actool.Text(fmt.Sprintf(
+					"finding %d report saved (%d chars) — viewable in Findings -> Detail (/function/findings/detail?id=%d) and exported to Workspace file %s",
+					targetFindingID, len(a.Report), targetFindingID, savedPath,
+				)), nil
+			}
+			return actool.Text(fmt.Sprintf(
+				"finding %d report saved (%d chars) — viewable in Findings -> Detail (/function/findings/detail?id=%d)",
+				targetFindingID, len(a.Report), targetFindingID,
+			)), nil
 		})
 }
 
@@ -1200,13 +1226,21 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v2"
+	const flag = "proxy_pool_agent_tools_v3"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
-	proxyKeys := []string{"import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
+	for _, t := range append(s.proxyPoolAgentTools(), s.toolUpdateFindingReport()) {
+		schema, _ := json.Marshal(t.InputSchema())
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+	}
+	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
-		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyKeys)
+		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyFullKeys)
+	}
+	// Read-only / reporting agents also receive check_proxy_status & get_proxy_pool_status so they never guess proxy state.
+	for _, agKey := range []string{"reporter", "asset_mapper"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"check_proxy_status", "get_proxy_pool_status"})
 	}
 	patchTargetKeys := []string{"match_vuln_targets", "update_exploit_target_status", "update_finding_report", "list_security_arsenal", "run_security_tool", "browser_inspect"}
 	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {

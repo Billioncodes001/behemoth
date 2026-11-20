@@ -13,8 +13,10 @@ import (
 )
 
 var (
-	reActionIntentAnnouncement = regexp.MustCompile(`(?i)(?:^|[.!?]\s+|\n\s*)(?:let\s+me\b|let's\b|i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|going\s+to\b|starting\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|investigation|analysis|enumeration)|running\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|command|tool)|checking\s+(?:the\s+)?(?:current\s+status|target|site|web|http|headers|ports|endpoints|vulnerabilities)|investigating\s+the\b|scanning\s+the\b|probing\s+the\b|now\s+let\s+me\b|next,?\s+let\s+me\b|next,?\s+i\s+will\b|first,?\s+let\s+me\b|allow\s+me\s+to\b)`)
+	reActionIntentAnnouncement = regexp.MustCompile(`(?i)(?:^|[.!?]\s+|\n\s*)(?:let\s+me\b|let's\b|i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|going\s+to\b|starting\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|investigation|analysis|enumeration)|running\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|command|tool)|checking\s+(?:the\s+)?(?:current\s+status|target|site|web|http|headers|ports|endpoints|vulnerabilities)|investigating\s+the\b|scanning\s+the\b|probing\s+the\b|now\s+let\s+me\b|next,?\s+let\s+me\b|next,?\s+i\s+will\b|first,?\s+let\s+me\b|allow\s+me\b)`)
 	reActiveTaskPrompt         = regexp.MustCompile(`(?i)\b(scan|pentest|penetration\s+test|exploit|vulnerabilit(?:y|ies)|recon|reconnaissance|enumerate|probe|audit|assess|find\s+something|use\s+.*tools|check\s+.*for\s+vulnerabilit|attack|fuzz|crawl|spider|discover)\b`)
+	reTargetHostOrURL          = regexp.MustCompile(`(?i)(?:https?://[^\s/$.?#].[^\s]*|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,24}\b)`)
+	reReadOnlyQuestionPrompt   = regexp.MustCompile(`(?is)^\s*(?:\[manual\s+report|manual\s+selection\s+review|where\s+is\b|where\s+are\b|what\s+is\b|what\s+are\b|what\s+vulnerabilit|why\s+did\b|why\s+is\b|how\s+does\b|explain\b|summarize\b|show\s+me\s+(?:the\s+)?report\b)`)
 )
 
 const (
@@ -32,6 +34,42 @@ const (
 )
 
 func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bool, string) {
+	return IsPrematureActionTurnForAgent("", nil, messages, initialUserPrompt)
+}
+
+func isActiveProbingAgent(agentKey string) bool {
+	if agentKey == "" {
+		return true // preserve legacy callers & unit tests that omit agentKey
+	}
+	switch strings.ToLower(strings.TrimSpace(agentKey)) {
+	case "reporter", "asset_mapper", "goals", "credential_processor", "retester", "patch_watch", "planner":
+		return false
+	default:
+		return true
+	}
+}
+
+func isLiveTargetScanPrompt(agentKey, prompt string) bool {
+	if !isActiveProbingAgent(agentKey) {
+		return false
+	}
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" || reReadOnlyQuestionPrompt.MatchString(trimmed) {
+		return false
+	}
+	if !reActiveTaskPrompt.MatchString(trimmed) {
+		return false
+	}
+	// If agentKey is explicitly set (runtime Chat session), require a concrete target
+	// URL/domain/IP in the prompt so conversational questions ("What vulnerabilities did we find?")
+	// never trigger mandatory multi-round target scans.
+	if agentKey != "" && !reTargetHostOrURL.MatchString(trimmed) {
+		return false
+	}
+	return true
+}
+
+func IsPrematureActionTurnForAgent(agentKey string, boundTools map[string]bool, messages []llm.Message, initialUserPrompt string) (bool, string) {
 	var lastAsst *llm.Message
 	lastAsstIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -53,6 +91,12 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 		return true, continuationThinkingNudge
 	}
 
+	execTurns, calledAssetOrTaskSync, completedReportingGoal := analyzeRunToolProgressDetailed(messages)
+	if strings.EqualFold(strings.TrimSpace(agentKey), "reporter") && completedReportingGoal {
+		// Reporter has already saved its report/review; allow immediate clean completion!
+		return false, ""
+	}
+
 	prevWasToolError := false
 	if lastAsstIdx > 0 {
 		prev := messages[lastAsstIdx-1]
@@ -72,7 +116,7 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 		}
 	}
 
-	if prevWasToolError && len(text) < 500 {
+	if prevWasToolError && len(text) < 500 && isActiveProbingAgent(agentKey) {
 		return true, continuationToolErrorNudge
 	}
 
@@ -83,18 +127,18 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 		}
 	}
 
-	// For active scan / assessment / tool-execution prompts, verify that real probing
-	// tools (Bash, WebFetch, spawn_task, etc.) and asset synchronization were actually run,
-	// preventing early stops or hallucinated summaries after only calling Skill/SearchExtraTools.
-	if reActiveTaskPrompt.MatchString(initialUserPrompt) {
-		execTurns, calledAssetOrTaskSync := analyzeRunToolProgress(messages)
+	// For active scan / assessment / tool-execution prompts on probing agents, verify that
+	// real probing tools (Bash, WebFetch, spawn_task, etc.) and asset synchronization were
+	// actually run — while NEVER hijacking reporter/read-only agents or unbound tools.
+	if isLiveTargetScanPrompt(agentKey, initialUserPrompt) {
 		if execTurns == 0 {
 			return true, continuationNoExecToolsNudge
 		}
 		if execTurns < 3 {
 			return true, fmt.Sprintf(continuationIncompleteScanNudge, execTurns)
 		}
-		if !calledAssetOrTaskSync {
+		canSyncAssets := boundTools == nil || boundTools["insert_assets"] || boundTools["add_company_scope"] || boundTools["spawn_task"] || boundTools["report_finding"]
+		if !calledAssetOrTaskSync && canSyncAssets {
 			return true, continuationMissingAssetSyncNudge
 		}
 	}
@@ -105,6 +149,11 @@ func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bo
 // - execTurns: assistant turns that invoked substantive execution tools (Bash, WebFetch, web_search, spawn_task, ExecuteExtraTool, shell_open)
 // - calledAssetOrTaskSync: whether insert_assets, add_company_scope, spawn_task, or report_finding was invoked
 func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetOrTaskSync bool) {
+	execTurns, calledAssetOrTaskSync, _ = analyzeRunToolProgressDetailed(messages)
+	return execTurns, calledAssetOrTaskSync
+}
+
+func analyzeRunToolProgressDetailed(messages []llm.Message) (execTurns int, calledAssetOrTaskSync bool, completedReportingGoal bool) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
 		if m.Role == llm.RoleAssistant {
@@ -122,6 +171,13 @@ func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetO
 				case "insert_assets", "add_company_scope", "spawn_task", "report_finding",
 					"generate_vuln_exploit", "generate_payload":
 					calledAssetOrTaskSync = true
+				}
+				switch u.Name {
+				case "update_finding_report", "update_finding_case_report", "complete_finding_case_review", "complete_finding_retest":
+					// Check that the corresponding tool result did not fail
+					if !toolCallFailedInNextTurn(messages, i, u.ID) {
+						completedReportingGoal = true
+					}
 				}
 			}
 			if turnHadExec {
@@ -145,11 +201,25 @@ func analyzeRunToolProgress(messages []llm.Message) (execTurns int, calledAssetO
 			}
 		}
 	}
-	return execTurns, calledAssetOrTaskSync
+	return execTurns, calledAssetOrTaskSync, completedReportingGoal
+}
+
+func toolCallFailedInNextTurn(messages []llm.Message, asstIdx int, callID string) bool {
+	if asstIdx+1 >= len(messages) || callID == "" {
+		return false
+	}
+	for _, b := range messages[asstIdx+1].Content {
+		if b.Type == llm.BlockToolResult && b.ToolUseID == callID {
+			return b.IsError
+		}
+	}
+	return false
 }
 
 type continuationHooks struct {
 	inner             harness.HookRunner
+	agentKey          string
+	boundTools        map[string]bool
 	initialUserPrompt string
 	label             string
 	nudges            atomic.Int64
@@ -157,11 +227,17 @@ type continuationHooks struct {
 }
 
 func WrapContinuationHooks(inner harness.HookRunner, initialUserPrompt, label string, maxNudges int) harness.HookRunner {
+	return WrapChatContinuationHooks(inner, "", nil, initialUserPrompt, label, maxNudges)
+}
+
+func WrapChatContinuationHooks(inner harness.HookRunner, agentKey string, boundTools map[string]bool, initialUserPrompt, label string, maxNudges int) harness.HookRunner {
 	if maxNudges <= 0 {
 		maxNudges = 8
 	}
 	return &continuationHooks{
 		inner:             inner,
+		agentKey:          agentKey,
+		boundTools:        boundTools,
 		initialUserPrompt: initialUserPrompt,
 		label:             label,
 		maxNudges:         maxNudges,
@@ -188,7 +264,7 @@ func (c *continuationHooks) Stop(ctx context.Context, messages []llm.Message) (b
 			return prevent, blocking, msg
 		}
 	}
-	shouldNudge, nudgeMsg := IsPrematureActionTurn(messages, c.initialUserPrompt)
+	shouldNudge, nudgeMsg := IsPrematureActionTurnForAgent(c.agentKey, c.boundTools, messages, c.initialUserPrompt)
 	if !shouldNudge {
 		return false, nil, ""
 	}
