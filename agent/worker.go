@@ -218,6 +218,12 @@ func proxyEnv(proxyAddr, caCert string) []string {
 	return env
 }
 
+// agentBashEnv includes PIP_BREAK_SYSTEM_PACKAGES=1 (so `pip install` works on
+// Ubuntu 24.04 / Debian 12 PEP 668 without failing) plus proxyEnv when active.
+func agentBashEnv(proxyAddr, caCert string) []string {
+	return append([]string{"PIP_BREAK_SYSTEM_PACKAGES=1"}, proxyEnv(proxyAddr, caCert)...)
+}
+
 // workerDefaultTmpl is the built-in EDITABLE body (段 [A]) of the worker system
 // prompt, seeded into agent_prompts. The trafficTool block and the 中间产物输出规约
 // are NOT here — they are code-owned and appended by workerSystem after rendering
@@ -427,7 +433,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		TavilySearchAPIKey: w.webSearch.TavilyKey,
 		WebSearchProxy:     w.webSearch.Proxy,
 		// Bash 子命令的 HTTP 默认走记录代理 + 信任其 CA（工具无需 -x/-k）。
-		BashEnv:    proxyEnv(proxyAddr, w.proxyCACert),
+		BashEnv:    agentBashEnv(proxyAddr, w.proxyCACert),
 		WorkingDir: runDir,
 		MaxTurns:   w.maxTurns, // 0 = unlimited (configurable in agent management)
 		// 墙钟预算,轮边界判,不打断半路;0 = 不限。有任务级 deadline 时夹逼到 min(自身预算,

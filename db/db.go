@@ -291,6 +291,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV5(); err != nil {
 		return fmt.Errorf("seed intercept rules v5: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV6(); err != nil {
+		return fmt.Errorf("seed intercept rules v6: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -672,4 +675,24 @@ func (d *DB) seedDefaultInterceptRulesV5() error {
 	}
 	return d.SetSetting("intercept_default_rules_v5", "done")
 }
+
+// seedDefaultInterceptRulesV6 refines the Host OS shutdown/reboot patterns so they
+// match ONLY actual shell commands (e.g. "shutdown -h now", "sudo reboot", "/sbin/poweroff")
+// and NEVER false-positive on Python/Go/JS socket methods like `sock.shutdown(socket.SHUT_WR)`
+// or URL paths like `/api/shutdown-status`.
+func (d *DB) seedDefaultInterceptRulesV6() error {
+	if v, _, _ := d.GetSetting("intercept_default_rules_v6"); v == "done" {
+		return nil
+	}
+	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
+		"[Built-in] Shutdown / Reboot",
+		`(?m)(?:^|[;&|]\s*)(?:sudo\s+)?(?:/usr/sbin/|/sbin/)?(?:shutdown|reboot|poweroff|halt|init\s+[06])(?:\s+-[a-zA-Z0-9]+|\s+now|\s+\+[0-9]+|\s*[;&|\r\n]|\s*$)`,
+	)
+	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
+		"[Built-in] Destructive system commands",
+		`(?im)(?:\b(?:rm\s+-rf\s+/|mkfs|dd\s+if=|:\(\)\s*\{)|>\s*/dev/sd|(?:^|[;&|]\s*)(?:sudo\s+)?(?:/usr/sbin/|/sbin/)?(?:shutdown|reboot)(?:\s+-[a-zA-Z0-9]+|\s+now|\s*$))`,
+	)
+	return d.SetSetting("intercept_default_rules_v6", "done")
+}
+
 

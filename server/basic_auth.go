@@ -153,7 +153,7 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 		cfg := s.basicAuth.snapshot()
 		// CORS preflight contains no credentials; the API CORS handler returns
 		// 204 without invoking any business handler, including health probes.
-		if !cfg.Enabled || (r.Method == "OPTIONS" && strings.HasPrefix(r.URL.Path, "/api/")) {
+		if !cfg.Enabled || strings.HasPrefix(r.URL.Path, "/api/oast-cb/") || (r.Method == "OPTIONS" && strings.HasPrefix(r.URL.Path, "/api/")) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -236,6 +236,9 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 			switch u.Name {
 			case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send",
 				"run_security_tool", "browser_inspect", "detect_deception_and_honeypot", "multi_engine_search", "exploit_search",
+				"proxied_tcp_relay", "create_callback_listener", "poll_callback_events",
+				"manage_auth_sessions", "verify_access_control_matrix", "audit_frontend_api_surface",
+				"verify_endpoint_idempotency", "audit_source_routes",
 				"import_and_test_proxies", "manage_proxy_pool", "match_vuln_targets", "update_exploit_target_status",
 				"check_patch_feeds", "add_patch_watch_feed", "discover_affected_sites_for_notification",
 				"search_patch_arsenal", "save_verified_exploit_to_patch_monitor",

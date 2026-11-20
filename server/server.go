@@ -1083,6 +1083,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/deliverables/report", s.handleExportDeliverableReport)
 
 	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("/api/oast-cb/", s.handleCallbackReceipt)
 	mux.HandleFunc("GET /api/version", s.version)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/system/metrics", s.systemMetrics)
@@ -6088,7 +6089,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 		// Skip security check for health/version/auth endpoints (they're public)
 		path := r.URL.Path
 		if path == "/api/health" || path == "/api/version" ||
-			strings.HasPrefix(path, "/api/auth/") || path == "/api/basic-auth/check" {
+			strings.HasPrefix(path, "/api/auth/") || strings.HasPrefix(path, "/api/oast-cb/") || path == "/api/basic-auth/check" {
 			next.ServeHTTP(w, r)
 			return
 		}

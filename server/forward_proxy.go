@@ -79,13 +79,28 @@ func (p *dynamicForwardProxy) track(c net.Conn) func() {
 	return func() { p.mu.Lock(); delete(p.conns, c); p.mu.Unlock() }
 }
 
+func isLoopbackHostPort(hostPort string) bool {
+	h := hostPort
+	if sh, _, err := net.SplitHostPort(hostPort); err == nil {
+		h = sh
+	}
+	h = strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]")
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")
+}
+
 func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		p.serveConnect(w, r)
 		return
 	}
+	targetHost := r.URL.Host
+	if targetHost == "" {
+		targetHost = r.Host
+	}
 	up := strings.TrimSpace(p.current())
-	if up == "" && p.direct != nil && !p.direct() {
+	if isLoopbackHostPort(targetHost) {
+		up = "" // Never forward local PoC servers (e.g. 127.0.0.1:8899) to an external proxy!
+	} else if up == "" && p.direct != nil && !p.direct() {
 		http.Error(w, "proxy unavailable", 502)
 		return
 	}
@@ -141,12 +156,14 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 }
 
 func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Request) {
+	target := r.Host
 	up := strings.TrimSpace(p.current())
-	if up == "" && p.direct != nil && !p.direct() {
+	if isLoopbackHostPort(target) {
+		up = ""
+	} else if up == "" && p.direct != nil && !p.direct() {
 		http.Error(w, "proxy unavailable", 502)
 		return
 	}
-	target := r.Host
 	var conn net.Conn
 	var err error
 	if up == "" {

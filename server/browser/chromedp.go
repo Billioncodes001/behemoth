@@ -43,7 +43,11 @@ func (c *ChromeDP) TakeScreenshot(ctx context.Context, targetURL string) (string
 	}
 	if c.config.ProxyProvider != nil {
 		if px := c.config.ProxyProvider(); px != "" {
-			opts = append(opts, chromedp.ProxyServer(px), chromedp.Flag("ignore-certificate-errors", true))
+			opts = append(opts,
+				chromedp.ProxyServer(px),
+				chromedp.Flag("proxy-bypass-list", "<-loopback>;127.0.0.1;localhost;::1"),
+				chromedp.Flag("ignore-certificate-errors", true),
+			)
 		}
 	}
 
@@ -93,7 +97,11 @@ func (c *ChromeDP) ExtractContent(ctx context.Context, targetURL string) (string
 	}
 	if c.config.ProxyProvider != nil {
 		if px := c.config.ProxyProvider(); px != "" {
-			opts = append(opts, chromedp.ProxyServer(px), chromedp.Flag("ignore-certificate-errors", true))
+			opts = append(opts,
+				chromedp.ProxyServer(px),
+				chromedp.Flag("proxy-bypass-list", "<-loopback>;127.0.0.1;localhost;::1"),
+				chromedp.Flag("ignore-certificate-errors", true),
+			)
 		}
 	}
 

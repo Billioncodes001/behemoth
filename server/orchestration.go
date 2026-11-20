@@ -547,6 +547,11 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
+				if fid > 0 {
+					if curF, gerr := s.m.pg.GetFinding(fid); gerr == nil && curF != nil {
+						return actool.Errorf(fmt.Sprintf("%s (current evidence_version=%d — pass evidence_version=%d or omit evidence_version)", err.Error(), curF.EvidenceVersion, curF.EvidenceVersion)), nil
+					}
+				}
 				return actool.Errorf(err.Error()), nil
 			}
 			if n == 0 {
@@ -1278,7 +1283,7 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v6_exploit_loop"
+	const flag = "proxy_pool_agent_tools_v7_posture_verifiers"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
@@ -1288,8 +1293,13 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 	}
-	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
-	arsenalSynergyKeys := []string{"search_patch_arsenal", "save_verified_exploit_to_patch_monitor", "update_finding", "update_finding_report", "detect_deception_and_honeypot"}
+	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool", "proxied_tcp_relay"}
+	arsenalSynergyKeys := []string{
+		"search_patch_arsenal", "save_verified_exploit_to_patch_monitor", "update_finding", "update_finding_report",
+		"detect_deception_and_honeypot", "create_callback_listener", "poll_callback_events",
+		"manage_auth_sessions", "verify_access_control_matrix", "audit_frontend_api_surface",
+		"verify_endpoint_idempotency", "audit_source_routes",
+	}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyFullKeys)
 		_ = s.m.pg.AddAgentToToolBinding(agKey, arsenalSynergyKeys)

@@ -171,7 +171,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		BraveSearchAPIKey:  ws.BraveKey,
 		TavilySearchAPIKey: ws.TavilyKey,
 		WebSearchProxy:     ws.Proxy,
-		BashEnv:            proxyEnv(proxyAddr, c.proxyCACert),
+		BashEnv:            agentBashEnv(proxyAddr, c.proxyCACert),
 		WorkingDir:         sessionWorkDir,
 		MaxTurns:           maxTurns,
 		MaxDuration:        maxDuration,

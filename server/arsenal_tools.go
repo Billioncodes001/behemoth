@@ -83,7 +83,7 @@ func (s *Server) ensureDefaultWordlists() {
 }
 
 func (s *Server) autoProvisionLinuxArsenal() {
-	marker := "/usr/share/wordlists/artex/.arsenal_v1"
+	marker := "/usr/share/wordlists/artex/.arsenal_v2"
 	if _, err := os.Stat(marker); err == nil {
 		return
 	}
@@ -142,6 +142,14 @@ func (s *Server) arsenalTools() []actool.CoreTool {
 		s.toolRunSecurityTool(),
 		s.toolBrowserInspect(),
 		s.toolDetectDeceptionAndHoneypot(),
+		s.toolProxiedTCPRelay(),
+		s.toolCreateCallbackListener(),
+		s.toolPollCallbackEvents(),
+		s.toolManageAuthSessions(),
+		s.toolVerifyAccessControlMatrix(),
+		s.toolAuditFrontendAPISurface(),
+		s.toolVerifyEndpointIdempotency(),
+		s.toolAuditSourceRoutes(),
 	}
 }
 

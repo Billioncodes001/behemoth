@@ -918,7 +918,7 @@ func (m *Manager) syncBrowserMCPProxy() {
 	}
 	delete(env, "NODE_EXTRA_CA_CERTS")
 	if proxy != "" {
-		args = append(args, "--proxy-server", proxy)
+		args = append(args, "--proxy-server", proxy, "--proxy-bypass-list", "<-loopback>;127.0.0.1;localhost;::1")
 		if cert != "" {
 			env["NODE_EXTRA_CA_CERTS"] = cert
 		}
