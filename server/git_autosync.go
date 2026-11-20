@@ -165,7 +165,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				(cd web && npm run build)
 			fi
 		fi
-		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.2.0)"
+		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.3.0)"
 		BUILD_VER="${BUILD_VER#v}"
 		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o artex.new ./cmd/artex
 		mv -f artex.new artex

@@ -247,7 +247,7 @@ func TestFindingCaseConsolidatedExportPreservesScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err = s.consolidateFindingCaseExport(expanded, plan, false)
-	if err != nil || !strings.Contains(out[0].Report, "已过期") || !strings.Contains(out[0].Evidence, "proof low") {
+	if err != nil || !strings.Contains(out[0].Report, "outdated") || !strings.Contains(out[0].Evidence, "proof low") {
 		t.Fatalf("pending export omitted evidence %+v %v", out, err)
 	}
 }

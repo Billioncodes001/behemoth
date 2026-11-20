@@ -370,6 +370,16 @@ function FindingDetailInner() {
                               </Button>
                             </>
                           )}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => api.openDeliverableReport({ findingId: finding.id, autoPrint: true })}
+                            title="Export client-ready Executive HTML / PDF Deliverable"
+                          >
+                            <FileTextIcon data-icon="inline-start" />
+                            Export PDF / HTML
+                          </Button>
                           {!finding.inherited ? (
                             <Button
                               variant="outline"

@@ -195,6 +195,14 @@ export function ReportTab({ taskId }: { taskId: string }) {
             {generatingDeepDive ? <Loader2Icon className="animate-spin" /> : <SparklesIcon />}
             AI Deep-Dive Writeups
           </Button>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => api.openDeliverableReport({ taskId, autoPrint: true })}
+            title="Open client-ready Executive + Technical HTML / Print-to-PDF Deliverable"
+          >
+            <FileTextIcon /> Export PDF / HTML
+          </Button>
           {report && (
             <>
               <Button size="sm" variant="outline" onClick={downloadMarkdown}>

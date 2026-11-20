@@ -1359,6 +1359,42 @@ export const api = {
       get<ProxyV2SwitchLog[]>(`/v2/proxy-pool/logs`),
   },
 
+  commercial: {
+    getPublicBranding: () =>
+      get<{ brand_name: string; brand_tagline: string; support_url?: string; version?: string }>(`/branding`),
+    getStatus: () => get<any>(`/commercial/status`),
+    updateBranding: (payload: {
+      brand_name: string;
+      brand_tagline: string;
+      company_footer: string;
+      report_classification: string;
+      support_url?: string;
+    }) => put<any>(`/commercial/branding`, payload),
+    activateLicense: (license_key: string) => post<any>(`/commercial/license`, { license_key }),
+  },
+
+  openDeliverableReport: (opts: {
+    findingId?: string;
+    taskId?: string;
+    severity?: string;
+    status?: string;
+    autoPrint?: boolean;
+    download?: boolean;
+  }) => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams();
+    if (opts.findingId) q.set("finding_id", opts.findingId);
+    if (opts.taskId) q.set("task_id", opts.taskId);
+    if (opts.severity) q.set("severity", opts.severity);
+    if (opts.status) q.set("status", opts.status);
+    if (opts.autoPrint) q.set("print", "1");
+    if (opts.download) q.set("download", "1");
+    const token = getToken();
+    if (token) q.set("token", token);
+    const url = `/api/deliverables/report?${q.toString()}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  },
+
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。

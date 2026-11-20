@@ -255,7 +255,7 @@ build_artex() {
   fi
   local build_ver="${ARTEX_BUILD_VERSION:-}"
   if [[ -z "$build_ver" ]]; then
-    build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.2.0")"
+    build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.3.0")"
   fi
   build_ver="${build_ver#v}"
   info "Compiling single-binary ARTEX server (./artex v${build_ver})..."

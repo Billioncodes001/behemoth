@@ -1079,6 +1079,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/basic-auth", s.getBasicAuthSettings)
 	mux.HandleFunc("PUT /api/settings/basic-auth", s.saveBasicAuthSettings)
 
+	// Commercial Licensing, White-Label Branding & Client Deliverable Reports
+	mux.HandleFunc("GET /api/branding", s.handleGetPublicBranding)
+	mux.HandleFunc("GET /api/commercial/status", s.handleGetCommercialStatus)
+	mux.HandleFunc("PUT /api/commercial/branding", s.handlePutCommercialBranding)
+	mux.HandleFunc("POST /api/commercial/license", s.handlePostCommercialLicense)
+	mux.HandleFunc("GET /api/deliverables/report", s.handleExportDeliverableReport)
+
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/version", s.version)
 	mux.HandleFunc("GET /api/stats", s.stats)

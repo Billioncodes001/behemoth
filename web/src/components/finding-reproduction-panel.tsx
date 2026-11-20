@@ -336,6 +336,16 @@ export function FindingReproductionPanel({
                   <DownloadIcon data-icon="inline-start" />
                   Download .md
                 </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => api.openDeliverableReport({ findingId: finding.id, autoPrint: true })}
+                  title="Open print-ready Executive HTML / PDF Deliverable"
+                >
+                  <FileTextIcon data-icon="inline-start" />
+                  Export PDF / HTML
+                </Button>
               </>
             ) : null}
             {!finding.inherited && onRegenerate ? (

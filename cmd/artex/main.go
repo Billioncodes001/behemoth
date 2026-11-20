@@ -23,8 +23,8 @@ import (
 )
 
 // version is the build version, injected at release time via
-// -ldflags "-X main.version=<tag>". Defaults to "2.2.0" matching web/package.json.
-var version = "2.2.0"
+// -ldflags "-X main.version=<tag>". Defaults to "2.3.0" matching web/package.json.
+var version = "2.3.0"
 
 const banner = `
     _    ____ _____ _______  __
@@ -52,11 +52,29 @@ func main() {
 
 func run() int {
 	var (
-		addr    = flag.String("addr", ":8787", "HTTP listen address")
-		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
-		proxy   = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
+		addr            = flag.String("addr", ":8787", "HTTP listen address")
+		dataDir         = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
+		proxy           = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
+		genLicense      = flag.Bool("generate-license", false, "generate a signed commercial ARTEX-LIC-* customer license key and exit")
+		licCustomer     = flag.String("license-customer", "", "customer / organization name for --generate-license")
+		licTier         = flag.String("license-tier", "Enterprise", "license tier for --generate-license (Starter | Professional | Enterprise)")
+		licDays         = flag.Int("license-days", 365, "validity in days for --generate-license")
+		licMaxWorkers   = flag.Int("license-max-workers", 20, "max concurrent workers for --generate-license")
 	)
 	flag.Parse()
+
+	if *genLicense {
+		key, claims, err := server.GenerateCommercialLicense(*licCustomer, *licTier, *licDays, *licMaxWorkers)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating license: %v\nUsage: ./artex --generate-license --license-customer \"Acme Corp\" --license-tier Enterprise --license-days 365\n", err)
+			return 1
+		}
+		fmt.Printf("Customer     : %s\n", claims.Customer)
+		fmt.Printf("Tier         : %s (Max Workers: %d)\n", claims.Tier, claims.MaxWorkers)
+		fmt.Printf("Expires At   : %s\n", claims.ExpiresAt)
+		fmt.Printf("License Key  : %s\n", key)
+		return 0
+	}
 
 	// hand the build version to the server package so GET /api/health can report it
 	// to the frontend top bar.

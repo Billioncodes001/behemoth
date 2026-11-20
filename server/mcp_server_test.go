@@ -350,7 +350,7 @@ func TestNormalizeMCPAccessConfig(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
-	if _, _, err := normalizeMCPAccessConfig(mcpAccessConfig{TrustedProxies: []string{"bad"}}); err == nil || !strings.Contains(err.Error(), "可信代理") {
+	if _, _, err := normalizeMCPAccessConfig(mcpAccessConfig{TrustedProxies: []string{"bad"}}); err == nil || !strings.Contains(err.Error(), "trusted proxies") {
 		t.Fatalf("proxy error=%v", err)
 	}
 	tooMany := make([]string, 0, maxMCPAccessEntries+1)
@@ -627,7 +627,7 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
-	if _, err := spawn(full, map[string]any{"goal": "third task"}); err == nil || !strings.Contains(err.Error(), "每小时") {
+	if _, err := spawn(full, map[string]any{"goal": "third task"}); err == nil || !strings.Contains(err.Error(), "hourly") {
 		t.Fatalf("hourly quota not enforced: %v", err)
 	}
 	if _, err := spawn(full, map[string]any{"goal": "x", "company_ids": []int64{999999999}}); err == nil {
@@ -701,7 +701,7 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"get_task", "pause_task", "list_task_findings"} {
-		if _, err := mcpCallTool(t, scoped, name, map[string]any{"task_id": child.TaskID}, nil); err == nil || !strings.Contains(err.Error(), "不存在") {
+		if _, err := mcpCallTool(t, scoped, name, map[string]any{"task_id": child.TaskID}, nil); err == nil || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("%s on hidden task: %v", name, err)
 		}
 	}
@@ -724,7 +724,7 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 	if _, err := spawn(scoped, map[string]any{"goal": "测试 https://" + inScope, "company_ids": []int64{allowedID}}); err != nil {
 		t.Fatalf("restricted spawn in scope: %v", err)
 	}
-	if _, err := spawn(scoped, map[string]any{"goal": "测试 https://" + inScope, "company_ids": []int64{allowedID}}); err == nil || !strings.Contains(err.Error(), "尚未结束") {
+	if _, err := spawn(scoped, map[string]any{"goal": "测试 https://" + inScope, "company_ids": []int64{allowedID}}); err == nil || !strings.Contains(err.Error(), "unfinished") {
 		t.Fatalf("active-task quota not enforced: %v", err)
 	}
 

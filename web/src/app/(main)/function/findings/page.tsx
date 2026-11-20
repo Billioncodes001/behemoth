@@ -281,7 +281,7 @@ export default function FindingsPage() {
   // 导出弹窗状态:范围(当前筛选/全部/选中) × 格式(md 单文件/md 分文件 zip/csv/json)。
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
-  const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "csv" | "json">("md-single");
+  const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "html-pdf" | "csv" | "json">("md-single");
   const [includeOriginals, setIncludeOriginals] = React.useState(false);
   const [reviewing, setReviewing] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
@@ -313,6 +313,16 @@ export default function FindingsPage() {
   }
 
   async function doExport() {
+    if (exportFormat === "html-pdf") {
+      api.openDeliverableReport({
+        taskId: task && task !== UNASSIGNED_TASK ? task : undefined,
+        severity: severity || undefined,
+        status: status || undefined,
+        autoPrint: true,
+      });
+      setExportOpen(false);
+      return;
+    }
     setExporting(true);
     try {
       await api.exportFindings({
@@ -1373,6 +1383,9 @@ export default function FindingsPage() {
                 </label>
                 <label htmlFor="export-format-md-zip" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-format-md-zip" value="md-zip" /> {ui("screen.de6807188ce84d")}
+                </label>
+                <label htmlFor="export-format-html-pdf" className="flex items-center gap-2 text-sm">
+                  <RadioGroupItem id="export-format-html-pdf" value="html-pdf" /> Executive HTML / Print-to-PDF Report
                 </label>
                 <label htmlFor="export-format-csv" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-format-csv" value="csv" /> {ui("screen.c2147bef528be8")}

@@ -292,9 +292,9 @@ func (s *Server) serveMCPToolCall(ctx context.Context, w http.ResponseWriter, st
 	var result actool.Result
 	switch {
 	case !token.HasScope(tool.Scope):
-		result = actool.Errorf(fmt.Sprintf("访问令牌没有 %s 权限，无法调用 %s", tool.Scope, tool.Name))
+		result = actool.Errorf(fmt.Sprintf("access token lacks %s scope required to invoke %s", tool.Scope, tool.Name))
 	case args[0] != '{':
-		result = actool.Errorf("arguments 必须是 JSON 对象")
+		result = actool.Errorf("arguments must be a JSON object")
 	default:
 		result = s.runMCPTool(ctx, tool, token, args)
 	}

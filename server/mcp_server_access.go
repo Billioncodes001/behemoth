@@ -50,26 +50,26 @@ func parseMCPAccessList(entries []string) ([]string, []netip.Prefix, error) {
 		if strings.Contains(entry, "/") {
 			parsed, err := netip.ParsePrefix(entry)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%q 不是有效的 IP 或 CIDR", entry)
+				return nil, nil, fmt.Errorf("%q is not a valid IP or CIDR", entry)
 			}
 			prefix = netip.PrefixFrom(parsed.Addr().Unmap(), parsed.Bits()).Masked()
 			if parsed.Addr().Is4In6() {
 				// ::ffff:a.b.c.d/N carries the IPv4 length offset by 96 bits.
 				if parsed.Bits() < 96 {
-					return nil, nil, fmt.Errorf("%q 不是有效的 IP 或 CIDR", entry)
+					return nil, nil, fmt.Errorf("%q is not a valid IP or CIDR", entry)
 				}
 				prefix = netip.PrefixFrom(parsed.Addr().Unmap(), parsed.Bits()-96).Masked()
 			}
 		} else {
 			addr, err := netip.ParseAddr(entry)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%q 不是有效的 IP 或 CIDR", entry)
+				return nil, nil, fmt.Errorf("%q is not a valid IP or CIDR", entry)
 			}
 			addr = addr.Unmap().WithZone("")
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}
 		if !prefix.IsValid() {
-			return nil, nil, fmt.Errorf("%q 不是有效的 IP 或 CIDR", entry)
+			return nil, nil, fmt.Errorf("%q is not a valid IP or CIDR", entry)
 		}
 		if seen[prefix] {
 			continue
@@ -83,7 +83,7 @@ func parseMCPAccessList(entries []string) ([]string, []netip.Prefix, error) {
 		}
 	}
 	if len(out) > maxMCPAccessEntries {
-		return nil, nil, fmt.Errorf("最多 %d 条", maxMCPAccessEntries)
+		return nil, nil, fmt.Errorf("at most %d entries allowed", maxMCPAccessEntries)
 	}
 	return out, prefixes, nil
 }
@@ -92,11 +92,11 @@ func parseMCPAccessList(entries []string) ([]string, []netip.Prefix, error) {
 func normalizeMCPAccessConfig(cfg mcpAccessConfig) (mcpAccessConfig, mcpAccess, error) {
 	allowed, allowedPrefixes, err := parseMCPAccessList(cfg.AllowedIPs)
 	if err != nil {
-		return cfg, mcpAccess{}, fmt.Errorf("来源白名单：%w", err)
+		return cfg, mcpAccess{}, fmt.Errorf("allowed IPs: %w", err)
 	}
 	proxies, proxyPrefixes, err := parseMCPAccessList(cfg.TrustedProxies)
 	if err != nil {
-		return cfg, mcpAccess{}, fmt.Errorf("可信代理：%w", err)
+		return cfg, mcpAccess{}, fmt.Errorf("trusted proxies: %w", err)
 	}
 	return mcpAccessConfig{AllowedIPs: allowed, TrustedProxies: proxies},
 		mcpAccess{allowed: allowedPrefixes, proxies: proxyPrefixes}, nil
