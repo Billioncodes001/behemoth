@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -48,19 +50,69 @@ func DefaultExecutorConfig() ExecutorConfig {
 
 // ToolExecutor executes security tools safely.
 type ToolExecutor struct {
-	config      ExecutorConfig
-	catalog     *Catalog
-	envProvider func() []string
-	mu          sync.Mutex
-	running     map[string]*ExecutionResult
-	sem         chan struct{}
-	history     []*ExecutionResult
+	config        ExecutorConfig
+	catalog       *Catalog
+	envProvider   func() []string
+	proxyProvider func() string
+	mu            sync.Mutex
+	running       map[string]*ExecutionResult
+	sem           chan struct{}
+	history       []*ExecutionResult
 }
 
 func (e *ToolExecutor) SetEnvProvider(fn func() []string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.envProvider = fn
+}
+
+func (e *ToolExecutor) SetProxyProvider(fn func() string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.proxyProvider = fn
+}
+
+// injectScannerProxyArgs appends native CLI proxy flags for security scanners that
+// otherwise ignore HTTP_PROXY environment variables (such as sqlmap, nmap, gobuster,
+// ffuf, nuclei, httpx, nikto, and subfinder) so server IPs are never leaked.
+func injectScannerProxyArgs(command string, args []string, proxyURL string) []string {
+	px := strings.TrimSpace(proxyURL)
+	if px == "" {
+		return args
+	}
+	joined := " " + strings.ToLower(strings.Join(args, " ")) + " "
+	if strings.Contains(joined, " --proxy") || strings.Contains(joined, " -proxy ") ||
+		strings.Contains(joined, " -x ") || strings.Contains(joined, " -http-proxy ") ||
+		strings.Contains(joined, " -useproxy ") {
+		return args
+	}
+	base := strings.ToLower(filepath.Base(command))
+	switch base {
+	case "sqlmap":
+		return append(args, "--proxy="+px)
+	case "nuclei", "subfinder":
+		return append(args, "-proxy", px)
+	case "httpx", "httpx-pd":
+		return append(args, "-http-proxy", px)
+	case "ffuf":
+		return append(args, "-x", px)
+	case "gobuster":
+		return append(args, "--proxy", px)
+	case "nikto":
+		return append(args, "-useproxy", px)
+	case "nmap":
+		// Raw SYN (-sS) bypasses HTTP/SOCKS proxies at OS level; enforce TCP Connect (-sT -Pn --proxies)
+		out := make([]string, 0, len(args)+4)
+		for _, a := range args {
+			if a == "-sS" || a == "-O" {
+				continue
+			}
+			out = append(out, a)
+		}
+		return append(out, "-sT", "-Pn", "--proxies", px)
+	default:
+		return args
+	}
 }
 
 // NewToolExecutor creates a new tool executor.
@@ -119,10 +171,17 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolID string, params map[st
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, tool.Command, args...)
 	e.mu.Lock()
 	envFn := e.envProvider
+	pxFn := e.proxyProvider
 	e.mu.Unlock()
+	if pxFn != nil {
+		if px := strings.TrimSpace(pxFn()); px != "" {
+			args = injectScannerProxyArgs(tool.Command, args, px)
+			result.Args = args
+		}
+	}
+	cmd := exec.CommandContext(execCtx, tool.Command, args...)
 	if envFn != nil {
 		if extra := envFn(); len(extra) > 0 {
 			cmd.Env = append(os.Environ(), extra...)

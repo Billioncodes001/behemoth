@@ -194,7 +194,11 @@ def http_json(url, method="GET", payload=None, timeout=15):
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler(),
+        urllib.request.HTTPSHandler(context=SSL_CTX),
+    )
+    with opener.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 TOOLS = [
@@ -368,6 +372,7 @@ if __name__ == "__main__":
 const reconOSINTMCPScript = `#!/usr/bin/env python3
 """ARTEX Built-in Passive Recon, CT Logs, TLS, Wayback & Security.txt MCP Server."""
 import json
+import os
 import re
 import socket
 import ssl
@@ -376,12 +381,42 @@ import urllib.parse
 import urllib.request
 
 SSL_CTX = ssl.create_default_context()
-UA = "Mozilla/5.0 (compatible; ARTEX-ReconOSINT-MCP/2.2)"
+UA = "Mozilla/5.0 (compatible; ARTEX-ReconOSINT-MCP/2.3)"
 
 def http_get(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler(),
+        urllib.request.HTTPSHandler(context=SSL_CTX),
+    )
+    with opener.open(req, timeout=timeout) as r:
         return r.status, dict(r.headers), r.read().decode("utf-8", errors="replace")
+
+def open_tcp_via_env_proxy(host, port, timeout=10):
+    """Tunnels raw TCP (e.g. TLS inspection) via HTTP CONNECT when HTTPS_PROXY/HTTP_PROXY is set so the server IP is never exposed."""
+    px = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "").strip()
+    if not px or host in ("127.0.0.1", "localhost", "::1"):
+        return socket.create_connection((host, port), timeout=timeout)
+    u = urllib.parse.urlparse(px if "://" in px else "http://" + px)
+    px_host = u.hostname or "127.0.0.1"
+    px_port = u.port or 8080
+    sock = socket.create_connection((px_host, px_port), timeout=timeout)
+    try:
+        connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+        sock.sendall(connect_req.encode("ascii"))
+        resp = b""
+        while b"\r\n\r\n" not in resp and len(resp) < 8192:
+            chunk = sock.recv(1024)
+            if not chunk:
+                break
+            resp += chunk
+        status_line = resp.split(b"\r\n", 1)[0].decode("latin1", errors="replace")
+        if " 200 " not in status_line and not status_line.endswith(" 200"):
+            raise RuntimeError(f"Proxy CONNECT tunnel failed: {status_line}")
+        return sock
+    except Exception:
+        sock.close()
+        raise
 
 TOOLS = [
     {
@@ -477,7 +512,7 @@ def call_tool(name, args):
         host = str(args.get("host", "")).strip()
         port = int(args.get("port") or 443)
         ctx = ssl.create_default_context()
-        with socket.create_connection((host, port), timeout=10) as sock:
+        with open_tcp_via_env_proxy(host, port, timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 cert = ssock.getpeercert()
                 sans = [v for k, v in cert.get("subjectAltName", []) if k == "DNS"]
@@ -562,7 +597,11 @@ def fetch_url(url, extra_headers=None, timeout=12):
     if extra_headers:
         hdrs.update(extra_headers)
     req = urllib.request.Request(url, headers=hdrs)
-    with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as r:
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler(),
+        urllib.request.HTTPSHandler(context=SSL_CTX),
+    )
+    with opener.open(req, timeout=timeout) as r:
         raw_cookies = r.headers.get_all("Set-Cookie") or []
         return r.status, {k.lower(): v for k, v in r.headers.items()}, raw_cookies, r.read(512 * 1024).decode("utf-8", errors="replace")
 

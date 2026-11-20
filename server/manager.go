@@ -805,8 +805,8 @@ func (m *Manager) WebSearch() (on bool, backend, braveKey, tavilyKey, proxy stri
 // its key (so a half-configured backend never silently drops the tool at session build).
 func (m *Manager) WebSearchOpts() agent.WebSearchOpts {
 	on, backend, braveKey, tavilyKey, proxy := m.WebSearch()
-	if strings.TrimSpace(proxy) == "" && strings.TrimSpace(m.GlobalProxy()) != "" {
-		proxy = m.ProxyAddr()
+	if strings.TrimSpace(proxy) == "" && m.HasOutboundProxy() {
+		proxy = m.OutboundProxyAddr()
 	}
 	if on && backend == "brave-free" && strings.TrimSpace(braveKey) == "" {
 		on = false
@@ -1064,6 +1064,22 @@ func (m *Manager) ForwardProxyAddr() string {
 		return m.forwardProxy.Addr()
 	}
 	return ""
+}
+
+// OutboundProxyAddr returns the credential-free local dynamic forwarder URL
+// ("http://127.0.0.1:<port>") ONLY when an external outbound proxy (Proxy Pool or
+// Global Proxy) is enabled, and "" when direct. Unlike ProxyAddr(), it never returns
+// the local MITM packet recorder, allowing Go clients, CLI scanners, and STDIO MCP
+// servers to tunnel real end-to-end TLS certificates directly through the active
+// upstream proxy with zero certificate errors and zero server IP exposure.
+func (m *Manager) OutboundProxyAddr() string {
+	if m == nil || !m.HasOutboundProxy() {
+		return ""
+	}
+	if m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return m.ProxyAddr()
 }
 
 // ProxyAddr returns the egress proxy address agents route target traffic through:

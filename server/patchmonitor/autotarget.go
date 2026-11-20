@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 var knownTechKeywords = []string{
@@ -351,7 +350,7 @@ func (m *Monitor) EnrollNotificationCandidates(technology, cveOrIssue string, ca
 		byHost[strings.ToLower(strings.TrimSpace(et.Host))] = et
 	}
 
-	client := &http.Client{Timeout: 6 * time.Second}
+	client := m.client()
 	var results []NotificationCandidateEntry
 	seenHosts := map[string]bool{}
 

@@ -25,19 +25,20 @@ import (
 // LS/Glob/Grep) plus whatever skills/MCP the key is made visible; NO pentest
 // graph/task context is injected (that stays exclusive to MainAgent).
 type ChatAgent struct {
-	prov           llm.Provider
-	model          string
-	workDir        string
-	tx             *transcript.Store
-	window         int
-	proxyAddr      string
-	proxyAddrFn    func() string
-	proxyCACert    string
-	webSearch      WebSearchOpts
-	guard          *guard.Guard // optional; nil disables intercept hooks for chat
-	nonStreamingFn func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
-	noaEnabledFn   func() bool  // resolver: use experimental noa compaction? (nil = off)
-	maxTokensFn    func() int   // resolver: per-reply output cap (nil/0 = send no cap)
+	prov            llm.Provider
+	model           string
+	workDir         string
+	tx              *transcript.Store
+	window          int
+	proxyAddr       string
+	proxyAddrFn     func() string
+	outboundProxyFn func() bool
+	proxyCACert     string
+	webSearch       WebSearchOpts
+	guard           *guard.Guard // optional; nil disables intercept hooks for chat
+	nonStreamingFn  func() bool  // resolver: use non-streaming (Complete) path? (nil = streaming)
+	noaEnabledFn    func() bool  // resolver: use experimental noa compaction? (nil = off)
+	maxTokensFn     func() int   // resolver: per-reply output cap (nil/0 = send no cap)
 }
 
 func NewChatAgent(prov llm.Provider, model, workDir string, tx *transcript.Store, window int) *ChatAgent {
@@ -68,8 +69,9 @@ func (c *ChatAgent) maxTokens() int {
 
 // SetProxy points the chat agent's WebFetch/Bash at the recording proxy plus the
 // CA cert it trusts (empty addr = direct). Kept for parity with the other agents.
-func (c *ChatAgent) SetProxy(addr, caCert string)      { c.proxyAddr, c.proxyCACert = addr, caCert }
-func (c *ChatAgent) SetProxyProvider(fn func() string) { c.proxyAddrFn = fn }
+func (c *ChatAgent) SetProxy(addr, caCert string)         { c.proxyAddr, c.proxyCACert = addr, caCert }
+func (c *ChatAgent) SetProxyProvider(fn func() string)    { c.proxyAddrFn = fn }
+func (c *ChatAgent) SetOutboundProxyCheck(fn func() bool) { c.outboundProxyFn = fn }
 
 // SetWebSearch selects the web_search backend for the chat agent (off by default).
 func (c *ChatAgent) SetWebSearch(o WebSearchOpts) { c.webSearch = o }
@@ -134,7 +136,11 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	system, boundary := deferredSystem(chatSystem(agentKey, c.model, c.workDir, sessionWorkDir), def)
 
 	resolveLiveProxy := func() string {
-		if !isActiveProbingAgent(agentKey) {
+		// When an external outbound proxy (Proxy Pool or Global Proxy) is enabled, EVERY
+		// agent role routes through the proxy so the server's real IP is NEVER exposed.
+		// Only when NO outbound proxy is enabled do non-probing roles skip local 127.0.0.1:8788 capture.
+		hasOutbound := c.outboundProxyFn != nil && c.outboundProxyFn()
+		if !hasOutbound && !isActiveProbingAgent(agentKey) {
 			return ""
 		}
 		if c.proxyAddrFn != nil {

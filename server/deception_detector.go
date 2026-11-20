@@ -49,7 +49,7 @@ func (s *Server) newCleanProbeClient() *http.Client {
 		DisableKeepAlives: true, // force fresh TCP/TLS connection per visitor identity check
 	}
 	if s.m != nil && s.m.HasOutboundProxy() {
-		if raw := strings.TrimSpace(s.m.ProxyAddr()); raw != "" {
+		if raw := strings.TrimSpace(s.m.OutboundProxyAddr()); raw != "" {
 			if pu, err := url.Parse(raw); err == nil && pu.Host != "" {
 				tr.Proxy = http.ProxyURL(pu)
 			}

@@ -253,11 +253,12 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Initialize Tool Catalog & Executor (HexStrike-inspired)
 	s.toolCatalog = tools.NewCatalog()
 	s.toolExecutor = tools.NewToolExecutor(s.toolCatalog, tools.DefaultExecutorConfig())
+	s.toolExecutor.SetProxyProvider(s.m.OutboundProxyAddr)
 	s.toolExecutor.SetEnvProvider(func() []string {
-		if strings.TrimSpace(s.m.GlobalProxy()) == "" && !s.m.TrafficEnabled() {
-			return nil
+		px := s.m.OutboundProxyAddr()
+		if px == "" && s.m.TrafficEnabled() {
+			px = s.m.SessionProxyAddr()
 		}
-		px := s.m.SessionProxyAddr()
 		if px == "" {
 			return nil
 		}
@@ -346,12 +347,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	searchCfg.Tavily.Enabled = searchCfg.Tavily.APIKey != ""
 	searchCfg.SearXNG.Enabled = searchCfg.SearXNG.URL != ""
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
-	search.SetProxyProvider(func() string {
-		if strings.TrimSpace(s.m.GlobalProxy()) != "" {
-			return s.m.ProxyAddr()
-		}
-		return ""
-	})
+	search.SetProxyProvider(s.m.OutboundProxyAddr)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)
@@ -374,7 +370,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		}
 	}
 	browserCfg.ProxyProvider = func() string {
-		if strings.TrimSpace(s.m.GlobalProxy()) != "" || s.m.TrafficEnabled() {
+		if s.m.HasOutboundProxy() {
+			return s.m.OutboundProxyAddr()
+		}
+		if s.m.TrafficEnabled() {
 			return s.m.SessionProxyAddr()
 		}
 		return ""
@@ -387,12 +386,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.pg != nil {
 		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
 		s.patchMon.SetAgentWatchCallback(s.launchPatchWatchAgentRun)
-		s.patchMon.SetProxyProvider(func() string {
-			if strings.TrimSpace(s.m.GlobalProxy()) != "" {
-				return s.m.ProxyAddr()
-			}
-			return ""
-		})
+		s.patchMon.SetProxyProvider(s.m.OutboundProxyAddr)
 		log.Printf("[patchmon] Patch monitor initialized")
 	}
 
@@ -481,7 +475,7 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 			}
 			return a.TaskTimeoutWrapupMaxTurns, true
 		}
-		wireAgentAugment(m.pg, s.skillDir, s.hostTools) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
+		wireAgentAugment(m.pg, s.skillDir, s.hostTools, s.m.OutboundProxyAddr) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		domainReg := buildDomainReg(m.Assets(), m.pg)
 		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
@@ -779,6 +773,7 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	s.chatAgent = agent.NewChatAgent(prov, cfg.Model, s.m.dir, tx, win) // chat page runner
 	s.chatAgent.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
 	s.chatAgent.SetProxyProvider(s.m.SessionProxyAddr)
+	s.chatAgent.SetOutboundProxyCheck(s.m.HasOutboundProxy)
 	s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	s.chatAgent.SetGuard(s.chatGuard())
 	s.chatAgent.SetNonStreaming(nonStreamingResolver(cfg))
@@ -986,6 +981,7 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	ca := agent.NewChatAgent(s.poolForBinding(id, prov, cfg), cfg.Model, s.m.dir, tx, cfg.CompactionWindow())
 	ca.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
 	ca.SetProxyProvider(s.m.SessionProxyAddr)
+	ca.SetOutboundProxyCheck(s.m.HasOutboundProxy)
 	ca.SetWebSearch(s.m.WebSearchOpts())
 	ca.SetGuard(s.chatGuard())
 	ca.SetNonStreaming(nonStreamingResolver(cfg))

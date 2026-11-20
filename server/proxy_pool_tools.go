@@ -196,16 +196,21 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		routingMode = "static_global_proxy"
 	}
 	anyOutbound := routingMode != "direct"
+	localForwarder := ""
+	if s.m != nil {
+		localForwarder = s.m.OutboundProxyAddr()
+	}
 	instruction := "NO outbound proxy is enabled (Proxy Pool is OFF and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
 	if routingMode == "proxy_pool" {
-		instruction = "Proxy Pool is ENABLED. Outbound traffic automatically routes through the active pool proxy via environment variables; do not hardcode localhost ports with -x. If a proxy times out or gets rate-limited/403'd, call manage_proxy_pool(action='rotate' or 'disable_proxy')."
+		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy. In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY (e.g. always pass --proxy \"$HTTP_PROXY\" to sqlmap/gobuster, -sT -Pn --proxies \"$HTTP_PROXY\" to nmap, and -proxy \"${HTTP_PROXY#http://}\" to openssl s_client). If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate' or 'disable_proxy')."
 	} else if routingMode == "static_global_proxy" {
-		instruction = "Static Global Proxy is ENABLED in System Settings. Outbound traffic automatically routes through the configured Global Proxy."
+		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
 	return map[string]any{
 		"proxy_enabled":              anyOutbound,
 		"any_proxy_enabled":          anyOutbound,
 		"effective_routing_mode":     routingMode,
+		"local_proxy_env_url":        localForwarder,
 		"proxy_pool_enabled":         poolEnabled,
 		"proxy_pool_active":          poolActive,
 		"global_proxy_enabled":       globalActive,

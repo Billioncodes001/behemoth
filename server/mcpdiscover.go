@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -20,14 +21,39 @@ type mcpClient interface {
 	Close() error
 }
 
-// connectMCP dials one MCP server per its transport. Callers must Close the client.
-func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
+// connectMCP dials one MCP server per its transport. When an outbound proxy URL is
+// active (Proxy Pool or Global Proxy), it injects HTTP_PROXY/HTTPS_PROXY/ALL_PROXY
+// into spawned stdio MCP subprocesses so every MCP tool call exits through the proxy
+// instead of exposing the ARTEX server's real IP.
+func connectMCP(ctx context.Context, m *db.MCPServer, outboundProxyAddr ...string) (mcpClient, error) {
+	px := ""
+	if len(outboundProxyAddr) > 0 {
+		px = strings.TrimSpace(outboundProxyAddr[0])
+	}
 	switch m.Transport {
 	case "stdio":
 		if m.Command == "" {
 			return nil, fmt.Errorf("stdio transport is missing command")
 		}
-		return mcp.NewStdioClient(ctx, m.Name, m.Command, jsonStrMap(m.Env), jsonStrSlice(m.Args)...)
+		env := jsonStrMap(m.Env)
+		if px != "" {
+			if env == nil {
+				env = map[string]string{}
+			}
+			noProxy := "localhost,127.0.0.1,::1,.local,169.254.169.254"
+			for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+				if strings.TrimSpace(env[k]) == "" {
+					env[k] = px
+				}
+			}
+			for _, k := range []string{"NO_PROXY", "no_proxy"} {
+				if strings.TrimSpace(env[k]) == "" {
+					env[k] = noProxy
+				}
+			}
+			env["NODE_USE_ENV_PROXY"] = "1"
+		}
+		return mcp.NewStdioClient(ctx, m.Name, m.Command, env, jsonStrSlice(m.Args)...)
 	case "http":
 		if m.URL == "" {
 			return nil, fmt.Errorf("http transport is missing URL")
@@ -47,7 +73,11 @@ func connectMCP(ctx context.Context, m *db.MCPServer) (mcpClient, error) {
 // discoverAndCacheMCP connects to one MCP, lists its tools, and persists the tool
 // names to mcp_tools_cache so the UI shows them without a live connection.
 func (s *Server) discoverAndCacheMCP(ctx context.Context, m *db.MCPServer) error {
-	cl, err := connectMCP(ctx, m)
+	var px string
+	if s != nil && s.m != nil {
+		px = s.m.OutboundProxyAddr()
+	}
+	cl, err := connectMCP(ctx, m, px)
 	if err != nil {
 		return err
 	}
