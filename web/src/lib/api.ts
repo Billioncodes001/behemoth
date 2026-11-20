@@ -498,7 +498,13 @@ export const api = {
 
   // ---- auth ----
   authStatus: () =>
-    get<{ initialized: boolean; turnstile_enabled?: boolean; turnstile_site_key?: string }>("/auth/status"),
+    get<{
+      initialized: boolean;
+      turnstile_enabled?: boolean;
+      turnstile_site_key?: string;
+      turnstile_secret_key_set?: boolean;
+      turnstile_verified?: boolean;
+    }>("/auth/status"),
   turnstileVerify: (token: string, userAgent?: string) =>
     post<{ verified: boolean; ray_id?: string }>("/auth/turnstile-verify", { token, user_agent: userAgent }),
   maintenanceStatus: () =>

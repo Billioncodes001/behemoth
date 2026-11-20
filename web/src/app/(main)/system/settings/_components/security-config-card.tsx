@@ -27,6 +27,7 @@ export function SecurityConfigCard() {
   const [turnstileSiteKey, setTurnstileSiteKey] = React.useState("");
   const [turnstileSecretKey, setTurnstileSecretKey] = React.useState("");
   const [turnstileSecretSet, setTurnstileSecretSet] = React.useState(false);
+  const [turnstileVerified, setTurnstileVerified] = React.useState(false);
   const [savingTurnstile, setSavingTurnstile] = React.useState(false);
   const [gitAutoSync, setGitAutoSync] = React.useState(true);
   const [syncingGit, setSyncingGit] = React.useState(false);
@@ -60,6 +61,7 @@ export function SecurityConfigCard() {
         setTurnstileEnabled(s.turnstile_enabled ?? true);
         setTurnstileSiteKey(s.turnstile_site_key ?? "");
         setTurnstileSecretSet(Boolean(s.turnstile_secret_key_set));
+        setTurnstileVerified(Boolean(s.turnstile_verified));
         setGitAutoSync(s.git_autosync_enabled ?? true);
       })
       .catch(() => {});
@@ -120,24 +122,32 @@ export function SecurityConfigCard() {
     }
   };
 
-  const saveTurnstileSettings = async (nextEnabled?: boolean, clearSecret?: boolean) => {
+  const saveTurnstileSettings = async (nextEnabled?: boolean, clearKeys?: boolean) => {
     setSavingTurnstile(true);
     try {
       const payload: Record<string, unknown> = {
         turnstile_enabled: nextEnabled ?? turnstileEnabled,
-        turnstile_site_key: turnstileSiteKey.trim(),
       };
-      if (clearSecret) {
+      if (clearKeys) {
+        payload.turnstile_site_key = "";
         payload.turnstile_secret_key = "";
-      } else if (turnstileSecretKey.trim() !== "") {
-        payload.turnstile_secret_key = turnstileSecretKey.trim();
+      } else if (nextEnabled === undefined) {
+        payload.turnstile_site_key = turnstileSiteKey.trim();
+        if (turnstileSecretKey.trim() !== "") {
+          payload.turnstile_secret_key = turnstileSecretKey.trim();
+        }
       }
       const updated: any = await api.setSettings(payload as any);
       setTurnstileEnabled(updated.turnstile_enabled ?? (nextEnabled ?? turnstileEnabled));
-      setTurnstileSiteKey(updated.turnstile_site_key ?? turnstileSiteKey.trim());
+      setTurnstileSiteKey(updated.turnstile_site_key ?? (clearKeys ? "" : turnstileSiteKey.trim()));
       setTurnstileSecretSet(Boolean(updated.turnstile_secret_key_set));
+      setTurnstileVerified(Boolean(updated.turnstile_verified));
       setTurnstileSecretKey("");
-      toast.success("Cloudflare Turnstile settings saved");
+      toast.success(
+        updated.turnstile_verified
+          ? "Cloudflare Turnstile keys verified — built-in decoy widget disabled"
+          : "Cloudflare Turnstile settings saved",
+      );
     } catch (e) {
       toast.error("Failed to save Turnstile settings: " + (e as Error).message);
     } finally {
@@ -302,12 +312,12 @@ export function SecurityConfigCard() {
             <div>
               <div className="flex items-center gap-2">
                 <Label className="text-sm font-medium">Cloudflare Turnstile Pre-Login Gate</Label>
-                <Badge variant={turnstileSecretSet && turnstileSiteKey ? "default" : "outline"} className="text-[10px]">
-                  {turnstileSecretSet && turnstileSiteKey ? "Cloudflare Siteverify Active" : "Built-in Auto Gate Active"}
+                <Badge variant={turnstileVerified ? "default" : "outline"} className="text-[10px]">
+                  {turnstileVerified ? "Cloudflare Verified · Official Widget Only" : "Built-in Auto Gate Active"}
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Requires visitors to pass the Cloudflare Turnstile verification gate before accessing the login screen. Leave keys blank to use the built-in automatic Turnstile challenge, or enter your Cloudflare Site Key &amp; Secret Key to enforce server-side Cloudflare <code>siteverify</code> validation.
+                Requires visitors to pass the Cloudflare Turnstile verification gate before accessing the login screen. Once both your Cloudflare Site Key and Secret Key are verified against Cloudflare <code>siteverify</code>, the built-in decoy widget is automatically removed so visitors see only the single official Cloudflare challenge.
               </p>
             </div>
             <Switch
@@ -351,9 +361,9 @@ export function SecurityConfigCard() {
 
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => void saveTurnstileSettings()} disabled={savingTurnstile}>
-              {savingTurnstile ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Turnstile Settings"}
+              {savingTurnstile ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify & Save Turnstile Keys"}
             </Button>
-            {turnstileSecretSet && (
+            {(turnstileSecretSet || turnstileSiteKey) && (
               <Button
                 size="sm"
                 variant="outline"

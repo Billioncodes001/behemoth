@@ -31,9 +31,11 @@ export default function LoginPage() {
 
   const [turnstileState, setTurnstileState] = useState<"verifying" | "success" | "passed">("verifying");
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
+  const [turnstileVerifiedKeys, setTurnstileVerifiedKeys] = useState(false);
   const [rayId, setRayId] = useState("8e4c19a2f0b31d42");
   const [hostLabel, setHostLabel] = useState("artex.local");
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
+  const widgetRenderedRef = useRef(false);
 
   function handleTermsScroll() {
     const el = termsBodyRef.current;
@@ -66,19 +68,30 @@ export default function LoginPage() {
           router.replace("/setup");
           return;
         }
-        if (st.turnstile_enabled === false || (typeof window !== "undefined" && sessionStorage.getItem("artex_turnstile_ok") === "1")) {
+        if (
+          st.turnstile_enabled === false ||
+          (typeof window !== "undefined" && sessionStorage.getItem("artex_turnstile_ok") === "1")
+        ) {
           if (token) {
             window.location.replace("/function/tasks");
             return;
           }
           setTurnstileState("passed");
+          setChecking(false);
           return;
         }
         const configuredSiteKey = (st.turnstile_site_key ?? "").trim();
-        if (configuredSiteKey) {
+        const isRealTurnstile = Boolean(st.turnstile_verified && configuredSiteKey);
+        if (isRealTurnstile) {
+          // Real Cloudflare Turnstile keys are verified — render ONLY the official widget, never the decoy!
+          setTurnstileVerifiedKeys(true);
           setTurnstileSiteKey(configuredSiteKey);
+          setChecking(false);
           return;
         }
+        // Fallback built-in automatic gate ONLY when real Cloudflare keys are not configured
+        setTurnstileVerifiedKeys(false);
+        setChecking(false);
         await new Promise((r) => setTimeout(r, 950));
         try {
           const v = await api.turnstileVerify("auto-verified", navigator.userAgent);
@@ -100,18 +113,19 @@ export default function LoginPage() {
       .catch(() => {
         setError("auth.backendUnavailable");
         setTurnstileState("passed");
-      })
-      .finally(() => setChecking(false));
+        setChecking(false);
+      });
   }, [router]);
 
-  // If a real Cloudflare Turnstile Site Key is configured, load and render the official widget
+  // Render the official Cloudflare Turnstile widget ONCE when verified keys are active
   useEffect(() => {
-    if (!turnstileSiteKey || turnstileState === "passed") return;
+    if (checking || !turnstileVerifiedKeys || !turnstileSiteKey) return;
     let mounted = true;
     let widgetId: string | undefined;
     const w = window as any;
     const renderWidget = () => {
-      if (!mounted || !turnstileContainerRef.current || !w.turnstile) return;
+      if (!mounted || widgetRenderedRef.current || !turnstileContainerRef.current || !w.turnstile) return;
+      widgetRenderedRef.current = true;
       turnstileContainerRef.current.innerHTML = "";
       widgetId = w.turnstile.render(turnstileContainerRef.current, {
         sitekey: turnstileSiteKey,
@@ -121,9 +135,9 @@ export default function LoginPage() {
           try {
             const v = await api.turnstileVerify(cfToken, navigator.userAgent);
             if (v?.ray_id) setRayId(v.ray_id);
-            setTurnstileState("success");
-            await new Promise((r) => setTimeout(r, 700));
-            sessionStorage.setItem("artex_turnstile_ok", "1");
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem("artex_turnstile_ok", "1");
+            }
             const existingToken = auth.getToken();
             if (existingToken) {
               window.location.replace("/function/tasks");
@@ -131,6 +145,10 @@ export default function LoginPage() {
             }
             setTurnstileState("passed");
           } catch {
+            widgetRenderedRef.current = false;
+            if (widgetId !== undefined && w.turnstile) {
+              w.turnstile.reset(widgetId);
+            }
             setError("error.turnstile_failed");
           }
         },
@@ -139,17 +157,31 @@ export default function LoginPage() {
     if (w.turnstile) {
       renderWidget();
     } else {
-      const script = document.createElement("script");
-      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-      script.async = true;
-      script.onload = renderWidget;
-      document.head.appendChild(script);
+      const existingScript = document.querySelector<HTMLScriptElement>(
+        'script[src*="challenges.cloudflare.com/turnstile/v0/api.js"]',
+      );
+      if (existingScript) {
+        existingScript.addEventListener("load", renderWidget, { once: true });
+      } else {
+        const script = document.createElement("script");
+        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+        script.async = true;
+        script.onload = renderWidget;
+        document.head.appendChild(script);
+      }
     }
     return () => {
       mounted = false;
-      if (widgetId !== undefined) w.turnstile.remove(widgetId);
+      widgetRenderedRef.current = false;
+      if (widgetId !== undefined && w.turnstile) {
+        try {
+          w.turnstile.remove(widgetId);
+        } catch {
+          // ignore cleanup errors after redirect
+        }
+      }
     };
-  }, [turnstileSiteKey, turnstileState, locale]);
+  }, [checking, turnstileVerifiedKeys, turnstileSiteKey, locale]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -170,6 +202,15 @@ export default function LoginPage() {
     }
   }
 
+  if (checking) {
+    return (
+      <div role="status" className="flex min-h-dvh items-center justify-center bg-[#18181b] text-zinc-400">
+        <Loader2 className="mr-2 size-5 animate-spin text-zinc-400" />
+        <span>{t("auth.checking")}</span>
+      </div>
+    );
+  }
+
   if (turnstileState !== "passed") {
     return (
       <div className="flex min-h-dvh flex-col justify-between bg-[#18181b] text-[#fafafa] px-6 py-12 select-none">
@@ -182,7 +223,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {turnstileSiteKey ? (
+          {turnstileVerifiedKeys && turnstileSiteKey ? (
             <div ref={turnstileContainerRef} className="min-h-[66px]" />
           ) : (
             <div className="flex w-full max-w-[320px] items-center justify-between rounded-md border border-zinc-700 bg-[#222226] px-4 py-3.5 shadow-lg">
@@ -221,14 +262,6 @@ export default function LoginPage() {
           </span>
           <span>{t("auth.turnstileCredit")}</span>
         </div>
-      </div>
-    );
-  }
-
-  if (checking) {
-    return (
-      <div role="status" className="flex min-h-dvh items-center justify-center text-muted-foreground">
-        {t("auth.checking")}
       </div>
     );
   }

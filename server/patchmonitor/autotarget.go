@@ -4,10 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var knownTechKeywords = []string{
@@ -304,4 +308,171 @@ func appendUniqueStr(slice []string, item string) []string {
 		}
 	}
 	return append(slice, item)
+}
+
+var reSecurityContactLine = regexp.MustCompile(`(?im)^Contact:\s*(.+)$`)
+
+var excludedDirectoryDomains = []string{
+	"github.com", "githubusercontent.com", "gitlab.com", "stackoverflow.com", "stackexchange.com",
+	"reddit.com", "youtube.com", "wikipedia.org", "medium.com", "npmjs.com", "pypi.org",
+	"packagist.org", "docker.com", "nvd.nist.gov", "cve.org", "mitre.org", "cisa.gov",
+	"exploit-db.com", "sploitus.com", "bleepingcomputer.com", "thehackernews.com", "portswigger.net",
+	"news.ycombinator.com", "cloudflare.com", "microsoft.com", "apple.com", "google.com", "amazon.com",
+}
+
+// NotificationCandidateEntry describes a publicly indexed website running an affected
+// technology, enrolled passively for responsible vulnerability notification (never auto-exploited).
+type NotificationCandidateEntry struct {
+	TargetID          int64    `json:"target_id"`
+	Host              string   `json:"host"`
+	URL               string   `json:"url"`
+	DetectedTech      string   `json:"detected_tech"`
+	DisclosureContact string   `json:"disclosure_contact"`
+	NewlyAdded        bool     `json:"newly_added"`
+	Notes             string   `json:"notes"`
+}
+
+// EnrollNotificationCandidates passively inspects public candidate URLs discovered via
+// search engines for a vulnerable technology/platform, looks up RFC 9116 /.well-known/security.txt
+// disclosure contacts, and adds them to Patch Monitor's Targets table with status="notify_candidate"
+// so operators can notify affected site owners responsibly (without running active exploits).
+func (m *Monitor) EnrollNotificationCandidates(technology, cveOrIssue string, candidateURLs []string) ([]NotificationCandidateEntry, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("monitor not initialized")
+	}
+	tech := strings.TrimSpace(technology)
+	if tech == "" {
+		return nil, fmt.Errorf("technology is required")
+	}
+
+	existingTargets, _ := m.GetTargets()
+	byHost := map[string]ExploitTarget{}
+	for _, et := range existingTargets {
+		byHost[strings.ToLower(strings.TrimSpace(et.Host))] = et
+	}
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	var results []NotificationCandidateEntry
+	seenHosts := map[string]bool{}
+
+	for _, rawURL := range candidateURLs {
+		if len(results) >= 12 {
+			break
+		}
+		u, err := url.Parse(strings.TrimSpace(rawURL))
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if seenHosts[host] || isExcludedReferenceDomain(host) {
+			continue
+		}
+		seenHosts[host] = true
+
+		scheme := "https"
+		if strings.EqualFold(u.Scheme, "http") {
+			scheme = "http"
+		}
+		port := 443
+		if scheme == "http" {
+			port = 80
+		}
+		if p := u.Port(); p != "" {
+			if pn, perr := strconv.Atoi(p); perr == nil && pn > 0 {
+				port = pn
+			}
+		}
+		origin := fmt.Sprintf("%s://%s", scheme, u.Host)
+
+		// Passive read-only header & RFC 9116 security.txt lookup
+		detectedHeader := tech
+		if req, rerr := http.NewRequest(http.MethodGet, origin, nil); rerr == nil {
+			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ARTEX-AdvisoryNotifier/2.2)")
+			if resp, derr := client.Do(req); derr == nil {
+				srv := strings.TrimSpace(resp.Header.Get("Server"))
+				xpb := strings.TrimSpace(resp.Header.Get("X-Powered-By"))
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+				_ = resp.Body.Close()
+				var parts []string
+				if srv != "" {
+					parts = append(parts, srv)
+				}
+				if xpb != "" {
+					parts = append(parts, xpb)
+				}
+				if len(parts) > 0 {
+					detectedHeader = fmt.Sprintf("%s (%s)", tech, strings.Join(parts, " / "))
+				}
+			}
+		}
+
+		contact := lookupSecurityTxtContact(client, origin, host)
+		issueTag := strings.TrimSpace(cveOrIssue)
+		if issueTag == "" {
+			issueTag = "Technology Exposure"
+		}
+		note := fmt.Sprintf("Notification Candidate (%s) | Tech: %s | Contact: %s", issueTag, detectedHeader, contact)
+
+		if ex, exists := byHost[host]; exists {
+			results = append(results, NotificationCandidateEntry{
+				TargetID: ex.ID, Host: host, URL: origin, DetectedTech: detectedHeader,
+				DisclosureContact: contact, NewlyAdded: false, Notes: ex.Notes,
+			})
+			continue
+		}
+
+		newID, addErr := m.AddTarget(ExploitTarget{
+			Name:        host,
+			TargetType:  "web",
+			TargetValue: origin,
+			Host:        host,
+			Port:        port,
+			Service:     detectedHeader,
+			Notes:       note,
+			Status:      "notify_candidate",
+		})
+		if addErr == nil && newID > 0 {
+			results = append(results, NotificationCandidateEntry{
+				TargetID: newID, Host: host, URL: origin, DetectedTech: detectedHeader,
+				DisclosureContact: contact, NewlyAdded: true, Notes: note,
+			})
+		}
+	}
+	return results, nil
+}
+
+func isExcludedReferenceDomain(host string) bool {
+	for _, ex := range excludedDirectoryDomains {
+		if host == ex || strings.HasSuffix(host, "."+ex) {
+			return true
+		}
+	}
+	return false
+}
+
+func lookupSecurityTxtContact(client *http.Client, origin, host string) string {
+	for _, p := range []string{"/.well-known/security.txt", "/security.txt"} {
+		req, err := http.NewRequest(http.MethodGet, origin+p, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ARTEX-SecurityTxtLookup/2.2)")
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			matches := reSecurityContactLine.FindAllStringSubmatch(string(body), 3)
+			if len(matches) > 0 {
+				var contacts []string
+				for _, m := range matches {
+					contacts = append(contacts, strings.TrimSpace(m[1]))
+				}
+				return strings.Join(contacts, ", ")
+			}
+		}
+	}
+	return "security@" + host
 }

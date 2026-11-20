@@ -4180,9 +4180,10 @@ func (s *Server) settingsPayload() map[string]any {
 		"notify_enabled":             s.m.pg.GetBool(settingNotifyEnabled, true),
 		"notify_public_base_url":     notifyPublicBaseURL(s.m.pg),
 		"notify_digest_interval_min": notifyDigestIntervalMin(s.m.pg),
-		"turnstile_enabled":          func() bool { en, _, _ := s.turnstileConfig(); return en }(),
-		"turnstile_site_key":         func() string { _, sk, _ := s.turnstileConfig(); return sk }(),
-		"turnstile_secret_key_set":   func() bool { _, _, sec := s.turnstileConfig(); return sec != "" }(),
+		"turnstile_enabled":          func() bool { en, _, _, _ := s.turnstileConfig(); return en }(),
+		"turnstile_site_key":         func() string { _, sk, _, _ := s.turnstileConfig(); return sk }(),
+		"turnstile_secret_key_set":   func() bool { _, _, sec, _ := s.turnstileConfig(); return sec != "" }(),
+		"turnstile_verified":         func() bool { _, _, _, ver := s.turnstileConfig(); return ver }(),
 		"git_autosync_enabled":       s.m.pg.GetBool("git_autosync_enabled", true),
 	}
 }
@@ -4354,16 +4355,42 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.TurnstileSiteKey != nil {
-		if err := s.m.pg.SetSetting("turnstile_site_key", strings.TrimSpace(*req.TurnstileSiteKey)); err != nil {
-			writeErr(w, 500, err.Error())
+	if req.TurnstileSiteKey != nil || req.TurnstileSecretKey != nil {
+		_, curSite, curSec, _ := s.turnstileConfig()
+		nextSite := curSite
+		nextSec := curSec
+		if req.TurnstileSiteKey != nil {
+			nextSite = strings.TrimSpace(*req.TurnstileSiteKey)
+		}
+		if req.TurnstileSecretKey != nil {
+			nextSec = strings.TrimSpace(*req.TurnstileSecretKey)
+		}
+		// If the user cleared Site Key, clear Secret Key as well so built-in gate resumes cleanly.
+		if req.TurnstileSiteKey != nil && nextSite == "" && req.TurnstileSecretKey == nil {
+			nextSec = ""
+		}
+		if (nextSite != "" && nextSec == "") || (nextSite == "" && nextSec != "") {
+			writeErr(w, 400, "Provide both Turnstile Site Key and Turnstile Secret Key (or clear both to use the built-in gate)")
 			return
 		}
-	}
-	if req.TurnstileSecretKey != nil {
-		if err := s.m.pg.SetSetting("turnstile_secret_key", strings.TrimSpace(*req.TurnstileSecretKey)); err != nil {
-			writeErr(w, 500, err.Error())
-			return
+		if nextSite != "" && nextSec != "" {
+			if err := verifyTurnstileSecretKey(nextSec); err != nil {
+				writeErr(w, 400, err.Error())
+				return
+			}
+			if err := s.m.pg.SetSetting("turnstile_site_key", nextSite); err != nil {
+				writeErr(w, 500, err.Error())
+				return
+			}
+			if err := s.m.pg.SetSetting("turnstile_secret_key", nextSec); err != nil {
+				writeErr(w, 500, err.Error())
+				return
+			}
+			_ = s.m.pg.SetSetting("turnstile_keys_verified", "true")
+		} else {
+			_ = s.m.pg.SetSetting("turnstile_site_key", "")
+			_ = s.m.pg.SetSetting("turnstile_secret_key", "")
+			_ = s.m.pg.SetSetting("turnstile_keys_verified", "false")
 		}
 	}
 	if req.GitAutoSyncEnabled != nil {

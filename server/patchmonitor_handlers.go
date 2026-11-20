@@ -366,14 +366,15 @@ func (s *Server) launchPatchWatchAgentRun(profileID *int64, newVulns []patchmoni
 	}
 
 	prompt := fmt.Sprintf(
-		"Patch Monitor Watch Cycle triggered (%d vendor security feeds polled: Windows MSRC, macOS/iOS, CISA KEV, Chrome, Linux Kernel, Ubuntu, RHEL, Cisco, Fortinet, Palo Alto, AWS, NVD, GitHub, Exploit-DB).\n\n"+
+		"Patch Monitor Watch Cycle triggered (%d security advisory feeds polled across vendor PSIRTs, NVD, CISA KEV, Hacker News Security, ProjectDiscovery, PortSwigger, ZDI, BleepingComputer, Packet Storm, and Exploit-DB).\n\n"+
 			"Tracked High/Critical Security Patches & CVEs:\n%s\n\n"+
-			"Execute your autonomous Patch Watch & Scope-Aware Auto-Targeting workflow now:\n"+
-			"1. Call `get_proxy_pool_status` first to check if Proxy Pool or Global Proxy is enabled, and rotate/test via `manage_proxy_pool` if any active proxy is degraded.\n"+
+			"Execute your autonomous Patch Watch, Feed Expansion, Scope Matching & Responsible Notification Discovery workflow now:\n"+
+			"1. Call `check_proxy_status` first to check if Proxy Pool or Global Proxy is enabled (connect directly if `proxy_enabled` is false; rotate via `manage_proxy_pool` if a proxy is degraded).\n"+
 			"2. Call `check_patch_feeds` to review the latest vulnerabilities and `generate_vuln_exploit` on the highest-priority vulnerability ID to synthesize a PoC exploit.\n"+
-			"3. Call `match_vuln_targets` to correlate the exploited technology/software against ARTEX's registered authorized Assets & Scope inventory (`assets` & `exploit_targets`).\n"+
-			"4. If authorized targets in the platform inventory match an affected technology (or need non-destructive tech-stack fingerprinting), verify their exposed headers/versions strictly within authorized scope, test applicable PoCs safely, update each target via `update_exploit_target_status`, and call `report_finding` if an exploitable vulnerability is confirmed.\n"+
-			"5. Output a concise intelligence briefing summarizing watched advisories, generated PoCs, matched authorized targets, and verification results.",
+			"3. Proactively expand watch coverage: if any major vendor, framework, or community security feed (e.g., Hacker News topic RSS, vendor PSIRT RSS/Atom, GitHub Releases Atom) relevant to the discovered technologies is not yet in `check_patch_feeds`, register and poll it via `add_patch_watch_feed`.\n"+
+			"4. Call `match_vuln_targets` to correlate the affected technology/software against ARTEX's registered authorized Assets & Scope inventory (`assets` & `exploit_targets`). Verify in-scope assets safely and update via `update_exploit_target_status`.\n"+
+			"5. Call `discover_affected_sites_for_notification` for the primary vulnerable technology/product so publicly indexed websites using that technology (along with their `/.well-known/security.txt` contacts) are enrolled into the Targets list (`notify_candidate`) for responsible vulnerability notification (never execute active exploits against out-of-scope notification candidates).\n"+
+			"6. Output a concise intelligence briefing summarizing watched advisories, newly added watch feeds, generated PoCs, matched in-scope targets, and discovered notification candidates.",
 		sourcesChecked, strings.Join(summaryLines, "\n"),
 	)
 
@@ -394,13 +395,175 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 	return []actool.CoreTool{
 		s.toolGeneratePayload(),
 		s.toolCheckPatchFeeds(),
+		s.toolAddPatchWatchFeed(),
 		s.toolGenerateVulnExploit(),
 		s.toolMatchVulnTargets(),
+		s.toolDiscoverAffectedSitesForNotification(),
 		s.toolUpdateExploitTargetStatus(),
 		s.toolSearchIOSExploits(),
 		s.toolMultiEngineSearch(),
 		s.toolExploitSearch(),
 	}
+}
+
+func (s *Server) toolAddPatchWatchFeed() actool.CoreTool {
+	return wrTool("add_patch_watch_feed",
+		"Register a new security vulnerability/advisory watch feed (RSS, Atom, Hacker News hnrss.org query feed, GitHub releases.atom, or JSON bulletin) in Patch Monitor -> Watch Feeds and immediately poll it for advisories.",
+		objSchema(map[string]any{
+			"name":                   strParam("Descriptive feed name (e.g. 'Hacker News — Laravel & PHP Security', 'Apache Tomcat Announcements')"),
+			"url":                    strParam("Feed URL (RSS/Atom/JSON, e.g. 'https://hnrss.org/newest?q=Laravel+CVE' or 'https://github.com/org/repo/releases.atom')"),
+			"source_type":            strParam("Feed parser type: rss (default) | atom | github | nvd | cisa_kev"),
+			"check_interval_minutes": map[string]any{"type": "integer", "description": "Polling interval in minutes (default 30)"},
+			"poll_immediately":       map[string]any{"type": "boolean", "description": "Immediately fetch & parse this feed after adding (default true)"},
+		}, "name", "url"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.patchMon == nil {
+				return actool.Errorf("patch monitor is not initialized"), nil
+			}
+			var a struct {
+				Name                 string `json:"name"`
+				URL                  string `json:"url"`
+				SourceType           string `json:"source_type"`
+				CheckIntervalMinutes int    `json:"check_interval_minutes"`
+				PollImmediately      *bool  `json:"poll_immediately"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("invalid input: " + err.Error()), nil
+			}
+			if strings.TrimSpace(a.Name) == "" || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.URL)), "http") {
+				return actool.Errorf("valid name and http(s) url are required"), nil
+			}
+			if a.CheckIntervalMinutes <= 0 {
+				a.CheckIntervalMinutes = 30
+			}
+			stype := strings.ToLower(strings.TrimSpace(a.SourceType))
+			if stype == "" {
+				if strings.HasSuffix(strings.ToLower(a.URL), ".atom") {
+					stype = "atom"
+				} else {
+					stype = "rss"
+				}
+			}
+			id, err := s.patchMon.AddSource(patchmonitor.PatchSource{
+				Name:                 a.Name,
+				URL:                  a.URL,
+				SourceType:           stype,
+				CheckIntervalMinutes: a.CheckIntervalMinutes,
+				Enabled:              true,
+			})
+			if err != nil {
+				return actool.Errorf("failed to add watch feed: " + err.Error()), nil
+			}
+			pollNow := a.PollImmediately == nil || *a.PollImmediately
+			var newVulns []patchmonitor.Vulnerability
+			if pollNow {
+				newVulns, _ = s.patchMon.PollSourceByID(id)
+			}
+			return jsonResult(map[string]any{
+				"source_id":          id,
+				"name":               a.Name,
+				"url":                a.URL,
+				"source_type":        stype,
+				"polled_immediately": pollNow,
+				"new_vulns_ingested": len(newVulns),
+				"new_vulns":          newVulns,
+			})
+		})
+}
+
+func (s *Server) toolDiscoverAffectedSitesForNotification() actool.CoreTool {
+	return wrTool("discover_affected_sites_for_notification",
+		"When a vulnerability is discovered in a platform or technology (e.g. WordPress plugin, CodeIgniter, GitLab, TeamCity, Next.js, Fortinet), passively search public indexes for websites running that technology, look up their RFC 9116 /.well-known/security.txt disclosure contacts, and enroll them into Patch Monitor -> Targets (status='notify_candidate') so the operator can responsibly notify them. Never runs active exploits on notification candidates.",
+		objSchema(map[string]any{
+			"technology":   strParam("Affected platform, framework, CMS, or server technology (e.g. 'CodeIgniter', 'WordPress WooCommerce', 'JetBrains TeamCity')"),
+			"cve_or_issue": strParam("Optional CVE ID or vulnerability summary (e.g. 'CVE-2024-4577' or 'Exposed Debug/Config')"),
+			"search_query": strParam("Optional custom search query to locate public sites powered by this technology"),
+			"max_sites":    map[string]any{"type": "integer", "description": "Maximum candidate sites to enroll (default 8, max 12)"},
+		}, "technology"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.patchMon == nil {
+				return actool.Errorf("patch monitor is not initialized"), nil
+			}
+			var a struct {
+				Technology  string `json:"technology"`
+				CVEOrIssue  string `json:"cve_or_issue"`
+				SearchQuery string `json:"search_query"`
+				MaxSites    int    `json:"max_sites"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("invalid input: " + err.Error()), nil
+			}
+			tech := strings.TrimSpace(a.Technology)
+			if tech == "" {
+				return actool.Errorf("technology is required"), nil
+			}
+			if a.MaxSites <= 0 || a.MaxSites > 12 {
+				a.MaxSites = 8
+			}
+
+			// 1. Always match authorized in-scope assets first
+			inScopeMatched, _ := s.patchMon.AutoMatchAuthorizedTargets(nil)
+
+			// 2. Passive multi-engine search for publicly indexed sites running this technology
+			q := strings.TrimSpace(a.SearchQuery)
+			if q == "" {
+				q = fmt.Sprintf(`"%s" ("powered by" OR login OR portal OR api) -site:github.com -site:stackoverflow.com`, tech)
+			}
+			var urls []string
+			var unconfiguredEngines []string
+			if s.searchOrchestrator != nil {
+				if sr, serr := s.searchOrchestrator.Search(ctx, search.Request{
+					Query:      q,
+					Mode:       search.ModeOSINT,
+					MaxResults: a.MaxSites * 2,
+				}); serr == nil && sr != nil {
+					for _, r := range sr.Results {
+						if strings.TrimSpace(r.URL) != "" {
+							urls = append(urls, r.URL)
+						}
+					}
+				}
+				unconfiguredEngines = s.unconfiguredSearchEngines()
+			}
+
+			candidates, err := s.patchMon.EnrollNotificationCandidates(tech, a.CVEOrIssue, urls)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+
+			resp := map[string]any{
+				"technology":                     tech,
+				"cve_or_issue":                   a.CVEOrIssue,
+				"search_query_used":              q,
+				"in_scope_matched_count":         len(inScopeMatched),
+				"notification_candidates_count":  len(candidates),
+				"notification_candidates":        candidates,
+				"responsible_disclosure_policy":  "Notification candidates are enrolled passively (status='notify_candidate') with security.txt contacts for responsible disclosure notification only — do NOT launch active exploit payloads against out-of-scope hosts.",
+			}
+			if len(unconfiguredEngines) > 0 {
+				resp["api_key_suggestion"] = fmt.Sprintf("Tip: Configure %s in System -> Settings -> Network and tools to unlock deeper technology dorking and wider notification discovery.", strings.Join(unconfiguredEngines, ", "))
+			}
+			return jsonResult(resp)
+		})
+}
+
+func (s *Server) unconfiguredSearchEngines() []string {
+	if s.searchOrchestrator == nil {
+		return nil
+	}
+	stats := s.searchOrchestrator.GetStats()
+	em, _ := stats["engine_status"].(map[string]bool)
+	var missing []string
+	if !em["tavily"] {
+		missing = append(missing, "Tavily AI (SEARCH_TAVILY_API_KEY)")
+	}
+	if !em["google"] {
+		missing = append(missing, "Google CSE (API Key | CSE ID)")
+	}
+	if !em["searxng"] {
+		missing = append(missing, "SearXNG Instance URL")
+	}
+	return missing
 }
 
 func (s *Server) toolMatchVulnTargets() actool.CoreTool {
@@ -621,6 +784,14 @@ func (s *Server) toolMultiEngineSearch() actool.CoreTool {
 			})
 			if err != nil {
 				return actool.Errorf(fmt.Sprintf("search failed: %v", err)), nil
+			}
+			missing := s.unconfiguredSearchEngines()
+			if len(missing) > 0 {
+				return jsonResult(map[string]any{
+					"search_result":           res,
+					"unconfigured_engines":    missing,
+					"api_key_recommendation":  fmt.Sprintf("Currently using free engines (%s). For deeper OSINT, Google dorking, and higher-recall security intelligence, suggest to the user that they can optionally add API keys for %s in System -> Settings -> Network and tools.", strings.Join(res.EnginesUsed, ", "), strings.Join(missing, ", ")),
+				})
 			}
 			return jsonResult(res)
 		})

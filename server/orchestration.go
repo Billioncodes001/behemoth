@@ -590,6 +590,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedFindingCaseTools()
 	s.seedArsenalAndAutoUpgradeV1()
 	s.seedProxyPoolAgentToolsV1()
+	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -1226,11 +1227,11 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v3"
+	const flag = "proxy_pool_agent_tools_v4"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
-	for _, t := range append(s.proxyPoolAgentTools(), s.toolUpdateFindingReport()) {
+	for _, t := range append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.toolUpdateFindingReport()) {
 		schema, _ := json.Marshal(t.InputSchema())
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 	}
@@ -1242,7 +1243,11 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 	for _, agKey := range []string{"reporter", "asset_mapper"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"check_proxy_status", "get_proxy_pool_status"})
 	}
-	patchTargetKeys := []string{"match_vuln_targets", "update_exploit_target_status", "update_finding_report", "list_security_arsenal", "run_security_tool", "browser_inspect"}
+	patchTargetKeys := []string{
+		"add_patch_watch_feed", "discover_affected_sites_for_notification",
+		"match_vuln_targets", "update_exploit_target_status", "update_finding_report",
+		"list_security_arsenal", "run_security_tool", "browser_inspect",
+	}
 	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, patchTargetKeys)
 	}

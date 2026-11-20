@@ -46,6 +46,7 @@ func TestCredentialProcessingFlowBindingAndScopes(t *testing.T) {
 			_ = s.m.pg.SetCredentialAgentSettings(t.Context(), nil, &oldBind)
 		}
 	}()
+	_ = s.m.pg.SetBool(db.SettingTaskIntelligence, false)
 	_ = s.m.pg.SetBool(db.SettingCredentialAgent, false)
 	_ = s.m.pg.SetBool(db.SettingCredentialTraffic, false)
 	if r := request("PUT", "/api/settings", `{"credential_traffic_binding":true}`); r.Code != 400 {

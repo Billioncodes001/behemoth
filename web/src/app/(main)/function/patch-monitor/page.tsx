@@ -692,10 +692,12 @@ export default function PatchMonitorPage() {
                               ? "destructive"
                               : t.status === "online" || t.status === "matched"
                                 ? "default"
-                                : "secondary"
+                                : t.status === "notify_candidate"
+                                  ? "outline"
+                                  : "secondary"
                           }
                         >
-                          {t.status}
+                          {t.status === "notify_candidate" ? "Notify Candidate" : t.status}
                         </Badge>
                       </TableCell>
                       <TableCell><Button variant="ghost" size="sm" onClick={() => handleDeleteTarget(t.id)}><Trash2 className="size-4 text-red-400" /></Button></TableCell>

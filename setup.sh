@@ -201,10 +201,10 @@ install_nodejs() {
 
 install_playwright_globals() {
   if command -v npm >/dev/null 2>&1; then
-    info "Ensuring Playwright MCP & CLI are installed..."
-    npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@latest >/dev/null 2>&1 || true
+    info "Ensuring Playwright MCP, Reasoning/Memory MCPs & CLI are installed..."
+    npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@latest @modelcontextprotocol/server-sequential-thinking@latest @modelcontextprotocol/server-memory@latest >/dev/null 2>&1 || true
     npx playwright install --with-deps chromium >/dev/null 2>&1 || true
-    ok "Playwright MCP & Chromium ready"
+    ok "Playwright MCP, Reasoning/Memory MCPs & Chromium ready"
   fi
 }
 

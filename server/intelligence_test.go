@@ -15,11 +15,11 @@ func TestIntelligenceHTTPSettingsAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID := *f.TaskID
-	if s.settingsPayload()[db.SettingTaskIntelligence] != false {
-		t.Fatal("default must be off")
+	if s.settingsPayload()[db.SettingTaskIntelligence] != true {
+		t.Fatal("default task intelligence must be enabled out of the box")
 	}
-	if s.settingsPayload()[db.SettingTaskAutoTitle] != false || s.settingsPayload()[db.SettingChatAutoTitle] != false {
-		t.Fatal("auto title settings must default to off")
+	if s.settingsPayload()[db.SettingTaskAutoTitle] != true || s.settingsPayload()[db.SettingChatAutoTitle] != true {
+		t.Fatal("auto title settings must default to enabled out of the box")
 	}
 	if r := request("PUT", "/api/settings", `{"task_auto_title_enabled":true,"chat_auto_title_enabled":true}`); r.Code != 200 {
 		t.Fatal(r.Code, r.Body)

@@ -288,6 +288,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV4(); err != nil {
 		return fmt.Errorf("seed intercept rules v4: %w", err)
 	}
+	if err := d.seedDefaultInterceptRulesV5(); err != nil {
+		return fmt.Errorf("seed intercept rules v5: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
 	}
@@ -641,3 +644,31 @@ func (d *DB) seedDefaultInterceptRulesV4() error {
 	)
 	return d.SetSetting("intercept_default_rules_v4", "done")
 }
+
+// seedDefaultInterceptRulesV5 disables non-host target-level interception rules by
+// default (HTTP DELETE methods in curl/Python/JS scripts and SQL/NoSQL/Redis test
+// keywords) so pentesting & research agents can freely test REST APIs, craft SQLi/NoSQLi
+// PoCs, and run Nuclei/sqlmap payloads without false-positive blocks, while keeping
+// all Priority-100 Host OS safety rules strictly enabled.
+func (d *DB) seedDefaultInterceptRulesV5() error {
+	if v, _, _ := d.GetSetting("intercept_default_rules_v5"); v == "done" {
+		return nil
+	}
+	nonHostTargetRules := []string{
+		"[Built-in] SQL DROP DATABASE / TABLE / SCHEMA",
+		"[Built-in] SQL TRUNCATE",
+		"[Built-in] MongoDB drop / dropDatabase",
+		"[Built-in] Redis FLUSHALL / FLUSHDB",
+		"[Built-in] curl / wget HTTP DELETE request",
+		"[Built-in] Python HTTP client DELETE (requests/httpx/aiohttp)",
+		"[Built-in] HTTP DELETE method in script (JS/general)",
+		"[Built-in] Bulk clear / wipe endpoint path",
+		"[Built-in] Data exfiltration pipe",
+		"[Built-in] Deletion endpoint path",
+	}
+	for _, name := range nonHostTargetRules {
+		_, _ = d.Exec(`UPDATE intercept_rules SET enabled = false WHERE name = $1`, name)
+	}
+	return d.SetSetting("intercept_default_rules_v5", "done")
+}
+

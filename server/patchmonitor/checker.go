@@ -14,6 +14,28 @@ import (
 	"github.com/Autumn-27/artex/agent/payloads"
 )
 
+// PollSourceByID fetches and parses a single watch feed by ID immediately.
+func (m *Monitor) PollSourceByID(id int64) ([]Vulnerability, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("monitor not initialized")
+	}
+	rows, err := m.db.Query(`
+		SELECT id, name, url, source_type, check_interval, enabled, last_check, last_hash, last_status, created_at
+		FROM patch_sources WHERE id = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, fmt.Errorf("source id %d not found", id)
+	}
+	src, err := scanSourceRow(rows)
+	if err != nil {
+		return nil, err
+	}
+	return m.checkSource(src), nil
+}
+
 // checkSource fetches and processes a single source, and when AutoGenerate is enabled,
 // automatically generates PoC exploits and client-side payloads for discovered vulnerabilities.
 func (m *Monitor) checkSource(src PatchSource) []Vulnerability {

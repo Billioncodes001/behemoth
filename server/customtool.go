@@ -183,34 +183,45 @@ func (s *Server) pgTestCustomTool(w http.ResponseWriter, r *http.Request) {
 
 const settingPythonInterp = "python_interpreter"
 
-// detectPython finds a python interpreter absolute path (python3 preferred).
+// detectPython finds a Python 3 interpreter absolute path (verifying major >= 3 so
+// legacy Python 2 binaries are never selected).
 func detectPython() string {
-	for _, c := range []string{"python3", "python"} {
-		if p, err := exec.LookPath(c); err == nil {
+	for _, c := range []string{"python3", "/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3", "python"} {
+		p, err := exec.LookPath(c)
+		if err != nil {
+			continue
+		}
+		out, verr := exec.Command(p, "-c", "import sys; print(sys.version_info.major)").Output()
+		if verr == nil && strings.TrimSpace(string(out)) == "3" {
 			return p
 		}
 	}
 	return ""
 }
 
-// pythonInterpreter resolves the interpreter: user-set > stored auto-detect > live
-// detect. "" only when truly none found.
+// pythonInterpreter resolves the interpreter: user-set (if valid Python 3) > live detect.
 func (s *Server) pythonInterpreter() string {
 	if v, ok, _ := s.m.pg.GetSetting(settingPythonInterp); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
+		cand := strings.TrimSpace(v)
+		if out, err := exec.Command(cand, "-c", "import sys; print(sys.version_info.major)").Output(); err == nil && strings.TrimSpace(string(out)) == "3" {
+			return cand
+		}
 	}
 	return detectPython()
 }
 
-// seedPythonInterpreter stores the auto-detected interpreter on startup if unset
-// (never clobbers a user-set value).
+// seedPythonInterpreter stores the auto-detected Python 3 interpreter on startup
+// and automatically upgrades any stale Python 2 or missing interpreter path.
 func (s *Server) seedPythonInterpreter() {
 	if v, ok, _ := s.m.pg.GetSetting(settingPythonInterp); ok && strings.TrimSpace(v) != "" {
-		return
+		cand := strings.TrimSpace(v)
+		if out, err := exec.Command(cand, "-c", "import sys; print(sys.version_info.major)").Output(); err == nil && strings.TrimSpace(string(out)) == "3" {
+			return
+		}
 	}
 	if p := detectPython(); p != "" {
 		_ = s.m.pg.SetSetting(settingPythonInterp, p)
-		log.Printf("[custom-tool] 自动检测到 python 解释器: %s", p)
+		log.Printf("[custom-tool] Auto-detected Python 3 interpreter: %s", p)
 	}
 }
 

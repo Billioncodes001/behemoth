@@ -117,7 +117,17 @@ INSERT INTO patch_sources (name, url, source_type, check_interval, enabled) VALU
     ('Cloudflare Security & Edge Advisories', 'https://www.cloudflarestatus.com/history.atom', 'atom', 3600, true),
     ('NVD Recent CVEs', 'https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=20', 'nvd', 3600, true),
     ('GitHub Security Advisories', 'https://api.github.com/advisories?per_page=20', 'github', 1800, true),
-    ('Exploit-DB RSS Feed', 'https://www.exploit-db.com/rss.xml', 'exploitdb', 3600, true)
+    ('Exploit-DB RSS Feed', 'https://www.exploit-db.com/rss.xml', 'exploitdb', 3600, true),
+    ('Hacker News — Security & Zero-Day Advisories', 'https://hnrss.org/newest?q=CVE+OR+vulnerability+OR+0day+OR+RCE&points=20', 'rss', 1800, true),
+    ('The Hacker News (Cyber Advisories)', 'https://feeds.feedburner.com/TheHackersNews', 'rss', 1800, true),
+    ('ProjectDiscovery Nuclei Templates Releases', 'https://github.com/projectdiscovery/nuclei-templates/releases.atom', 'atom', 3600, true),
+    ('PortSwigger Web Security Research', 'https://portswigger.net/research/rss', 'rss', 3600, true),
+    ('Zero Day Initiative (ZDI) Published Advisories', 'https://www.zerodayinitiative.com/rss/published/', 'rss', 3600, true),
+    ('BleepingComputer Security Advisories', 'https://www.bleepingcomputer.com/feed/', 'rss', 1800, true),
+    ('Packet Storm Security Advisories', 'https://rss.packetstormsecurity.com/files/tags/advisory/', 'rss', 3600, true),
+    ('Openwall oss-security Mailing List', 'https://www.openwall.com/lists/oss-security/rss.xml', 'rss', 3600, true),
+    ('Wordfence WordPress Vulnerability Feed', 'https://www.wordfence.com/feed/', 'rss', 3600, true),
+    ('Debian Security Advisories (DSA)', 'https://www.debian.org/security/dsa-long', 'rss', 3600, true)
 ON CONFLICT (name) DO NOTHING`)
 
 	var count int

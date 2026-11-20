@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,13 +139,50 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 	})
 }
 
+// verifyTurnstileSecretKey checks a Cloudflare Turnstile secret key against Cloudflare's
+// siteverify endpoint using a synthetic probe token. Cloudflare returns "invalid-input-secret"
+// when the secret key itself is invalid, whereas a valid secret key returns either success=true
+// (for official test keys) or "invalid-input-response" (confirming the secret key was accepted).
+func verifyTurnstileSecretKey(secretKey string) error {
+	secretKey = strings.TrimSpace(secretKey)
+	if secretKey == "" {
+		return fmt.Errorf("Turnstile secret key is empty")
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	form := url.Values{
+		"secret":   {secretKey},
+		"response": {"artex-secret-key-validation-probe"},
+	}
+	resp, err := client.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", form)
+	if err != nil {
+		return fmt.Errorf("failed to reach Cloudflare siteverify endpoint to verify key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Success    bool     `json:"success"`
+		ErrorCodes []string `json:"error-codes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return fmt.Errorf("unexpected response from Cloudflare siteverify: %w", err)
+	}
+	for _, code := range out.ErrorCodes {
+		if code == "invalid-input-secret" || code == "missing-input-secret" {
+			return fmt.Errorf("Cloudflare rejected the Turnstile Secret Key (%s)", code)
+		}
+	}
+	return nil
+}
+
 // turnstileConfig is the single source of truth for Cloudflare Turnstile settings.
 // If environment variables are set and the database has no stored value yet, it
 // seeds them into PostgreSQL so the Settings UI, /api/auth/status, and
 // /api/auth/turnstile-verify always see the exact same state.
-func (s *Server) turnstileConfig() (enabled bool, siteKey string, secretKey string) {
+func (s *Server) turnstileConfig() (enabled bool, siteKey string, secretKey string, verified bool) {
 	if s == nil || s.m == nil || s.m.pg == nil {
-		return true, strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY")), strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
+		sk := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SITE_KEY"))
+		sec := strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
+		return true, sk, sec, sk != "" && sec != ""
 	}
 	pg := s.m.pg
 	enabled = pg.GetBool("turnstile_enabled", true)
@@ -158,7 +196,23 @@ func (s *Server) turnstileConfig() (enabled bool, siteKey string, secretKey stri
 		secVal = strings.TrimSpace(os.Getenv("CLOUDFLARE_TURNSTILE_SECRET_KEY"))
 		_ = pg.SetSetting("turnstile_secret_key", secVal)
 	}
-	return enabled, strings.TrimSpace(siteVal), strings.TrimSpace(secVal)
+	siteKey = strings.TrimSpace(siteVal)
+	secretKey = strings.TrimSpace(secVal)
+	if siteKey != "" && secretKey != "" {
+		vFlag, vSet, _ := pg.GetSetting("turnstile_keys_verified")
+		if vSet {
+			verified = vFlag == "true"
+		} else {
+			// Verify pre-existing keys once and cache the result in PostgreSQL.
+			if verifyTurnstileSecretKey(secretKey) == nil {
+				verified = true
+				_ = pg.SetSetting("turnstile_keys_verified", "true")
+			} else {
+				_ = pg.SetSetting("turnstile_keys_verified", "false")
+			}
+		}
+	}
+	return enabled, siteKey, secretKey, verified
 }
 
 // GET /api/auth/status — reports whether the admin password has been initialised
@@ -173,17 +227,23 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 503, "data_unavailable", errDataSourceUnavailable, nil)
 		return
 	}
-	turnstileEnabled, siteKey, secretKey := s.turnstileConfig()
+	turnstileEnabled, siteKey, secretKey, verified := s.turnstileConfig()
+	activeSiteKey := ""
+	if verified {
+		activeSiteKey = siteKey
+	}
 	writeJSON(w, 200, map[string]any{
 		"initialized":              hash != "",
 		"turnstile_enabled":        turnstileEnabled,
-		"turnstile_site_key":       siteKey,
+		"turnstile_site_key":       activeSiteKey,
 		"turnstile_secret_key_set": secretKey != "",
+		"turnstile_verified":       verified,
 	})
 }
 
 // POST /api/auth/turnstile-verify — verifies a Cloudflare Turnstile token (when
-// turnstile_secret_key is set) or validates the built-in automatic browser security check.
+// verified Turnstile keys are configured) or validates the built-in automatic gate
+// ONLY when Cloudflare keys have not been configured.
 func (s *Server) authTurnstileVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token     string `json:"token"`
@@ -191,12 +251,19 @@ func (s *Server) authTurnstileVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	_, _, secretKey := s.turnstileConfig()
-	if secretKey != "" && req.Token != "" && req.Token != "auto-verified" {
-		form := strings.NewReader(fmt.Sprintf("secret=%s&response=%s&remoteip=%s",
-			secretKey, req.Token, getClientIP(r)))
-		resp, err := http.Post("https://challenges.cloudflare.com/turnstile/v0/siteverify",
-			"application/x-www-form-urlencoded", form)
+	_, _, secretKey, verified := s.turnstileConfig()
+	if verified && secretKey != "" {
+		tok := strings.TrimSpace(req.Token)
+		if tok == "" || tok == "auto-verified" {
+			writeProductError(w, 403, "turnstile_failed", "Cloudflare Turnstile challenge token is required", nil)
+			return
+		}
+		form := url.Values{
+			"secret":   {secretKey},
+			"response": {tok},
+			"remoteip": {getClientIP(r)},
+		}
+		resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", form)
 		if err != nil {
 			writeProductError(w, 502, "turnstile_unreachable", "Failed to contact Cloudflare Turnstile verification service", nil)
 			return
