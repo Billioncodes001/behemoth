@@ -141,6 +141,7 @@ func (s *Server) arsenalTools() []actool.CoreTool {
 		s.toolListSecurityArsenal(),
 		s.toolRunSecurityTool(),
 		s.toolBrowserInspect(),
+		s.toolDetectDeceptionAndHoneypot(),
 	}
 }
 

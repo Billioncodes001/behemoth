@@ -162,9 +162,10 @@ func analyzeRunToolProgressDetailed(messages []llm.Message) (execTurns int, call
 			for _, u := range uses {
 				switch u.Name {
 				case "Bash", "WebFetch", "web_search", "spawn_task", "ExecuteExtraTool", "shell_open", "shell_send",
-					"run_security_tool", "browser_inspect", "multi_engine_search", "exploit_search",
+					"run_security_tool", "browser_inspect", "detect_deception_and_honeypot", "multi_engine_search", "exploit_search",
 					"import_and_test_proxies", "manage_proxy_pool", "match_vuln_targets", "update_exploit_target_status",
-					"check_patch_feeds", "generate_vuln_exploit", "generate_payload", "search_ios_exploits":
+					"check_patch_feeds", "add_patch_watch_feed", "discover_affected_sites_for_notification",
+					"generate_vuln_exploit", "generate_payload", "search_ios_exploits":
 					turnHadExec = true
 				}
 				switch u.Name {

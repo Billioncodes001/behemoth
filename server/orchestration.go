@@ -1227,17 +1227,20 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v4"
+	const flag = "proxy_pool_agent_tools_v5_deception"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
-	for _, t := range append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.toolUpdateFindingReport()) {
+	for _, t := range append(append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.arsenalTools()...), s.toolUpdateFindingReport()) {
 		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"})
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 	}
 	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyFullKeys)
+		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"detect_deception_and_honeypot"})
 	}
 	// Read-only / reporting agents also receive check_proxy_status & get_proxy_pool_status so they never guess proxy state.
 	for _, agKey := range []string{"reporter", "asset_mapper"} {
@@ -1246,12 +1249,12 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 	patchTargetKeys := []string{
 		"add_patch_watch_feed", "discover_affected_sites_for_notification",
 		"match_vuln_targets", "update_exploit_target_status", "update_finding_report",
-		"list_security_arsenal", "run_security_tool", "browser_inspect",
+		"list_security_arsenal", "run_security_tool", "browser_inspect", "detect_deception_and_honeypot",
 	}
 	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, patchTargetKeys)
 	}
-	for _, agKey := range []string{"auto", "patch_watch"} {
+	for _, agKey := range []string{"auto", "pentest", "patch_watch"} {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			if tmpl := agent.BuiltinPromptSeeds()[agKey]; tmpl != "" {
 				if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {

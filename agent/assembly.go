@@ -107,5 +107,9 @@ func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.T
 			return actool.Errorf("Error: invalid tool input: " + verr.Error()), nil
 		}
 	}
-	return g.CoreTool.Call(ctx, cleanIn, tc)
+	rawRes, callErr := g.CoreTool.Call(ctx, cleanIn, tc)
+	if callErr != nil {
+		return rawRes, callErr
+	}
+	return SanitizeTargetToolResult(g.Name(), rawRes), nil
 }
