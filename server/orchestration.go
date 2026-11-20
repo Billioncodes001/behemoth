@@ -79,6 +79,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolListWorkerTraces(),
 		s.toolSearchWorkerTraces(),
 		s.toolGetTaskNodeDetail(),
+		s.toolUpdateFinding(),
 		s.toolUpdateFindingReport(),
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
@@ -449,6 +450,56 @@ func (s *Server) toolGetTaskNodeDetail() actool.CoreTool {
 		}, "task_id", "id"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			return s.delegateToTask(ctx, in, (*agent.ToolSet).NodeDetailTool)
+		})
+}
+
+// toolUpdateFinding escalates or updates an existing finding's severity, status,
+// title, summary, and verified PoC evidence after follow-up exploitation (instead
+// of creating duplicate finding rows or merely recommending a severity change in prose).
+func (s *Server) toolUpdateFinding() actool.CoreTool {
+	return wrTool("update_finding",
+		"Update an existing vulnerability finding's severity (critical | high | medium | low), status (confirmed | in_progress | false_positive | resolved), title, summary, or append newly verified exploitation PoC evidence. Always call this when follow-up exploitation proves higher impact (e.g. escalating Low -> Medium/High/Critical and setting status='confirmed') rather than merely suggesting a re-rating in text!",
+		objSchema(map[string]any{
+			"finding_id":      map[string]any{"type": "integer", "description": "Finding ID (or exploration node ID returned by report_finding)"},
+			"severity":        strParam("Optional updated severity: critical | high | medium | low"),
+			"status":          strParam("Optional updated status: confirmed | in_progress | pending | false_positive"),
+			"name":            strParam("Optional updated vulnerability title"),
+			"vulnclass":       strParam("Optional updated vulnerability class"),
+			"summary":         strParam("Optional updated executive/technical summary reflecting exploitation outcome"),
+			"append_evidence": strParam("Optional verified exploitation PoC output / differential proof to append to the finding's evidence"),
+		}, "finding_id"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				FindingID      json.RawMessage `json:"finding_id"`
+				Severity       string          `json:"severity"`
+				Status         string          `json:"status"`
+				Name           string          `json:"name"`
+				VulnClass      string          `json:"vulnclass"`
+				Summary        string          `json:"summary"`
+				AppendEvidence string          `json:"append_evidence"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("invalid input JSON: " + err.Error()), nil
+			}
+			id := parseProfileID(a.FindingID)
+			if id <= 0 {
+				return actool.Errorf("valid finding_id is required"), nil
+			}
+			if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(i64s(id))}); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			updated, err := s.m.pg.UpdateFindingAfterExploitation(id, a.Severity, a.Status, a.Name, a.VulnClass, a.Summary, a.AppendEvidence)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			return jsonResult(map[string]any{
+				"ok":         true,
+				"finding_id": updated.ID,
+				"severity":   updated.Severity,
+				"status":     updated.Status,
+				"name":       updated.Name,
+				"vulnclass":  updated.VulnClass,
+			})
 		})
 }
 
@@ -1227,34 +1278,36 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v5_deception"
+	const flag = "proxy_pool_agent_tools_v6_exploit_loop"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
-	for _, t := range append(append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.arsenalTools()...), s.toolUpdateFindingReport()) {
+	for _, t := range append(append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.arsenalTools()...), s.toolUpdateFinding(), s.toolUpdateFindingReport()) {
 		schema, _ := json.Marshal(t.InputSchema())
 		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"})
 		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 	}
 	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool"}
+	arsenalSynergyKeys := []string{"search_patch_arsenal", "save_verified_exploit_to_patch_monitor", "update_finding", "update_finding_report", "detect_deception_and_honeypot"}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyFullKeys)
-		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"detect_deception_and_honeypot"})
+		_ = s.m.pg.AddAgentToToolBinding(agKey, arsenalSynergyKeys)
 	}
 	// Read-only / reporting agents also receive check_proxy_status & get_proxy_pool_status so they never guess proxy state.
 	for _, agKey := range []string{"reporter", "asset_mapper"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"check_proxy_status", "get_proxy_pool_status"})
 	}
 	patchTargetKeys := []string{
+		"search_patch_arsenal", "save_verified_exploit_to_patch_monitor",
 		"add_patch_watch_feed", "discover_affected_sites_for_notification",
-		"match_vuln_targets", "update_exploit_target_status", "update_finding_report",
+		"match_vuln_targets", "update_exploit_target_status", "update_finding", "update_finding_report",
 		"list_security_arsenal", "run_security_tool", "browser_inspect", "detect_deception_and_honeypot",
 	}
 	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, patchTargetKeys)
 	}
-	for _, agKey := range []string{"auto", "pentest", "patch_watch"} {
+	for _, agKey := range []string{"auto", "pentest", "patch_watch", "planner", "worker"} {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			if tmpl := agent.BuiltinPromptSeeds()[agKey]; tmpl != "" {
 				if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
@@ -1262,6 +1315,10 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 				}
 			}
 		}
+	}
+	// Ensure existing DB's Playwright browser MCP has --browser chromium and --ignore-https-errors
+	if s.m != nil {
+		s.m.syncBrowserMCPProxy()
 	}
 
 	// Ensure built-in Playwright browser MCP has root-safe flags, is enabled, and discovers its tools

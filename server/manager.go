@@ -960,7 +960,12 @@ func ensureBrowserMCPArgs(args []string, screenshotEnabled bool) []string {
 	if !has("--no-sandbox") {
 		out = append(out, "--no-sandbox")
 	}
-	if screenshotEnabled && !has("--ignore-https-errors") {
+	if !has("--browser") {
+		// Default @playwright/mcp looks for branded /opt/google/chrome/chrome unless
+		// --browser chromium is passed; Playwright installs headless Chromium on Linux.
+		out = append(out, "--browser", "chromium")
+	}
+	if !has("--ignore-https-errors") {
 		out = append(out, "--ignore-https-errors")
 	}
 	if screenshotEnabled && !has("--isolated") {

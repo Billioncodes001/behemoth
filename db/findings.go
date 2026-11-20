@@ -853,9 +853,66 @@ func (d *DB) SetFindingName(id int64, name string) (int64, error) {
 	return d.setFindingCol(id, "name", "name", name)
 }
 
-// SetFindingVulnClass updates one finding's 漏洞类别 (+ node payload sync).
+// SetFindingVulnClass updates one finding's vulnerability class (+ node payload sync).
 func (d *DB) SetFindingVulnClass(id int64, vulnclass string) (int64, error) {
 	return d.setFindingCol(id, "vulnclass", "vulnclass", vulnclass)
+}
+
+// UpdateFindingAfterExploitation updates a finding's severity, status, name, vulnclass,
+// summary, and/or appends newly verified exploitation PoC evidence, keeping any linked
+// exploration_nodes row synchronized. Accepts either standalone findings.id or node_id.
+func (d *DB) UpdateFindingAfterExploitation(idOrNodeID int64, severity, status, name, vulnclass, summary, appendEvidence string) (*DBFinding, error) {
+	fid, err := d.FindingIDByNodeID(idOrNodeID)
+	if err != nil || fid <= 0 {
+		fid = idOrNodeID
+	}
+	cur, err := d.GetFinding(fid)
+	if err != nil {
+		return nil, err
+	}
+	if cur == nil {
+		return nil, fmt.Errorf("finding #%d not found", idOrNodeID)
+	}
+	if sev := strings.ToLower(strings.TrimSpace(severity)); sev != "" {
+		if !ValidSeverity(sev) {
+			return nil, fmt.Errorf("invalid severity %q (expected critical, high, medium, or low)", severity)
+		}
+		if _, err := d.SetFindingSeverity(fid, sev); err != nil {
+			return nil, err
+		}
+	}
+	if st := strings.ToLower(strings.TrimSpace(status)); st != "" {
+		if _, err := d.SetFindingStatus(fid, st); err != nil {
+			return nil, err
+		}
+	}
+	if nm := strings.TrimSpace(name); nm != "" {
+		if _, err := d.SetFindingName(fid, nm); err != nil {
+			return nil, err
+		}
+	}
+	if vc := strings.TrimSpace(vulnclass); vc != "" {
+		if _, err := d.SetFindingVulnClass(fid, vc); err != nil {
+			return nil, err
+		}
+	}
+	if sm := strings.TrimSpace(summary); sm != "" {
+		if _, err := d.setFindingCol(fid, "summary", "summary", sm); err != nil {
+			return nil, err
+		}
+	}
+	if ev := strings.TrimSpace(appendEvidence); ev != "" {
+		combined := strings.TrimSpace(cur.Evidence)
+		if combined != "" {
+			combined = combined + "\n\n--- [Verified Exploitation Follow-Up] ---\n" + ev
+		} else {
+			combined = ev
+		}
+		if _, err := d.setFindingCol(fid, "evidence", "evidence", combined); err != nil {
+			return nil, err
+		}
+	}
+	return d.GetFinding(fid)
 }
 
 // FindingMeta is the standalone-row data (id, triage state, anchored assets) the

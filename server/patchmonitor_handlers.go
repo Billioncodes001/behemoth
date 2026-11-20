@@ -393,6 +393,8 @@ func (s *Server) launchPatchWatchAgentRun(profileID *int64, newVulns []patchmoni
 // and iOS Exploit Research as native agent tools callable by patch_watch, auto, pentest, and worker.
 func (s *Server) patchMonitorTools() []actool.CoreTool {
 	return []actool.CoreTool{
+		s.toolSearchPatchArsenal(),
+		s.toolSaveVerifiedExploitToPatchMonitor(),
 		s.toolGeneratePayload(),
 		s.toolCheckPatchFeeds(),
 		s.toolAddPatchWatchFeed(),
@@ -404,6 +406,109 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 		s.toolMultiEngineSearch(),
 		s.toolExploitSearch(),
 	}
+}
+
+func (s *Server) toolSearchPatchArsenal() actool.CoreTool {
+	return roTool("search_patch_arsenal",
+		"Search ARTEX Patch Monitor's existing vulnerabilities, auto-generated PoC exploits, and verified client-side payloads by CVE ID, library/technology name (e.g. 'jQuery', 'Bootstrap', 'PHP', 'WordPress', 'OpenSSH'), or vulnerability class ('XSS', 'SQLi', 'RCE', 'LFI', 'cookie_exfil'). ALWAYS call this FIRST when you detect an outdated library, CVE, or vulnerability class on a target so you can reuse existing exploits/payloads before building one from scratch!",
+		objSchema(map[string]any{
+			"query": strParam("CVE ID, technology/library name, or vulnerability class (e.g. 'jQuery', 'CVE-2020-11022', 'XSS', 'Bootstrap', 'SQLi')"),
+			"limit": map[string]any{"type": "integer", "description": "Max items to return (default 15)"},
+		}, "query"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.m == nil || s.m.pg == nil {
+				return actool.Errorf("database is not initialized"), nil
+			}
+			var a struct {
+				Query string `json:"query"`
+				Limit int    `json:"limit"`
+			}
+			_ = json.Unmarshal(in, &a)
+			gen := patchmonitor.NewExploitGenerator(s.m.pg.DB)
+			vulns, exploits, err := gen.SearchArsenal(a.Query, a.Limit)
+			if err != nil {
+				return actool.Errorf("search_patch_arsenal failed: " + err.Error()), nil
+			}
+			note := "Reuse any matching exploit/payload code directly against the target. If no ready PoC matches this exact version/sink, craft and verify a working PoC yourself, then persist it back via save_verified_exploit_to_patch_monitor!"
+			return jsonResult(map[string]any{
+				"query":             a.Query,
+				"matched_vulns":     len(vulns),
+				"matched_exploits":  len(exploits),
+				"vulnerabilities":   vulns,
+				"exploits_payloads": exploits,
+				"guidance":          note,
+			})
+		})
+}
+
+func (s *Server) toolSaveVerifiedExploitToPatchMonitor() actool.CoreTool {
+	return wrTool("save_verified_exploit_to_patch_monitor",
+		"Persist a newly synthesized and verified working PoC exploit or payload (along with its CVE / affected library / version metadata) into ARTEX Patch Monitor (`patch_vulnerabilities` + `generated_exploits` with status='verified_working') so future scans and agents can immediately reuse it.",
+		objSchema(map[string]any{
+			"title":             strParam("Vulnerability & PoC title (e.g. 'jQuery < 3.5.0 htmlPrefilter Self-Closing Tag XSS PoC')"),
+			"code":              strParam("Complete, self-contained, verified working PoC exploit or payload code"),
+			"language":          strParam("Code language: javascript | python | bash | http | html"),
+			"exploit_type":      strParam("Category: xss | sqli | rce | lfi | ssrf | auth_bypass | payload:cookie_exfil | verified_poc"),
+			"cve_id":            strParam("Optional CVE ID (e.g. 'CVE-2020-11022')"),
+			"severity":          strParam("Severity: critical | high | medium | low"),
+			"cvss_score":        map[string]any{"type": "number", "description": "Optional CVSS score (0.0 - 10.0)"},
+			"description":       strParam("Technical summary of root cause, sink/trigger conditions, and impact"),
+			"affected_software": strParam("Affected library, framework, or product (e.g. 'jQuery', 'Bootstrap', 'CodeIgniter')"),
+			"affected_versions": strParam("Affected version range (e.g. 'jQuery 1.2 - 3.4.1')"),
+			"patched_version":   strParam("Patched version (e.g. '3.5.0')"),
+			"verified_target":   strParam("Optional target URL/origin where this PoC was verified working"),
+			"verified_output":   strParam("Optional concise proof output from the live verification run"),
+		}, "title", "code"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.m == nil || s.m.pg == nil {
+				return actool.Errorf("database is not initialized"), nil
+			}
+			var a struct {
+				Title            string  `json:"title"`
+				Code             string  `json:"code"`
+				Language         string  `json:"language"`
+				ExploitType      string  `json:"exploit_type"`
+				CVEID            string  `json:"cve_id"`
+				Severity         string  `json:"severity"`
+				CVSSScore        float64 `json:"cvss_score"`
+				Description      string  `json:"description"`
+				AffectedSoftware string  `json:"affected_software"`
+				AffectedVersions string  `json:"affected_versions"`
+				PatchedVersion   string  `json:"patched_version"`
+				VerifiedTarget   string  `json:"verified_target"`
+				VerifiedOutput   string  `json:"verified_output"`
+			}
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("invalid input JSON: " + err.Error()), nil
+			}
+			gen := patchmonitor.NewExploitGenerator(s.m.pg.DB)
+			vulnID, expID, err := gen.SaveVerifiedExploit(patchmonitor.VerifiedExploitInput{
+				CVEID:            a.CVEID,
+				Title:            a.Title,
+				Description:      a.Description,
+				Severity:         a.Severity,
+				CVSSScore:        a.CVSSScore,
+				AffectedSoftware: a.AffectedSoftware,
+				AffectedVersions: a.AffectedVersions,
+				PatchedVersion:   a.PatchedVersion,
+				ExploitType:      a.ExploitType,
+				Language:         a.Language,
+				Code:             a.Code,
+				Confidence:       0.95,
+				VerifiedTarget:   a.VerifiedTarget,
+				VerifiedOutput:   a.VerifiedOutput,
+			})
+			if err != nil {
+				return actool.Errorf("failed to save verified exploit: " + err.Error()), nil
+			}
+			return jsonResult(map[string]any{
+				"ok":         true,
+				"vuln_id":    vulnID,
+				"exploit_id": expID,
+				"status":     "verified_working",
+				"message":    fmt.Sprintf("Saved verified working exploit #%d (vuln #%d) into Patch Monitor (/function/patch-monitor).", expID, vulnID),
+			})
+		})
 }
 
 func (s *Server) toolAddPatchWatchFeed() actool.CoreTool {

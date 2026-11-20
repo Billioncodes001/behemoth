@@ -124,3 +124,72 @@ func TestDynamicProxyEnvToolUpdatesMidTurn(t *testing.T) {
 		t.Fatalf("expected HTTP_PROXY injected after mid-turn activation, got env=%v", capturedEnv)
 	}
 }
+
+func TestAutoWholeWebsiteScanNudgesSpawnTaskAndPostFindingExploitation(t *testing.T) {
+	prompt := "Scan this entire website https://tax-database.oirs.ng and exploit all vulnerabilities"
+	bound := map[string]bool{
+		"Bash":                                  true,
+		"insert_assets":                         true,
+		"spawn_task":                            true,
+		"report_finding":                        true,
+		"search_patch_arsenal":                  true,
+		"save_verified_exploit_to_patch_monitor": true,
+		"update_finding":                        true,
+	}
+
+	toolTurn := func(id, name string) (llm.Message, llm.Message) {
+		return llm.Message{
+				Role: llm.RoleAssistant,
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(`{}`),
+				}},
+			}, llm.Message{
+				Role: llm.RoleUser,
+				Content: []llm.ContentBlock{{
+					Type: llm.BlockToolResult, ToolUseID: id, Content: []llm.ContentBlock{llm.TextBlock("ok")},
+				}},
+			}
+	}
+
+	t1a, t1u := toolTurn("c1", "Bash")
+	t2a, t2u := toolTurn("c2", "Bash")
+	t3a, t3u := toolTurn("c3", "Bash")
+	t4a, t4u := toolTurn("c4", "insert_assets")
+	t5a, t5u := toolTurn("c5", "report_finding")
+
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.TextBlock(prompt)}},
+		t1a, t1u, t2a, t2u, t3a, t3u, t4a, t4u, t5a, t5u,
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("## Summary\nFound 9 surface findings.")}},
+	}
+
+	// 1. Missing spawn_task on full-site scan -> nudges Create Engagement Task!
+	shouldNudge, nudge := IsPrematureActionTurnForAgent("auto", bound, msgs, prompt)
+	if !shouldNudge || !strings.Contains(nudge, "Create Engagement Task") {
+		t.Fatalf("expected Create Engagement Task nudge, got shouldNudge=%v msg=%q", shouldNudge, nudge)
+	}
+
+	// 2. After calling spawn_task, trying to stop right after report_finding -> nudges Mandatory Post-Discovery Exploitation Loop!
+	spA, spU := toolTurn("c6", "spawn_task")
+	msgs = append(msgs[:len(msgs)-1], spA, spU, llm.Message{
+		Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("## Summary\nTask created and 9 findings reported.")},
+	})
+	shouldNudge2, nudge2 := IsPrematureActionTurnForAgent("auto", bound, msgs, prompt)
+	if !shouldNudge2 || !strings.Contains(nudge2, "Mandatory Post-Discovery Exploitation") {
+		t.Fatalf("expected Mandatory Post-Discovery Exploitation nudge, got shouldNudge=%v msg=%q", shouldNudge2, nudge2)
+	}
+
+	// 3. Once search_patch_arsenal + live exploitation turns + update_finding/save_verified_exploit_to_patch_monitor complete -> clean stop!
+	arA, arU := toolTurn("c7", "search_patch_arsenal")
+	exA, exU := toolTurn("c8", "Bash")
+	upA, upU := toolTurn("c9", "update_finding")
+	svA, svU := toolTurn("c10", "save_verified_exploit_to_patch_monitor")
+	msgs = append(msgs[:len(msgs)-1], arA, arU, exA, exU, upA, upU, svA, svU, llm.Message{
+		Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("## Final Report\nAll findings exploited, severities escalated, and PoCs saved to Patch Monitor.")},
+	})
+	shouldNudge3, nudge3 := IsPrematureActionTurnForAgent("auto", bound, msgs, prompt)
+	if shouldNudge3 {
+		t.Fatalf("expected clean completion after exploitation loop, got unexpected nudge: %q", nudge3)
+	}
+}
+
