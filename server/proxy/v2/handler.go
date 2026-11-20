@@ -249,7 +249,13 @@ func (h *Handler) handleProxyActionBody(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]any{"ok": true, "status": "activated", "active_proxy_id": req.ID})
-	case "toggle", "deactivate":
+	case "deactivate":
+		if err := h.pool.DeactivateProxy(req.ID); err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"ok": true, "status": "deactivated"})
+	case "toggle":
 		if err := h.pool.ToggleProxyActive(req.ID); err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
 			return

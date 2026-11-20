@@ -119,7 +119,71 @@ func TestImportCSVAndJSONFormatsAndMultipartUpload(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Imported != 2 {
 		t.Fatalf("multipart upload result: err=%v out=%+v", err, out)
 	}
-	if stats := p.GetStats(); stats.Total != 5 || !p.GetConfig().Enabled {
-		t.Fatalf("expected 5 total proxies and pool enabled, got stats=%+v enabled=%v", stats, p.GetConfig().Enabled)
+	if stats := p.GetStats(); stats.Total != 5 || p.GetConfig().Enabled || stats.ActiveProxyID != "" {
+		t.Fatalf("expected 5 total proxies, pool disabled, and NO proxy auto-put in use on import, got stats=%+v enabled=%v", stats, p.GetConfig().Enabled)
 	}
 }
+
+func TestImportTenProxiesAndDisableNeverAutoJumpsToNextRow(t *testing.T) {
+	p := NewPool(nil)
+	tenProxies := "" +
+		"107.180.188.171:6602:u:p\n" +
+		"84.37.41.192:7384:u:p\n" +
+		"63.127.58.215:8433:u:p\n" +
+		"48.45.4.47:8768:u:p\n" +
+		"153.58.39.39:8504:u:p\n" +
+		"207.137.88.71:9816:u:p\n" +
+		"207.137.95.219:8172:u:p\n" +
+		"153.58.38.58:8779:u:p\n" +
+		"135.137.86.182:8903:u:p\n" +
+		"135.137.87.8:8473:u:p\n"
+
+	res, err := p.ImportProxies(tenProxies, ProxyTypeHTTP)
+	if err != nil || res.Imported != 10 {
+		t.Fatalf("expected 10 imported, got err=%v res=%+v", err, res)
+	}
+
+	// 1. Right after import, NO proxy is automatically "In Use" and Pool is NOT auto-enabled!
+	if stats := p.GetStats(); stats.ActiveProxyID != "" || p.GetConfig().Enabled {
+		t.Fatalf("expected ActiveProxyID='' and Enabled=false on import, got stats=%+v enabled=%v", stats, p.GetConfig().Enabled)
+	}
+
+	proxies := p.GetProxies()
+	row4ID := proxies[3].ID
+	row5ID := proxies[4].ID
+
+	// 2. User explicitly clicks "Use" on Row #4 -> ONLY Row #4 becomes In Use!
+	if err := p.ActivateProxy(row4ID); err != nil {
+		t.Fatalf("ActivateProxy: %v", err)
+	}
+	if stats := p.GetStats(); stats.ActiveProxyID != row4ID || !p.GetConfig().Enabled {
+		t.Fatalf("expected Row #4 (%s) in use, got stats=%+v", row4ID, stats)
+	}
+
+	// 3. User clicks "Disable" on Row #4 -> Row #4 becomes Disabled AND Row #5 is NOT auto-put In Use!
+	if err := p.ToggleProxyActive(row4ID); err != nil {
+		t.Fatalf("ToggleProxyActive: %v", err)
+	}
+	statsAfterDisable := p.GetStats()
+	if statsAfterDisable.ActiveProxyID != "" || p.GetConfig().Enabled {
+		t.Fatalf("clicking Disable must NEVER auto-put next row (%s) in use! got ActiveProxyID=%q enabled=%v",
+			row5ID, statsAfterDisable.ActiveProxyID, p.GetConfig().Enabled)
+	}
+
+	// 4. User clicks "Use" on Row #5, then clicks "Stop Using" (DeactivateProxy) -> Row #5 stays enabled (not disabled) and no proxy is In Use!
+	if err := p.ActivateProxy(row5ID); err != nil {
+		t.Fatalf("ActivateProxy row5: %v", err)
+	}
+	if err := p.DeactivateProxy(row5ID); err != nil {
+		t.Fatalf("DeactivateProxy row5: %v", err)
+	}
+	if stats := p.GetStats(); stats.ActiveProxyID != "" || p.GetConfig().Enabled {
+		t.Fatalf("expected no proxy in use after Stop Using, got stats=%+v", stats)
+	}
+	for _, px := range p.GetProxies() {
+		if px.ID == row5ID && (px.Status == StatusDisabled || !px.Active) {
+			t.Fatalf("expected Stop Using to leave Row #5 enabled in pool, got %+v", px)
+		}
+	}
+}
+

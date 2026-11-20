@@ -5344,7 +5344,7 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 	if s == nil || s.m == nil {
 		return
 	}
-	poolEnabled := cfg != nil && cfg.Enabled
+	poolEnabled := cfg != nil && cfg.Enabled && activeID != ""
 	entries := make([]proxyPoolEntry, 0, len(proxies))
 	if poolEnabled {
 		for _, px := range proxies {
@@ -5376,24 +5376,9 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 			})
 		}
 	}
-	effectiveActive := activeID
-	if !poolEnabled {
-		effectiveActive = ""
-	} else if effectiveActive == "" {
-		for _, e := range entries {
-			if e.Enabled && e.Health == "healthy" {
-				effectiveActive = e.ID
-				break
-			}
-		}
-		if effectiveActive == "" {
-			for _, e := range entries {
-				if e.Enabled {
-					effectiveActive = e.ID
-					break
-				}
-			}
-		}
+	effectiveActive := ""
+	if poolEnabled {
+		effectiveActive = activeID
 	}
 	_ = s.m.setProxyPoolEntries(entries, effectiveActive)
 	if cfg != nil {

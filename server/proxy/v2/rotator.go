@@ -95,6 +95,8 @@ func (p *Pool) GetConfig() *ProxyPoolConfig {
 }
 
 // UpdateConfig updates the pool configuration and persists it.
+// Turning Enabled ON selects an initial healthy/active proxy only if none is currently
+// selected; turning Enabled OFF clears activeID so no proxy remains marked "In Use".
 func (p *Pool) UpdateConfig(cfg *ProxyPoolConfig) error {
 	if cfg.RotationStrategyAlias != "" && cfg.RotationMode == "" {
 		cfg.RotationMode = cfg.RotationStrategyAlias
@@ -112,8 +114,35 @@ func (p *Pool) UpdateConfig(cfg *ProxyPoolConfig) error {
 	}
 	p.state.mu.Lock()
 	p.state.config = cfg
-	p.state.mu.Unlock()
+	if !cfg.Enabled {
+		p.state.activeID = ""
+	} else if p.state.activeID == "" {
+		p.state.activeID = p.pickBestHealthyOrActiveLocked()
+	}
+	defer p.state.mu.Unlock()
 	return p.persistLocked()
+}
+
+func (p *Pool) pickBestHealthyOrActiveLocked() string {
+	var bestHealthyID string
+	var bestLat time.Duration
+	for _, px := range p.state.proxies {
+		if px.Active && px.Status == StatusHealthy {
+			if bestHealthyID == "" || (px.Latency > 0 && (bestLat == 0 || px.Latency < bestLat)) {
+				bestHealthyID = px.ID
+				bestLat = px.Latency
+			}
+		}
+	}
+	if bestHealthyID != "" {
+		return bestHealthyID
+	}
+	for _, px := range p.state.proxies {
+		if px.Active && px.Status != StatusDisabled && px.Status != StatusUnhealthy {
+			return px.ID
+		}
+	}
+	return ""
 }
 
 // GetProxies returns all proxies (with masked URLs for API responses).
@@ -138,8 +167,12 @@ func (p *Pool) GetProxies() []ProxyInfo {
 func (p *Pool) GetStats() *PoolStats {
 	p.state.mu.RLock()
 	defer p.state.mu.RUnlock()
+	activeID := ""
+	if p.state.config != nil && p.state.config.Enabled {
+		activeID = p.state.activeID
+	}
 	stats := &PoolStats{
-		ActiveProxyID: p.state.activeID,
+		ActiveProxyID: activeID,
 	}
 	var latSum time.Duration
 	var latCount int
@@ -370,9 +403,6 @@ func (p *Pool) appendProxyNoPersistLocked(px ProxyInfo) {
 	}
 	px.UpdatedAt = now
 	p.state.proxies = append(p.state.proxies, px)
-	if p.state.activeID == "" && px.Active {
-		p.state.activeID = px.ID
-	}
 }
 
 // AddProxy adds a new proxy to the pool.
@@ -402,7 +432,11 @@ func (p *Pool) ActivateProxy(id string) error {
 		if p.state.proxies[i].ID == id {
 			p.state.proxies[i].Active = true
 			if p.state.proxies[i].Status == StatusDisabled {
-				p.state.proxies[i].Status = StatusUntested
+				if p.state.proxies[i].ResponseIP != "" {
+					p.state.proxies[i].Status = StatusHealthy
+				} else {
+					p.state.proxies[i].Status = StatusUntested
+				}
 			}
 			found = true
 			break
@@ -476,7 +510,21 @@ func (p *Pool) ClearFailedProxies() (int, error) {
 	return removed, p.persistLocked()
 }
 
-// ToggleProxyActive enables/disables a proxy by ID.
+// DeactivateProxy stops using a proxy as the active egress without marking it disabled,
+// so no other proxy in the table is automatically put "In Use".
+func (p *Pool) DeactivateProxy(id string) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	if id == "" || p.state.activeID == id {
+		p.state.activeID = ""
+		p.state.config.Enabled = false
+	}
+	return p.persistLocked()
+}
+
+// ToggleProxyActive enables/disables a single proxy by ID in the Web UI.
+// IMPORTANT: Disabling the currently "In Use" proxy clears activeID and disables pool
+// routing instead of automatically putting the next row in the table "In Use".
 func (p *Pool) ToggleProxyActive(id string) error {
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
@@ -485,8 +533,17 @@ func (p *Pool) ToggleProxyActive(id string) error {
 			p.state.proxies[i].Active = !p.state.proxies[i].Active
 			if !p.state.proxies[i].Active {
 				p.state.proxies[i].Status = StatusDisabled
+				p.state.proxies[i].InUse = false
+				if p.state.activeID == id {
+					p.state.activeID = ""
+					p.state.config.Enabled = false
+				}
 			} else if p.state.proxies[i].Status == StatusDisabled {
-				p.state.proxies[i].Status = StatusUntested
+				if p.state.proxies[i].ResponseIP != "" {
+					p.state.proxies[i].Status = StatusHealthy
+				} else {
+					p.state.proxies[i].Status = StatusUntested
+				}
 			}
 			return p.persistLocked()
 		}
@@ -494,9 +551,12 @@ func (p *Pool) ToggleProxyActive(id string) error {
 	return fmt.Errorf("proxy not found: %s", id)
 }
 
-// SetProxyActive explicitly enables or disables a single proxy by ID and automatically
-// rotates activeID if the currently active proxy was disabled.
-func (p *Pool) SetProxyActive(id string, active bool) error {
+// SetProxyActive explicitly enables or disables a single proxy by ID.
+// When autoFailover is true (used by AI agents quarantining a failing proxy mid-scan)
+// and the pool is enabled, disabling the active proxy fails over to another healthy proxy;
+// when autoFailover is false (manual UI action), it never auto-promotes another row.
+func (p *Pool) SetProxyActive(id string, active bool, autoFailover ...bool) error {
+	failover := len(autoFailover) > 0 && autoFailover[0]
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
 	for i := range p.state.proxies {
@@ -504,11 +564,24 @@ func (p *Pool) SetProxyActive(id string, active bool) error {
 			p.state.proxies[i].Active = active
 			if !active {
 				p.state.proxies[i].Status = StatusDisabled
+				p.state.proxies[i].InUse = false
 				if p.state.activeID == id {
-					p.state.activeID = ""
+					if failover && p.state.config != nil && p.state.config.Enabled {
+						p.state.activeID = p.pickBestHealthyOrActiveLocked()
+						if p.state.activeID == "" {
+							p.state.config.Enabled = false
+						}
+					} else {
+						p.state.activeID = ""
+						p.state.config.Enabled = false
+					}
 				}
 			} else if p.state.proxies[i].Status == StatusDisabled {
-				p.state.proxies[i].Status = StatusUntested
+				if p.state.proxies[i].ResponseIP != "" {
+					p.state.proxies[i].Status = StatusHealthy
+				} else {
+					p.state.proxies[i].Status = StatusUntested
+				}
 			}
 			return p.persistLocked()
 		}
@@ -538,8 +611,11 @@ func (p *Pool) ForceRotate(reason string) (*ProxyInfo, error) {
 }
 
 // persistLocked saves state. Caller must hold mutex.
+// IMPORTANT: Never auto-select a replacement activeID here when activeID is empty or
+// disabled — otherwise clicking "Disable" or importing proxies unexpectedly forces
+// the next proxy row into "In Use". Replacement selection happens ONLY when explicitly
+// enabling the pool (UpdateConfig), clicking "Use" (ActivateProxy), or rotating (ForceRotate).
 func (p *Pool) persistLocked() error {
-	// Ensure activeID points to a valid active proxy if any exist
 	if p.state.activeID != "" {
 		valid := false
 		for _, px := range p.state.proxies {
@@ -552,13 +628,8 @@ func (p *Pool) persistLocked() error {
 			p.state.activeID = ""
 		}
 	}
-	if p.state.activeID == "" {
-		for _, px := range p.state.proxies {
-			if px.Active && px.Status != StatusDisabled && px.Status != StatusUnhealthy {
-				p.state.activeID = px.ID
-				break
-			}
-		}
+	if p.state.config != nil && !p.state.config.Enabled {
+		p.state.activeID = ""
 	}
 	var err error
 	if p.store != nil {

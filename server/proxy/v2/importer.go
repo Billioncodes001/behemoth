@@ -297,10 +297,6 @@ func (p *Pool) addBatchProxies(parsed []*ProxyInfo, result *ImportResult) error 
 		p.appendProxyNoPersistLocked(*px)
 		result.Imported++
 	}
-	if result.Imported > 0 && !p.state.config.Enabled {
-		// Automatically enable the pool when proxies are imported so they take effect right away.
-		p.state.config.Enabled = true
-	}
 	err := p.persistLocked()
 	result.ActiveProxyID = p.state.activeID
 	p.state.mu.Unlock()

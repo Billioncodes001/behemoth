@@ -237,17 +237,27 @@ export default function ProxyPoolPage() {
   const handleActivate = async (id: string) => {
     try {
       await api.proxyV2.proxyAction(id, "activate");
-      toast.success("Active egress proxy updated");
+      toast.success("Proxy selected and now in use");
       await fetchData();
     } catch (e: any) {
       toast.error("Activate failed: " + (e?.message || String(e)));
     }
   };
 
-  const handleToggle = async (id: string) => {
+  const handleStopUsing = async (id: string) => {
+    try {
+      await api.proxyV2.proxyAction(id, "deactivate");
+      toast.success("Stopped using proxy — no proxy is currently in use");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Stop using failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleToggle = async (id: string, currentlyDisabled: boolean) => {
     try {
       await api.proxyV2.proxyAction(id, "toggle");
-      toast.success("Proxy enabled/disabled");
+      toast.success(currentlyDisabled ? "Proxy enabled in pool" : "Proxy disabled");
       await fetchData();
     } catch (e: any) {
       toast.error("Toggle failed: " + (e?.message || String(e)));
@@ -415,11 +425,19 @@ export default function ProxyPoolPage() {
         <TabsContent value="proxies">
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-3">
                 <CardTitle>Proxy List</CardTitle>
-                <Badge variant={poolEnabled ? "default" : "secondary"} className="text-xs">
-                  {poolEnabled ? "Pool Active" : "Pool Disabled"}
-                </Badge>
+                <div className="flex items-center gap-2 rounded-full border bg-muted/30 px-3 py-1">
+                  <Switch
+                    id="header-pool-switch"
+                    checked={poolEnabled && Boolean(stats.active_proxy_id)}
+                    disabled={savingConfig || (proxies.length === 0 && !poolEnabled)}
+                    onCheckedChange={(checked) => void handleTogglePoolEnabled(checked)}
+                  />
+                  <Label htmlFor="header-pool-switch" className="cursor-pointer text-xs font-medium">
+                    {poolEnabled && stats.active_proxy_id ? "Pool Active" : "Pool Disabled"}
+                  </Label>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -604,10 +622,29 @@ export default function ProxyPoolPage() {
                         <TableCell className="text-xs text-muted-foreground">{p.last_checked_at ? new Date(p.last_checked_at).toLocaleString() : "-"}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="ghost" onClick={() => handleActivate(p.id)} disabled={isActiveEgress && poolEnabled}>
-                              {isActiveEgress && poolEnabled ? "In Use" : "Use"}
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => handleToggle(p.id)}>
+                            {isActiveEgress && poolEnabled ? (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => handleStopUsing(p.id)}
+                                title="Click to stop using this proxy"
+                              >
+                                Stop Using
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleActivate(p.id)}
+                              >
+                                Use
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleToggle(p.id, p.status === "disabled" || p.active === false)}
+                            >
                               {p.status === "disabled" || p.active === false ? "Enable" : "Disable"}
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => handleTestOne(p.id)} disabled={testing === p.id} title="Test proxy">

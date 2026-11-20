@@ -40,18 +40,19 @@ func (p *Pool) TestProxy(id string) (*TestResult, error) {
 		country, city, _ = lookupGeoIP(originIP)
 	}
 
-	// Update proxy state
+	// Update proxy state (preserve manual Disabled status if the proxy was disabled!)
 	p.state.mu.Lock()
 	for i := range p.state.proxies {
 		if p.state.proxies[i].ID == id {
+			wasDisabled := !p.state.proxies[i].Active || p.state.proxies[i].Status == StatusDisabled
 			p.state.proxies[i].LastChecked = time.Now()
 			p.state.proxies[i].Latency = time.Duration(latencyMs) * time.Millisecond
 			p.state.proxies[i].LatencyMS = latencyMs
 			if success {
-				if p.state.proxies[i].Status != StatusDisabled {
+				if !wasDisabled {
 					p.state.proxies[i].Active = true
+					p.state.proxies[i].Status = StatusHealthy
 				}
-				p.state.proxies[i].Status = StatusHealthy
 				p.state.proxies[i].ConsecutiveFailures = 0
 				p.state.proxies[i].SuccessRate = p.state.proxies[i].SuccessRate*0.9 + 0.1 // EMA
 				p.state.proxies[i].ResponseIP = originIP
@@ -62,7 +63,9 @@ func (p *Pool) TestProxy(id string) (*TestResult, error) {
 					p.state.proxies[i].City = city
 				}
 			} else {
-				p.state.proxies[i].Status = StatusUnhealthy
+				if !wasDisabled {
+					p.state.proxies[i].Status = StatusUnhealthy
+				}
 				p.state.proxies[i].ConsecutiveFailures++
 				p.state.proxies[i].SuccessRate *= 0.9 // Decay
 			}
@@ -117,28 +120,21 @@ func (p *Pool) TestAllProxies(ctx context.Context) ([]TestResult, error) {
 	}
 	wg.Wait()
 
-	// Ensure activeID points to a verified healthy proxy (preferring lowest latency)
+	// Only auto-select or failover activeID when Pool Routing is already explicitly
+	// enabled AND an active proxy was previously in use (failed during testing).
+	// Importing or testing proxies when Pool is disabled (or when no proxy is in use)
+	// must NEVER automatically mark a proxy "In Use"!
 	p.state.mu.Lock()
-	activeHealthy := false
-	for _, px := range p.state.proxies {
-		if px.ID == p.state.activeID && px.Active && px.Status == StatusHealthy {
-			activeHealthy = true
-			break
-		}
-	}
-	if !activeHealthy {
-		var bestID string
-		var bestLat time.Duration
+	if p.state.config != nil && p.state.config.Enabled && p.state.activeID != "" {
+		activeHealthy := false
 		for _, px := range p.state.proxies {
-			if px.Active && px.Status == StatusHealthy {
-				if bestID == "" || (px.Latency > 0 && px.Latency < bestLat) {
-					bestID = px.ID
-					bestLat = px.Latency
-				}
+			if px.ID == p.state.activeID && px.Active && px.Status == StatusHealthy {
+				activeHealthy = true
+				break
 			}
 		}
-		if bestID != "" {
-			p.state.activeID = bestID
+		if !activeHealthy {
+			p.state.activeID = p.pickBestHealthyOrActiveLocked()
 		}
 	}
 	_ = p.persistLocked()

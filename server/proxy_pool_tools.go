@@ -88,14 +88,6 @@ func (s *Server) toolImportAndTestProxies() actool.CoreTool {
 				return actool.Errorf(fmt.Sprintf("proxy import failed: %v", err)), nil
 			}
 
-			cfg := ppV2.Pool.GetConfig()
-			cfg.Enabled = true
-			if rs := strings.ToLower(strings.TrimSpace(a.RotationStrategy)); rs == "round_robin" || rs == "random" || rs == "least_used" {
-				cfg.RotationMode = proxyv2.RotationStrategy(rs)
-				cfg.RotationStrategyAlias = cfg.RotationMode
-			}
-			_ = ppV2.Pool.UpdateConfig(cfg)
-
 			autoTest := true
 			if a.AutoTest != nil {
 				autoTest = *a.AutoTest
@@ -118,6 +110,14 @@ func (s *Server) toolImportAndTestProxies() actool.CoreTool {
 					removedDead, _ = ppV2.Pool.ClearFailedProxies()
 				}
 			}
+
+			cfg := ppV2.Pool.GetConfig()
+			cfg.Enabled = true
+			if rs := strings.ToLower(strings.TrimSpace(a.RotationStrategy)); rs == "round_robin" || rs == "random" || rs == "least_used" {
+				cfg.RotationMode = proxyv2.RotationStrategy(rs)
+				cfg.RotationStrategyAlias = cfg.RotationMode
+			}
+			_ = ppV2.Pool.UpdateConfig(cfg)
 
 			// Synchronously push updated v2 state into the core v1/forward-proxy engine so
 			// the very next Bash / WebFetch / scanner / browser tool call routes through it!
@@ -360,7 +360,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 					return actool.Errorf("proxy_id is required for action=" + act), nil
 				}
 				enableFlag := act == "enable_proxy"
-				if err := ppV2.Pool.SetProxyActive(strings.TrimSpace(a.ProxyID), enableFlag); err != nil {
+				if err := ppV2.Pool.SetProxyActive(strings.TrimSpace(a.ProxyID), enableFlag, true); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
 				actionOut = map[string]any{"action": act, "proxy_id": strings.TrimSpace(a.ProxyID), "active": enableFlag}
