@@ -19,6 +19,7 @@ import (
 )
 
 const basicAuthKey = "auth.http_basic"
+
 // Dynamic cookie name - set at startup via fingerprint package
 var basicAuthCookie = "artex_basic_auth" // will be overridden by InitializeDynamicNames()
 const basicAuthTTL = 12 * time.Hour

@@ -8,7 +8,7 @@ import (
 
 func TestRecipeRegistry_Load(t *testing.T) {
 	tmpDir := t.TempDir()
-	
+
 	recipeJSON := `{
 		"id": "test-recipe",
 		"name": "Test Recipe",
@@ -23,7 +23,7 @@ func TestRecipeRegistry_Load(t *testing.T) {
 		"requires": [],
 		"examples": []
 	}`
-	
+
 	if err := os.WriteFile(filepath.Join(tmpDir, "test.json"), []byte(recipeJSON), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestRecipeRegistry_Load(t *testing.T) {
 
 func TestRecipeRegistry_Get(t *testing.T) {
 	tmpDir := t.TempDir()
-	
+
 	recipeJSON := `{
 		"id": "get-test",
 		"name": "Get Test",
@@ -77,7 +77,7 @@ func TestRecipeRegistry_Get(t *testing.T) {
 func TestRecipeRegistry_GetNotFound(t *testing.T) {
 	reg := NewRecipeRegistry(t.TempDir())
 	reg.Load()
-	
+
 	_, ok := reg.Get("nonexistent")
 	if ok {
 		t.Error("Get() returned true for non-existent recipe")
@@ -86,10 +86,10 @@ func TestRecipeRegistry_GetNotFound(t *testing.T) {
 
 func TestRecipeRegistry_Search(t *testing.T) {
 	tmpDir := t.TempDir()
-	
+
 	r1 := `{"id": "nmap-scan", "name": "Nmap Port Scanner", "description": "Port scanning tool", "category": "recon", "version": "1.0.0", "author": "test", "tags": ["network", "scan"], "parameters": [], "risk_level": "low", "requires": [], "examples": []}`
 	r2 := `{"id": "sqlmap-inject", "name": "SQLMap Injection", "description": "SQL injection testing", "category": "exploit", "version": "1.0.0", "author": "test", "tags": ["sqli", "database"], "parameters": [], "risk_level": "high", "requires": [], "examples": []}`
-	
+
 	os.WriteFile(filepath.Join(tmpDir, "nmap-scan.json"), []byte(r1), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "sqlmap-inject.json"), []byte(r2), 0644)
 
@@ -100,7 +100,7 @@ func TestRecipeRegistry_Search(t *testing.T) {
 	if len(results) == 0 {
 		t.Error("Search('nmap') returned no results")
 	}
-	
+
 	results = reg.Search("sql")
 	if len(results) == 0 {
 		t.Error("Search('sql') returned no results")
@@ -109,16 +109,16 @@ func TestRecipeRegistry_Search(t *testing.T) {
 
 func TestRecipeRegistry_Categories(t *testing.T) {
 	tmpDir := t.TempDir()
-	
+
 	r1 := `{"id": "r1", "name": "R1", "description": "d", "category": "recon", "version": "1.0.0", "author": "t", "tags": [], "parameters": [], "risk_level": "low", "requires": [], "examples": []}`
 	r2 := `{"id": "r2", "name": "R2", "description": "d", "category": "exploit", "version": "1.0.0", "author": "t", "tags": [], "parameters": [], "risk_level": "high", "requires": [], "examples": []}`
-	
+
 	os.WriteFile(filepath.Join(tmpDir, "r1.json"), []byte(r1), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "r2.json"), []byte(r2), 0644)
 
 	reg := NewRecipeRegistry(tmpDir)
 	reg.Load()
-	
+
 	cats := reg.Categories()
 	hasRecon, hasExploit := false, false
 	for _, c := range cats {

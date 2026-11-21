@@ -20,7 +20,7 @@ func (s *Scraper) localScreenshot(ctx context.Context, targetURL string, fullPag
 			return chrome.TakeScreenshot(ctx, targetURL)
 		}
 	}
-	
+
 	// Fallback to basic HTTP (will return an error as real screenshots need a browser)
 	return "", fmt.Errorf("local screenshot requires Chrome/chromedp integration. Enable UseLocalChrome in config")
 }

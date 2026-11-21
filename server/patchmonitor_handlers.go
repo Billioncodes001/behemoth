@@ -63,7 +63,7 @@ func (s *Server) handlePatchMonitorVulns(w http.ResponseWriter, r *http.Request)
 		limit = 50
 	}
 
-	vulns, err := s.patchMon.GetVulnerabilities( status, limit)
+	vulns, err := s.patchMon.GetVulnerabilities(status, limit)
 	if err != nil {
 		http.Error(w, "failed to get vulnerabilities", http.StatusInternalServerError)
 		return
@@ -255,8 +255,8 @@ func (s *Server) handleGeneratePayload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Type    string          `json:"type"`    // "cc_skimmer", "cookie_exfil", "crypto_swap_dom", "crypto_swap_clipboard", "screen_exfil"
-		Config  json.RawMessage `json:"config"` // Type-specific config
+		Type   string          `json:"type"`   // "cc_skimmer", "cookie_exfil", "crypto_swap_dom", "crypto_swap_clipboard", "screen_exfil"
+		Config json.RawMessage `json:"config"` // Type-specific config
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -395,6 +395,7 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 	return []actool.CoreTool{
 		s.toolSearchPatchArsenal(),
 		s.toolSaveVerifiedExploitToPatchMonitor(),
+		s.toolSyncNucleiTemplates(),
 		s.toolGeneratePayload(),
 		s.toolCheckPatchFeeds(),
 		s.toolAddPatchWatchFeed(),
@@ -406,6 +407,29 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 		s.toolMultiEngineSearch(),
 		s.toolExploitSearch(),
 	}
+}
+
+// toolSyncNucleiTemplates regenerates the private nuclei template repository from
+// verified Patch Monitor exploits (self-improving scanner templates).
+func (s *Server) toolSyncNucleiTemplates() actool.CoreTool {
+	return wrTool("sync_nuclei_templates",
+		"Regenerate ARTEX's private nuclei template repository from verified Patch Monitor exploits (writes nuclei YAML templates to <data>/nuclei-templates/artex and prunes stale ones). Subsequent nuclei-scan runs automatically include these templates, making the scanner self-improving as more exploits are verified.",
+		objSchema(map[string]any{}),
+		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
+			if s.patchMon == nil {
+				return actool.Errorf("patch monitor is not initialized"), nil
+			}
+			changes, err := s.patchMon.SyncNucleiTemplates()
+			if err != nil {
+				return actool.Errorf(fmt.Sprintf("nuclei template sync failed: %v", err)), nil
+			}
+			return jsonResult(map[string]any{
+				"ok":            true,
+				"changes":       changes,
+				"templates_dir": s.patchMon.NucleiTemplatesDir(),
+				"auto_injected": s.customNucleiTemplateDir() != "",
+			})
+		})
 }
 
 func (s *Server) toolSearchPatchArsenal() actool.CoreTool {
@@ -637,13 +661,13 @@ func (s *Server) toolDiscoverAffectedSitesForNotification() actool.CoreTool {
 			}
 
 			resp := map[string]any{
-				"technology":                     tech,
-				"cve_or_issue":                   a.CVEOrIssue,
-				"search_query_used":              q,
-				"in_scope_matched_count":         len(inScopeMatched),
-				"notification_candidates_count":  len(candidates),
-				"notification_candidates":        candidates,
-				"responsible_disclosure_policy":  "Notification candidates are enrolled passively (status='notify_candidate') with security.txt contacts for responsible disclosure notification only — do NOT launch active exploit payloads against out-of-scope hosts.",
+				"technology":                    tech,
+				"cve_or_issue":                  a.CVEOrIssue,
+				"search_query_used":             q,
+				"in_scope_matched_count":        len(inScopeMatched),
+				"notification_candidates_count": len(candidates),
+				"notification_candidates":       candidates,
+				"responsible_disclosure_policy": "Notification candidates are enrolled passively (status='notify_candidate') with security.txt contacts for responsible disclosure notification only — do NOT launch active exploit payloads against out-of-scope hosts.",
 			}
 			if len(unconfiguredEngines) > 0 {
 				resp["api_key_suggestion"] = fmt.Sprintf("Tip: Configure %s in System -> Settings -> Network and tools to unlock deeper technology dorking and wider notification discovery.", strings.Join(unconfiguredEngines, ", "))
@@ -893,9 +917,9 @@ func (s *Server) toolMultiEngineSearch() actool.CoreTool {
 			missing := s.unconfiguredSearchEngines()
 			if len(missing) > 0 {
 				return jsonResult(map[string]any{
-					"search_result":           res,
-					"unconfigured_engines":    missing,
-					"api_key_recommendation":  fmt.Sprintf("Currently using free engines (%s). For deeper OSINT, Google dorking, and higher-recall security intelligence, suggest to the user that they can optionally add API keys for %s in System -> Settings -> Network and tools.", strings.Join(res.EnginesUsed, ", "), strings.Join(missing, ", ")),
+					"search_result":          res,
+					"unconfigured_engines":   missing,
+					"api_key_recommendation": fmt.Sprintf("Currently using free engines (%s). For deeper OSINT, Google dorking, and higher-recall security intelligence, suggest to the user that they can optionally add API keys for %s in System -> Settings -> Network and tools.", strings.Join(res.EnginesUsed, ", "), strings.Join(missing, ", ")),
 				})
 			}
 			return jsonResult(res)
@@ -926,5 +950,3 @@ func (s *Server) toolExploitSearch() actool.CoreTool {
 			return jsonResult(res)
 		})
 }
-
-

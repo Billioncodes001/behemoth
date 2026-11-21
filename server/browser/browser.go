@@ -24,27 +24,27 @@ const (
 
 // BrowserRequest is a request to perform a browser action.
 type BrowserRequest struct {
-	URL           string  `json:"url"`
-	Action        Action  `json:"action"`
-	FullPage      bool    `json:"full_page,omitempty"`
-	Width         int     `json:"width,omitempty"`
-	Height        int     `json:"height,omitempty"`
-	Timeout       time.Duration `json:"timeout,omitempty"`
-	WaitSelector  string  `json:"wait_selector,omitempty"` // CSS selector to wait for
-	UserAgent     string  `json:"user_agent,omitempty"`
+	URL          string        `json:"url"`
+	Action       Action        `json:"action"`
+	FullPage     bool          `json:"full_page,omitempty"`
+	Width        int           `json:"width,omitempty"`
+	Height       int           `json:"height,omitempty"`
+	Timeout      time.Duration `json:"timeout,omitempty"`
+	WaitSelector string        `json:"wait_selector,omitempty"` // CSS selector to wait for
+	UserAgent    string        `json:"user_agent,omitempty"`
 }
 
 // BrowserResult contains the result of a browser action.
 type BrowserResult struct {
-	Success    bool   `json:"success"`
-	URL        string `json:"url"`
-	Action     Action  `json:"action"`
-	Screenshot string `json:"screenshot_path,omitempty"` // Path or base64
-	Content    string `json:"content,omitempty"`         // Markdown content
-	Title      string `json:"title,omitempty"`
+	Success    bool          `json:"success"`
+	URL        string        `json:"url"`
+	Action     Action        `json:"action"`
+	Screenshot string        `json:"screenshot_path,omitempty"` // Path or base64
+	Content    string        `json:"content,omitempty"`         // Markdown content
+	Title      string        `json:"title,omitempty"`
 	Duration   time.Duration `json:"duration"`
-	Error      string `json:"error,omitempty"`
-	StatusCode int    `json:"status_code,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	StatusCode int           `json:"status_code,omitempty"`
 }
 
 // Browser is the main interface for browser automation.
@@ -86,10 +86,10 @@ type Config struct {
 // DefaultConfig returns sensible defaults for browser config.
 func DefaultConfig() *Config {
 	return &Config{
-		UseLocalChrome:  true,
-		ScreenshotDir:   "./screenshots",
-		DefaultTimeout:  60 * time.Second,
-		MaxContentSize:  10 * 1024 * 1024, // 10MB
+		UseLocalChrome: true,
+		ScreenshotDir:  "./screenshots",
+		DefaultTimeout: 60 * time.Second,
+		MaxContentSize: 10 * 1024 * 1024, // 10MB
 	}
 }
 

@@ -25,6 +25,7 @@ const ENGINE_LABELS: Record<SearchEngineType, string> = {
   google: "Google CSE",
   tavily: "Tavily AI",
   searxng: "SearXNG",
+  brave: "Brave",
 };
 
 export default function SearchPage() {

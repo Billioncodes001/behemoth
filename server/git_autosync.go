@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -9,18 +10,17 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"log"
 )
 
 type maintenanceState struct {
-	mu           sync.RWMutex
-	Updating     bool      `json:"updating"`
-	Phase        string    `json:"phase,omitempty"`
-	CurrentSHA   string    `json:"current_sha,omitempty"`
-	TargetSHA    string    `json:"target_sha,omitempty"`
-	StartedAt    time.Time `json:"started_at,omitempty"`
-	LastChecked  time.Time `json:"last_checked,omitempty"`
-	AutoSyncOn   bool      `json:"auto_sync_enabled"`
+	mu          sync.RWMutex
+	Updating    bool      `json:"updating"`
+	Phase       string    `json:"phase,omitempty"`
+	CurrentSHA  string    `json:"current_sha,omitempty"`
+	TargetSHA   string    `json:"target_sha,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	LastChecked time.Time `json:"last_checked,omitempty"`
+	AutoSyncOn  bool      `json:"auto_sync_enabled"`
 }
 
 var maintState = &maintenanceState{AutoSyncOn: true}

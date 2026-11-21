@@ -160,7 +160,6 @@ ON CONFLICT DO NOTHING`, srcID)
 	}
 }
 
-
 func scanSourceRow(rows *sql.Rows) (PatchSource, error) {
 	var s PatchSource
 	var lastHash, lastStatus sql.NullString

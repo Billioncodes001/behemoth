@@ -478,11 +478,21 @@ func (p *Pool) UpdateProxy(id string, updates map[string]interface{}) error {
 	defer p.state.mu.Unlock()
 	for i := range p.state.proxies {
 		if p.state.proxies[i].ID == id {
-			if v, ok := updates["name"]; ok { p.state.proxies[i].Name = v.(string) }
-			if v, ok := updates["notes"]; ok { p.state.proxies[i].Notes = v.(string) }
-			if v, ok := updates["active"]; ok { p.state.proxies[i].Active = v.(bool) }
-			if v, ok := updates["username"]; ok { p.state.proxies[i].Username = v.(string) }
-			if v, ok := updates["password"]; ok { p.state.proxies[i].Password = v.(string) }
+			if v, ok := updates["name"]; ok {
+				p.state.proxies[i].Name = v.(string)
+			}
+			if v, ok := updates["notes"]; ok {
+				p.state.proxies[i].Notes = v.(string)
+			}
+			if v, ok := updates["active"]; ok {
+				p.state.proxies[i].Active = v.(bool)
+			}
+			if v, ok := updates["username"]; ok {
+				p.state.proxies[i].Username = v.(string)
+			}
+			if v, ok := updates["password"]; ok {
+				p.state.proxies[i].Password = v.(string)
+			}
 			p.state.proxies[i].UpdatedAt = time.Now()
 			return p.persistLocked()
 		}
@@ -605,7 +615,9 @@ func (p *Pool) ForceRotate(reason string) (*ProxyInfo, error) {
 	p.state.logs = append(p.state.logs, SwitchLog{
 		At: time.Now(), From: oldID, To: selected.ID, Reason: reason,
 	})
-	if len(p.state.logs) > 100 { p.state.logs = p.state.logs[len(p.state.logs)-100:] }
+	if len(p.state.logs) > 100 {
+		p.state.logs = p.state.logs[len(p.state.logs)-100:]
+	}
 	cp := *selected
 	return &cp, p.persistLocked()
 }

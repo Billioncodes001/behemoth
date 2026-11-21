@@ -15,6 +15,7 @@ const ENGINES = [
   { type: "google" as SearchEngineType, label: "Google CSE", desc: "Google Programmable Search", key: true, keyLabel: "API Key + CSE ID", env: "SEARCH_GOOGLE_API_KEY" },
   { type: "duckduckgo" as SearchEngineType, label: "DuckDuckGo", desc: "Free HTML search (no key)", key: false, keyLabel: "", env: "" },
   { type: "tavily" as SearchEngineType, label: "Tavily AI", desc: "AI-powered search", key: true, keyLabel: "API Key", env: "SEARCH_TAVILY_API_KEY" },
+  { type: "brave" as SearchEngineType, label: "Brave", desc: "Brave Search API", key: true, keyLabel: "API Key", env: "SEARCH_BRAVE_API_KEY" },
   { type: "searxng" as SearchEngineType, label: "SearXNG", desc: "Self-hosted meta-search", key: true, keyLabel: "Instance URL", env: "SEARCH_SEARXNG_URL" },
   { type: "sploitus" as SearchEngineType, label: "Sploitus", desc: "Exploit database", key: false, keyLabel: "", env: "" },
 ];
@@ -100,7 +101,7 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
         {enginesStatus && (
           <div className="rounded-md bg-muted p-3">
             <div className="text-sm font-medium mb-2">Engine Status</div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
               {ENGINES.map(e => {
                 const active = avail(e.type);
                 return (

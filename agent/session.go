@@ -14,41 +14,41 @@ import (
 type SessionStatus string
 
 const (
-	SessionOnline   SessionStatus = "online"
-	SessionOffline  SessionStatus = "offline"
-	SessionDead     SessionStatus = "dead"
-	SessionActive   SessionStatus = "active"
+	SessionOnline  SessionStatus = "online"
+	SessionOffline SessionStatus = "offline"
+	SessionDead    SessionStatus = "dead"
+	SessionActive  SessionStatus = "active"
 )
 
 // HostInfo contains information about a target host.
 type HostInfo struct {
-	Hostname    string            `json:"hostname"`
-	IP          string            `json:"ip"`
-	OS          string            `json:"os,omitempty"`
-	OSVersion   string            `json:"os_version,omitempty"`
-	Arch        string            `json:"arch,omitempty"`
-	Domain      string            `json:"domain,omitempty"`
-	InternalIPs []string          `json:"internal_ips,omitempty"`
-	MAC         string            `json:"mac,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	Notes       string            `json:"notes,omitempty"`
+	Hostname    string   `json:"hostname"`
+	IP          string   `json:"ip"`
+	OS          string   `json:"os,omitempty"`
+	OSVersion   string   `json:"os_version,omitempty"`
+	Arch        string   `json:"arch,omitempty"`
+	Domain      string   `json:"domain,omitempty"`
+	InternalIPs []string `json:"internal_ips,omitempty"`
+	MAC         string   `json:"mac,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Notes       string   `json:"notes,omitempty"`
 }
 
 // Session represents an active connection to a target host.
 type Session struct {
-	ID           int64         `json:"id"`
-	HostID       int64         `json:"host_id"`
-	Host         *HostInfo     `json:"host"`
-	Status       SessionStatus `json:"status"`
-	User         string        `json:"user,omitempty"`
-	Process      string        `json:"process,omitempty"`
-	PID          int           `json:"pid,omitempty"`
-	FirstSeen    time.Time     `json:"first_seen"`
-	LastSeen     time.Time     `json:"last_seen"`
-	TaskID       *int64        `json:"task_id,omitempty"`
-	InternalIP   string        `json:"internal_ip,omitempty"`
-	NumCommands  int           `json:"num_commands"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
+	ID          int64             `json:"id"`
+	HostID      int64             `json:"host_id"`
+	Host        *HostInfo         `json:"host"`
+	Status      SessionStatus     `json:"status"`
+	User        string            `json:"user,omitempty"`
+	Process     string            `json:"process,omitempty"`
+	PID         int               `json:"pid,omitempty"`
+	FirstSeen   time.Time         `json:"first_seen"`
+	LastSeen    time.Time         `json:"last_seen"`
+	TaskID      *int64            `json:"task_id,omitempty"`
+	InternalIP  string            `json:"internal_ip,omitempty"`
+	NumCommands int               `json:"num_commands"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // SessionFilter defines filters for session queries.
@@ -67,39 +67,45 @@ type SessionStats struct {
 	Offline     int            `json:"offline"`
 	Dead        int            `json:"dead"`
 	UniqueHosts int            `json:"unique_hosts"`
-	ByOS        map[string]int  `json:"by_os"`
+	ByOS        map[string]int `json:"by_os"`
 }
 
 // ---------- Manager ----------
 
 // Manager manages hosts and sessions.
 type Manager struct {
-	mu       sync.RWMutex
-	hosts    map[int64]*HostInfo
-	sessions map[int64]*Session
+	mu         sync.RWMutex
+	hosts      map[int64]*HostInfo
+	sessions   map[int64]*Session
 	nextHostID int64
 	nextSessID int64
-	config   ManagerConfig
+	config     ManagerConfig
 }
 
 // ManagerConfig holds manager configuration.
 type ManagerConfig struct {
-	MaxHosts    int `json:"max_hosts"`
-	MaxSessions int `json:"max_sessions"`
+	MaxHosts     int           `json:"max_hosts"`
+	MaxSessions  int           `json:"max_sessions"`
 	StaleTimeout time.Duration `json:"stale_timeout"`
 }
 
 // NewManager creates a new session manager.
 func NewManager(config ManagerConfig) *Manager {
-	if config.MaxHosts == 0 { config.MaxHosts = 1000 }
-	if config.MaxSessions == 0 { config.MaxSessions = 5000 }
-	if config.StaleTimeout == 0 { config.StaleTimeout = 30 * time.Minute }
+	if config.MaxHosts == 0 {
+		config.MaxHosts = 1000
+	}
+	if config.MaxSessions == 0 {
+		config.MaxSessions = 5000
+	}
+	if config.StaleTimeout == 0 {
+		config.StaleTimeout = 30 * time.Minute
+	}
 	return &Manager{
-		hosts:     make(map[int64]*HostInfo),
-		sessions:  make(map[int64]*Session),
+		hosts:      make(map[int64]*HostInfo),
+		sessions:   make(map[int64]*Session),
 		nextHostID: 1,
 		nextSessID: 1,
-		config:    config,
+		config:     config,
 	}
 }
 
@@ -174,12 +180,20 @@ func (m *Manager) GetSessions(filter SessionFilter) []*Session {
 
 	var results []*Session
 	for _, s := range m.sessions {
-		if filter.Status != "" && s.Status != filter.Status { continue }
-		if filter.Hostname != "" && s.Host != nil && s.Host.Hostname != filter.Hostname { continue }
-		if filter.IP != "" && s.Host != nil && s.Host.IP != filter.IP { continue }
+		if filter.Status != "" && s.Status != filter.Status {
+			continue
+		}
+		if filter.Hostname != "" && s.Host != nil && s.Host.Hostname != filter.Hostname {
+			continue
+		}
+		if filter.IP != "" && s.Host != nil && s.Host.IP != filter.IP {
+			continue
+		}
 
 		results = append(results, s)
-		if filter.Limit > 0 && len(results) >= filter.Limit { break }
+		if filter.Limit > 0 && len(results) >= filter.Limit {
+			break
+		}
 	}
 	return results
 }
@@ -189,7 +203,9 @@ func (m *Manager) UpdateSessionHeartbeat(id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sess, ok := m.sessions[id]
-	if !ok { return errSessionNotFound }
+	if !ok {
+		return errSessionNotFound
+	}
 	sess.LastSeen = time.Now()
 	sess.NumCommands++
 	return nil
@@ -200,7 +216,9 @@ func (m *Manager) SetSessionStatus(id int64, status SessionStatus) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sess, ok := m.sessions[id]
-	if !ok { return errSessionNotFound }
+	if !ok {
+		return errSessionNotFound
+	}
 	sess.Status = status
 	return nil
 }
@@ -237,13 +255,18 @@ func (m *Manager) Stats() SessionStats {
 
 	for _, s := range m.sessions {
 		switch s.Status {
-		case SessionOnline: stats.Online++
-		case SessionOffline: stats.Offline++
-		case SessionDead: stats.Dead++
+		case SessionOnline:
+			stats.Online++
+		case SessionOffline:
+			stats.Offline++
+		case SessionDead:
+			stats.Dead++
 		}
 		if s.Host != nil {
 			hosts[s.Host.IP] = true
-			if s.Host.OS != "" { stats.ByOS[s.Host.OS]++ }
+			if s.Host.OS != "" {
+				stats.ByOS[s.Host.OS]++
+			}
 		}
 	}
 	stats.UniqueHosts = len(hosts)
@@ -255,13 +278,15 @@ func (m *Manager) GetAllHosts() map[int64]*HostInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make(map[int64]*HostInfo, len(m.hosts))
-	for k, v := range m.hosts { result[k] = v }
+	for k, v := range m.hosts {
+		result[k] = v
+	}
 	return result
 }
 
 // ---------- Errors ----------
 var (
-	errMaxSessions   = fmt.Errorf("session limit reached")
-	errHostNotFound  = fmt.Errorf("host not found")
+	errMaxSessions     = fmt.Errorf("session limit reached")
+	errHostNotFound    = fmt.Errorf("host not found")
 	errSessionNotFound = fmt.Errorf("session not found")
 )

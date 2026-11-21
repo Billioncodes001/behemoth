@@ -203,8 +203,8 @@ func proxyEnv(proxyAddr, caCert string) []string {
 		"HTTP_PROXY=" + proxyAddr, "HTTPS_PROXY=" + proxyAddr,
 		"http_proxy=" + proxyAddr, "https_proxy=" + proxyAddr,
 		"ALL_PROXY=" + proxyAddr, "all_proxy=" + proxyAddr, // socks5 egress: curl reads only this
-		"NO_PROXY=" + noProxy, "no_proxy=" + noProxy,       // internal/loopback traffic bypasses proxy
-		"NODE_USE_ENV_PROXY=1",                             // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
+		"NO_PROXY=" + noProxy, "no_proxy=" + noProxy, // internal/loopback traffic bypasses proxy
+		"NODE_USE_ENV_PROXY=1", // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
 	}
 	if caCert != "" {
 		env = append(env,
@@ -280,7 +280,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir)
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + needReportNote
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:

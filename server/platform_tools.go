@@ -359,14 +359,14 @@ func (s *Server) toolUpdateMCP() actool.CoreTool {
 }
 
 var immutableHostSafetyRuleNames = map[string]bool{
-	"[Built-in] Format disk mkfs":                  true,
-	"[Built-in] Overwrite disk device dd":          true,
-	"[Built-in] Fork bomb":                         true,
-	"[Built-in] Shutdown / Reboot":                 true,
-	"[Built-in] Kill all processes":                true,
-	"[Built-in] Disk wipe shred / wipe":            true,
-	"[Built-in] Flush firewall rules":              true,
-	"[Built-in] Destructive system commands":       true,
+	"[Built-in] Format disk mkfs":                   true,
+	"[Built-in] Overwrite disk device dd":           true,
+	"[Built-in] Fork bomb":                          true,
+	"[Built-in] Shutdown / Reboot":                  true,
+	"[Built-in] Kill all processes":                 true,
+	"[Built-in] Disk wipe shred / wipe":             true,
+	"[Built-in] Flush firewall rules":               true,
+	"[Built-in] Destructive system commands":        true,
 	"[Built-in] Delete critical system directories": true,
 }
 

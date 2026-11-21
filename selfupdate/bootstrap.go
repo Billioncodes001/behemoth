@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // smokeEnv 让被冒烟测试拉起的子进程直接跳过 Bootstrap。
@@ -174,11 +175,25 @@ func smokeTest(bin string) error {
 	if err != nil {
 		snippet := strings.TrimSpace(string(out))
 		if len(snippet) > 300 {
-			snippet = snippet[:300] + "…"
+			snippet = clipUTF8(snippet, 300) + "…"
 		}
 		return fmt.Errorf("smoke test failed: %v: %s", err, snippet)
 	}
 	return nil
+}
+
+// clipUTF8 cuts s to at most max bytes without splitting a rune, so a compiler
+// crash dump in a multi-byte encoding still survives truncation as valid text.
+// Cutting a rune in half produced replacement characters in the user-facing
+// smoke-test failure message.
+func clipUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 func swap(p Paths) error {

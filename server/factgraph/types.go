@@ -10,13 +10,13 @@ import (
 type FactKind string
 
 const (
-	FactHost     FactKind = "host"
-	FactService  FactKind = "service"
-	FactCred     FactKind = "credential"
-	FactVuln     FactKind = "vulnerability"
-	FactLoot     FactKind = "loot"
-	FactFlag     FactKind = "flag"
-	FactNote     FactKind = "note"
+	FactHost    FactKind = "host"
+	FactService FactKind = "service"
+	FactCred    FactKind = "credential"
+	FactVuln    FactKind = "vulnerability"
+	FactLoot    FactKind = "loot"
+	FactFlag    FactKind = "flag"
+	FactNote    FactKind = "note"
 )
 
 // AllFactKinds returns all valid fact kinds.
@@ -26,33 +26,33 @@ func AllFactKinds() []FactKind {
 
 // Fact represents a piece of intelligence gathered during operations.
 type Fact struct {
-	ID          string                 `json:"id"`
-	Kind        FactKind               `json:"kind"`
-	TaskID      string                 `json:"task_id,omitempty"`
-	SessionID   string                 `json:"session_id,omitempty"`
-	
+	ID        string   `json:"id"`
+	Kind      FactKind `json:"kind"`
+	TaskID    string   `json:"task_id,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+
 	// Core data
-	Title       string                 `json:"title"`
-	Content     string                 `json:"content"`
-	Metadata    map[string]string      `json:"metadata,omitempty"`
-	Tags        []string               `json:"tags,omitempty"`
-	
+	Title    string            `json:"title"`
+	Content  string            `json:"content"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+	Tags     []string          `json:"tags,omitempty"`
+
 	// Relationships
-	SourceIDs   []string               `json:"source_ids,omitempty"`   // Facts that led to this one
-	DerivedIDs  []string               `json:"derived_ids,omitempty"` // Facts derived from this one
-	
+	SourceIDs  []string `json:"source_ids,omitempty"`  // Facts that led to this one
+	DerivedIDs []string `json:"derived_ids,omitempty"` // Facts derived from this one
+
 	// Confidence & Status
-	Confidence  float64                `json:"confidence"` // 0.0 to 1.0
-	Verified    bool                   `json:"verified"`
-	Active      bool                   `json:"active"`
-	
+	Confidence float64 `json:"confidence"` // 0.0 to 1.0
+	Verified   bool    `json:"verified"`
+	Active     bool    `json:"active"`
+
 	// Timestamps
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
-	
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
 	// Provenance
-	Agent       string                 `json:"agent,omitempty"`    // Agent that found this
-	Method      string                 `json:"method,omitempty"`   // How it was found
+	Agent  string `json:"agent,omitempty"`  // Agent that found this
+	Method string `json:"method,omitempty"` // How it was found
 }
 
 // NewFact creates a new fact with defaults.
@@ -87,7 +87,7 @@ func HostFact(ip, hostname string, ports []string) *Fact {
 
 // ServiceFact creates a service fact.
 func ServiceFact(host, port, protocol, name string) *Fact {
-	f := NewFact(FactService, fmt.Sprintf("%s:%s/%s", host, port, protocol), 
+	f := NewFact(FactService, fmt.Sprintf("%s:%s/%s", host, port, protocol),
 		fmt.Sprintf("Service: %s on %s:%s", name, host, port))
 	f.Metadata["host"] = host
 	f.Metadata["port"] = port
@@ -98,7 +98,7 @@ func ServiceFact(host, port, protocol, name string) *Fact {
 
 // CredFact creates a credential fact.
 func CredFact(username, password, service string) *Fact {
-	f := NewFact(FactCred, 
+	f := NewFact(FactCred,
 		fmt.Sprintf("%s@%s", username, service),
 		fmt.Sprintf("Credential: %s:%s on %s", username, maskString(password), service))
 	f.Metadata["username"] = username

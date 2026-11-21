@@ -100,9 +100,17 @@ type Monitor struct {
 	llmProfileID       *int64
 	lastConversationID int64
 	lastScanAt         *time.Time
+	nucleiTemplatesDir string
 	onAgentWatch       func(profileID *int64, newVulns []Vulnerability, sourcesChecked int) int64
 	stopCh             chan struct{}
 	wg                 sync.WaitGroup
+}
+
+// NucleiTemplatesDir returns the configured private nuclei template export dir.
+func (m *Monitor) NucleiTemplatesDir() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.nucleiTemplatesDir
 }
 
 // SetProxyProvider configures an optional dynamic proxy URL provider so outbound
@@ -201,5 +209,3 @@ func (m *Monitor) StatusSnapshot() map[string]interface{} {
 		"checked_at":           time.Now(),
 	}
 }
-
-

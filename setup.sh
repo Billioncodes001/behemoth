@@ -55,7 +55,8 @@ install_system_deps() {
     build-essential pkg-config openssl ufw nginx certbot python3-certbot-nginx \
     postgresql postgresql-contrib \
     python3 python3-pip python3-venv \
-    nmap sqlmap dnsutils whois netcat-openbsd socat ripgrep || true
+    nmap sqlmap dnsutils whois netcat-openbsd socat ripgrep \
+    tesseract-ocr || true
 
   apt-get install -y -qq \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
@@ -133,10 +134,10 @@ install_security_arsenal() {
   if command -v apt-get >/dev/null 2>&1 && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y -qq 2>/dev/null || true
-    for pkg in nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep jq python3-pip python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2; do
+    for pkg in nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-pip python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2; do
       apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
     done
-    python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets >/dev/null 2>&1 || true
+    python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets impacket bloodhound semgrep awscli >/dev/null 2>&1 || true
   fi
 
   install_gh_release_tool "projectdiscovery/nuclei" "nuclei" "nuclei"
@@ -148,6 +149,9 @@ install_security_arsenal() {
   install_gh_release_tool "projectdiscovery/dnsx" "dnsx" "dnsx"
   install_gh_release_tool "ffuf/ffuf" "ffuf" "ffuf"
   install_gh_release_tool "OJ/gobuster" "gobuster" "gobuster"
+  install_gh_release_tool "aquasecurity/trivy" "trivy" "trivy"
+  install_gh_release_tool "anchore/grype" "grype" "grype"
+  install_gh_release_tool "RustScan/rustscan" "rustscan" "rustscan"
 
   if command -v nuclei >/dev/null 2>&1; then
     nuclei -update-templates -silent >/dev/null 2>&1 &

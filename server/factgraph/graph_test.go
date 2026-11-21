@@ -6,7 +6,7 @@ import (
 
 func TestNewFact(t *testing.T) {
 	f := NewFact(FactHost, "192.168.1.1", "Test host")
-	
+
 	if f.ID == "" {
 		t.Error("Fact ID is empty")
 	}
@@ -26,7 +26,7 @@ func TestNewFact(t *testing.T) {
 
 func TestHostFact(t *testing.T) {
 	f := HostFact("10.0.0.1", "webserver.local", []string{"80", "443"})
-	
+
 	if f.Kind != FactHost {
 		t.Errorf("Kind = %s, want host", f.Kind)
 	}
@@ -40,7 +40,7 @@ func TestHostFact(t *testing.T) {
 
 func TestServiceFact(t *testing.T) {
 	f := ServiceFact("10.0.0.1", "80", "tcp", "http")
-	
+
 	if f.Kind != FactService {
 		t.Errorf("Kind = %s, want service", f.Kind)
 	}
@@ -51,7 +51,7 @@ func TestServiceFact(t *testing.T) {
 
 func TestCredFact(t *testing.T) {
 	f := CredFact("admin", "password123", "ssh")
-	
+
 	if f.Kind != FactCred {
 		t.Errorf("Kind = %s, want credential", f.Kind)
 	}
@@ -66,7 +66,7 @@ func TestCredFact(t *testing.T) {
 
 func TestVulnFact(t *testing.T) {
 	f := VulnFact("SQL Injection", "high", "SQLi in login form", "CVE-2024-1234")
-	
+
 	if f.Kind != FactVuln {
 		t.Errorf("Kind = %s, want vulnerability", f.Kind)
 	}
@@ -80,7 +80,7 @@ func TestVulnFact(t *testing.T) {
 
 func TestFlagFact(t *testing.T) {
 	f := FlagFact("CTF{test_flag}", "Web Challenge", "web")
-	
+
 	if f.Kind != FactFlag {
 		t.Errorf("Kind = %s, want flag", f.Kind)
 	}
@@ -95,13 +95,13 @@ func TestFlagFact(t *testing.T) {
 func TestGraph_AddAndGet(t *testing.T) {
 	g := NewGraph()
 	f := NewFact(FactHost, "192.168.1.1", "Target server")
-	
+
 	g.Add(f)
-	
+
 	if g.Count() != 1 {
 		t.Errorf("Count() = %d, want 1", g.Count())
 	}
-	
+
 	retrieved, ok := g.Get(f.ID)
 	if !ok {
 		t.Fatal("Get() returned false for existing fact")
@@ -115,9 +115,9 @@ func TestGraph_Remove(t *testing.T) {
 	g := NewGraph()
 	f := NewFact(FactHost, "192.168.1.1", "Target")
 	g.Add(f)
-	
+
 	g.Remove(f.ID)
-	
+
 	if g.Count() != 0 {
 		t.Errorf("Count() after remove = %d, want 0", g.Count())
 	}
@@ -131,7 +131,7 @@ func TestGraph_Update(t *testing.T) {
 	g := NewGraph()
 	f := NewFact(FactHost, "192.168.1.1", "Original")
 	g.Add(f)
-	
+
 	err := g.Update(f.ID, func(fact *Fact) {
 		fact.Title = "Updated Title"
 		fact.Confidence = 0.9
@@ -139,7 +139,7 @@ func TestGraph_Update(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	
+
 	updated, _ := g.Get(f.ID)
 	if updated.Title != "Updated Title" {
 		t.Errorf("Title after update = %s, want 'Updated Title'", updated.Title)
@@ -153,15 +153,15 @@ func TestGraph_Link(t *testing.T) {
 	g := NewGraph()
 	host := HostFact("10.0.0.1", "target", []string{"80"})
 	svc := ServiceFact("10.0.0.1", "80", "tcp", "http")
-	
+
 	g.Add(host)
 	g.Add(svc)
-	
+
 	err := g.Link(host.ID, svc.ID)
 	if err != nil {
 		t.Fatalf("Link() error = %v", err)
 	}
-	
+
 	// Check derived IDs
 	hostUpdated, _ := g.Get(host.ID)
 	found := false
@@ -181,12 +181,12 @@ func TestGraph_Search(t *testing.T) {
 	g.Add(NewFact(FactHost, "192.168.1.1", "Web server"))
 	g.Add(NewFact(FactVuln, "XSS", "Cross-site scripting"))
 	g.Add(NewFact(FactService, "HTTP/80", "Apache web server"))
-	
+
 	results := g.Search("web")
 	if len(results) == 0 {
 		t.Error("Search('web') should return results")
 	}
-	
+
 	results = g.Search("nonexistent")
 	if len(results) > 0 {
 		t.Error("Search('nonexistent') should return no results")
@@ -198,7 +198,7 @@ func TestGraph_Stats(t *testing.T) {
 	g.Add(NewFact(FactHost, "10.0.0.1", "Host"))
 	g.Add(NewFact(FactService, "80/tcp", "HTTP"))
 	g.Add(NewFact(FactVuln, "XSS", "XSS vuln"))
-	
+
 	stats := g.Stats()
 	if stats["total"] != 3 {
 		t.Errorf("Stats[total] = %d, want 3", stats["total"])
@@ -213,12 +213,12 @@ func TestGraph_ByKind(t *testing.T) {
 	g.Add(NewFact(FactHost, "10.0.0.1", "H1"))
 	g.Add(NewFact(FactHost, "10.0.0.2", "H2"))
 	g.Add(NewFact(FactVuln, "XSS", "XSS"))
-	
+
 	hosts := g.ByKind(FactHost)
 	if len(hosts) != 2 {
 		t.Errorf("ByKind(host) = %d, want 2", len(hosts))
 	}
-	
+
 	vulns := g.ByKind(FactVuln)
 	if len(vulns) != 1 {
 		t.Errorf("ByKind(vulnerability) = %d, want 1", len(vulns))

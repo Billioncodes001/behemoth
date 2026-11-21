@@ -33,15 +33,15 @@ func (s *SearXNGSearchEngine) IsAvailable() bool { return s.enabled && s.instanc
 
 // searxngResponse is the JSON response from SearXNG API.
 type searxngResponse struct {
-	Results    []searxngResult `json:"results"`
-	NumberResults int           `json:"number_of_results"`
+	Results       []searxngResult `json:"results"`
+	NumberResults int             `json:"number_of_results"`
 }
 
 type searxngResult struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Content string `json:"content"`
-	Engine  string `json:"engine"`
+	Title   string  `json:"title"`
+	URL     string  `json:"url"`
+	Content string  `json:"content"`
+	Engine  string  `json:"engine"`
 	Score   float64 `json:"score"`
 }
 

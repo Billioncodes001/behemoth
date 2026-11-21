@@ -874,6 +874,42 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- =====================================================================
+-- H. 战利品文件库 (artifacts)
+-- Agent 通过 save_artifact 保存的 dump / 文本 / 图片 / 归档；按企业/任务/资产
+-- 归属，Assets 页面「Files」标签展示与下载。rel_path 是 <dataDir>/artifacts
+-- 下的相对路径，唯一。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS artifacts (
+    id           BIGSERIAL PRIMARY KEY,
+    company_id   BIGINT REFERENCES companies(id) ON DELETE SET NULL,
+    task_id      BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    asset_id     BIGINT REFERENCES assets(id) ON DELETE SET NULL,
+    name         TEXT NOT NULL,
+    filename     TEXT NOT NULL DEFAULT '',
+    rel_path     TEXT NOT NULL UNIQUE,
+    kind         TEXT NOT NULL DEFAULT 'other'
+                 CHECK (kind IN ('text','image','dump','archive','binary','other')),
+    mime         TEXT NOT NULL DEFAULT '',
+    size         BIGINT NOT NULL DEFAULT 0,
+    sha256       TEXT NOT NULL DEFAULT '',
+    source_url   TEXT NOT NULL DEFAULT '',
+    source_tool  TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    extra        JSONB NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_company ON artifacts(company_id) WHERE company_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_artifacts_task    ON artifacts(task_id)    WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_artifacts_asset   ON artifacts(asset_id)   WHERE asset_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_artifacts_kind    ON artifacts(kind);
+CREATE INDEX IF NOT EXISTS idx_artifacts_created ON artifacts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artifacts_sha     ON artifacts(sha256);
+DROP TRIGGER IF EXISTS trg_artifacts_upd ON artifacts;
+CREATE TRIGGER trg_artifacts_upd BEFORE UPDATE ON artifacts
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 -- Allow legacy MCP SSE servers on databases created before SSE support.
 ALTER TABLE mcp_servers DROP CONSTRAINT IF EXISTS mcp_servers_transport_check;
 ALTER TABLE mcp_servers ADD CONSTRAINT mcp_servers_transport_check
@@ -1792,3 +1828,37 @@ CREATE TABLE IF NOT EXISTS exploit_test_results (
 );
 CREATE INDEX IF NOT EXISTS idx_test_results_exploit ON exploit_test_results(exploit_id);
 CREATE INDEX IF NOT EXISTS idx_test_results_target ON exploit_test_results(target_id);
+
+-- =====================================================================
+-- N. Agent capability requests (report_need)
+-- Agents call report_need the moment they realize the platform lacks a
+-- tool/capability/integration/infra/data source; the requests land in the
+-- operator's inbox (System → Agent Requests, alerts bell in the top bar)
+-- and are queued for a future update. task_id is best-effort attribution
+-- (0/NULL for chat sessions), agent_key identifies the reporting role.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS agent_requests (
+    id          BIGSERIAL PRIMARY KEY,
+    agent_key   TEXT NOT NULL DEFAULT '',
+    task_id     BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
+    session_id  TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'capability'
+                CHECK (kind IN ('tool','capability','integration','infra','data','other')),
+    urgency     TEXT NOT NULL DEFAULT 'normal'
+                CHECK (urgency IN ('low','normal','high')),
+    title       TEXT NOT NULL,
+    details     TEXT NOT NULL DEFAULT '',
+    context     TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'new'
+                CHECK (status IN ('new','acknowledged','resolved','dismissed')),
+    extra       JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_requests_status  ON agent_requests(status);
+CREATE INDEX IF NOT EXISTS idx_agent_requests_task    ON agent_requests(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_requests_agent   ON agent_requests(agent_key);
+CREATE INDEX IF NOT EXISTS idx_agent_requests_created ON agent_requests(created_at DESC);
+DROP TRIGGER IF EXISTS trg_agent_requests_upd ON agent_requests;
+CREATE TRIGGER trg_agent_requests_upd BEFORE UPDATE ON agent_requests
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

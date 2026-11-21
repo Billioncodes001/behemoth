@@ -171,4 +171,3 @@ func (m *Monitor) parseContent(sourceType, sourceName string, body []byte) []Vul
 		return parseGeneric(body)
 	}
 }
-

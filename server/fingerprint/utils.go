@@ -59,13 +59,13 @@ func (t *RotatingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", GetRandomUA())
 	}
-	
+
 	// Add dynamic correlation header
 	req.Header.Set(
 		fmt.Sprintf("X-Req-%s", generateRandomString(4)),
 		generateRequestID(),
 	)
-	
+
 	return t.Base.RoundTrip(req)
 }
 
@@ -75,7 +75,7 @@ func NewRotatingClient(baseClient *http.Client) *http.Client {
 	if baseClient == nil {
 		baseClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	
+
 	var baseTransport http.RoundTripper
 	if baseClient.Transport != nil {
 		baseTransport = baseClient.Transport
@@ -86,7 +86,7 @@ func NewRotatingClient(baseClient *http.Client) *http.Client {
 			IdleConnTimeout:       90 * time.Second,
 		}
 	}
-	
+
 	client := *baseClient // copy
 	client.Transport = &RotatingTransport{Base: baseTransport}
 	return &client

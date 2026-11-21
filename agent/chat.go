@@ -94,7 +94,7 @@ func chatWorkDirSpec(workDir, model string) string {
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, model, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model)
+	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model) + needReportNote
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.
@@ -156,16 +156,16 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	}
 
 	opts := agentcore.Options{
-		Provider:        c.prov,
-		SystemPrompt:    system,
-		DynamicBoundary: boundary,
-		Tools:           allTools,
-		DeferredTools:   def.Deferred,
-		UnlockSet:       def.Unlock,
-		PermissionMode:  permission.ModeBypass,
-		EnableWebFetch:  true,
-		WebFetchProxy:   proxyAddr,
-		WebFetchCACert:  c.proxyCACert,
+		Provider:           c.prov,
+		SystemPrompt:       system,
+		DynamicBoundary:    boundary,
+		Tools:              allTools,
+		DeferredTools:      def.Deferred,
+		UnlockSet:          def.Unlock,
+		PermissionMode:     permission.ModeBypass,
+		EnableWebFetch:     true,
+		WebFetchProxy:      proxyAddr,
+		WebFetchCACert:     c.proxyCACert,
 		EnableWebSearch:    ws.Enabled && ws.Backend != "deepseek",
 		WebSearchBackend:   ws.Backend,
 		BraveSearchAPIKey:  ws.BraveKey,
@@ -177,10 +177,10 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		MaxDuration:        maxDuration,
 		Compaction:         compactionConfig(c.window),
 		Todos:              actool.NewTodoStore(),
-		ToolOutputDir: filepath.Join(sessionWorkDir, "cmd-output"),
-		Settlement:   wrapupSettlement(agentKey, nil),
-		NonStreaming: c.nonStreaming(),
-		MaxTokens:    c.maxTokens(),
+		ToolOutputDir:      filepath.Join(sessionWorkDir, "cmd-output"),
+		Settlement:         wrapupSettlement(agentKey, nil),
+		NonStreaming:       c.nonStreaming(),
+		MaxTokens:          c.maxTokens(),
 	}
 	if c.guard != nil {
 		opts.Hooks = c.guard.Hooks()
@@ -262,4 +262,3 @@ func wrapDynamicProxyEnvTools(tools []actool.CoreTool, resolveProxy func() strin
 	}
 	return out
 }
-

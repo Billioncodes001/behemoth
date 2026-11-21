@@ -94,12 +94,12 @@ func (bl *IOCBlocklist) IsBlockedIP(r *http.Request) (bool, string) {
 
 // SecurityResult represents the result of a security check
 type SecurityResult struct {
-	Allowed     bool     `json:"allowed"`
-	ThreatScore int      `json:"threat_score"`
-	Flags       []string `json:"flags"`
-	BlockReason string   `json:"block_reason,omitempty"`
+	Allowed     bool      `json:"allowed"`
+	ThreatScore int       `json:"threat_score"`
+	Flags       []string  `json:"flags"`
+	BlockReason string    `json:"block_reason,omitempty"`
 	CheckTime   time.Time `json:"check_time"`
-	ClientIP    string   `json:"client_ip,omitempty"`
+	ClientIP    string    `json:"client_ip,omitempty"`
 }
 
 // CheckRequest checks if a request should be blocked
@@ -181,7 +181,10 @@ func (bl *IOCBlocklist) isSuspiciousUA(ua string) bool {
 
 // checkURLPatterns checks URL against suspicious patterns
 func (bl *IOCBlocklist) checkURLPatterns(url string) (int, string) {
-	patterns := []struct{ p, r string; s int }{
+	patterns := []struct {
+		p, r string
+		s    int
+	}{
 		{"/.env", "ENV_ACCESS", 20},
 		{"/wp-admin", "WP_SCAN", 10},
 		{"/phpmyadmin", "PMA_ACCESS", 25},
@@ -232,12 +235,12 @@ type IOCBlocklist struct {
 
 // BlocklistStats tracks blocking statistics
 type BlocklistStats struct {
-	TotalChecked  int64      `json:"total_checked"`
-	TotalBlocked  int64      `json:"total_blocked"`
-	IocBlocks     int64      `json:"ioc_blocks"`
-	PatternBlocks int64      `json:"pattern_blocks"`
-	LastBlockTime time.Time  `json:"last_block_time"`
-	BlockedIPs    []string   `json:"blocked_ips"`
+	TotalChecked  int64     `json:"total_checked"`
+	TotalBlocked  int64     `json:"total_blocked"`
+	IocBlocks     int64     `json:"ioc_blocks"`
+	PatternBlocks int64     `json:"pattern_blocks"`
+	LastBlockTime time.Time `json:"last_block_time"`
+	BlockedIPs    []string  `json:"blocked_ips"`
 }
 
 // AddBlockedIP adds an IP to the blocklist

@@ -52,6 +52,7 @@ func (m *Monitor) runLoop(ctx context.Context, stopCh <-chan struct{}) {
 
 	// Perform an immediate full check & launch the Patch Watch AI agent when started.
 	m.RunCheckCycle(true)
+	m.syncNucleiTemplatesBestEffort()
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -64,7 +65,16 @@ func (m *Monitor) runLoop(ctx context.Context, stopCh <-chan struct{}) {
 			return
 		case <-ticker.C:
 			m.checkDueSources()
+			m.syncNucleiTemplatesBestEffort()
 		}
+	}
+}
+
+// syncNucleiTemplatesBestEffort regenerates the private nuclei template repo from
+// verified Patch Monitor exploits; failures never break the monitoring loop.
+func (m *Monitor) syncNucleiTemplatesBestEffort() {
+	if _, err := m.SyncNucleiTemplates(); err != nil {
+		log.Printf("[patchmonitor] nuclei template sync failed: %v", err)
 	}
 }
 
@@ -139,4 +149,3 @@ func (m *Monitor) RunCheckCycle(forceAll bool) (int, int, int64) {
 	}
 	return checkedCount, len(allAdded), convID
 }
-

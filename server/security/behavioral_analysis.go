@@ -16,7 +16,7 @@ type BehaviorConfig struct {
 	SessionTimeout   time.Duration `json:"session_timeout"`
 	MinSessionLength time.Duration `json:"min_session_length"`
 	MaxClickRate     int           `json:"max_click_rate_per_sec"` // max clicks per second
-	MaxKeyRate       int           `json:"max_key_rate_per_sec"`    // max keystrokes per second
+	MaxKeyRate       int           `json:"max_key_rate_per_sec"`   // max keystrokes per second
 	SuspiciousScore  int           `json:"suspicious_threshold"`
 }
 
@@ -50,9 +50,9 @@ type SessionBehavior struct {
 
 // BehavioralAnalyzer analyzes user behavior for bot detection
 type BehavioralAnalyzer struct {
-	config    *BehaviorConfig
-	sessions  map[string]*SessionBehavior
-	mu        sync.RWMutex
+	config   *BehaviorConfig
+	sessions map[string]*SessionBehavior
+	mu       sync.RWMutex
 }
 
 // NewBehavioralAnalyzer creates a new behavioral analyzer
@@ -73,7 +73,7 @@ func (ba *BehavioralAnalyzer) CreateSession(sessionID string) *SessionBehavior {
 	}
 	ba.mu.Lock()
 	defer ba.mu.Unlock()
-	
+
 	sess := &SessionBehavior{
 		SessionID:    sessionID,
 		StartTime:    time.Now(),
@@ -267,7 +267,7 @@ func (ba *BehavioralAnalyzer) hasLinearTiming(times []time.Time) bool {
 		total += iv
 	}
 	mean := time.Duration(int64(total) / int64(len(intervals)))
-	
+
 	// Check if most intervals are very close to mean (low variance)
 	var closeCount int
 	for _, iv := range intervals {

@@ -16,7 +16,7 @@ import (
 
 // BackdoorDetector detects malicious backdoor patterns
 type BackdoorDetector struct {
-	magicPrefixes []string
+	magicPrefixes    []string
 	suspiciousFields []string
 }
 
@@ -36,7 +36,7 @@ func NewBackdoorDetector() *BackdoorDetector {
 func (bd *BackdoorDetector) CheckRequest(r *http.Request) *BackdoorCheckResult {
 	result := &BackdoorCheckResult{
 		Suspicious: false,
-		Patterns:  []string{},
+		Patterns:   []string{},
 	}
 
 	// Check URL for suspicious patterns
@@ -62,7 +62,7 @@ func (bd *BackdoorDetector) CheckRequest(r *http.Request) *BackdoorCheckResult {
 func (bd *BackdoorDetector) CheckBody(body []byte, urlPath string) *BackdoorCheckResult {
 	result := &BackdoorCheckResult{
 		Suspicious: false,
-		Patterns:  []string{},
+		Patterns:   []string{},
 	}
 
 	bodyStr := string(body)
@@ -78,8 +78,8 @@ func (bd *BackdoorDetector) CheckBody(body []byte, urlPath string) *BackdoorChec
 
 	// Check for captcha field with executable content
 	if strings.Contains(urlPath, "captcha") ||
-	   strings.Contains(urlPath, "login") ||
-	   strings.Contains(urlPath, "auth") {
+		strings.Contains(urlPath, "login") ||
+		strings.Contains(urlPath, "auth") {
 		// Look for suspicious patterns in form data
 		suspiciousPatterns := []string{
 			";", "|", "&", "$(", "`", "eval(",

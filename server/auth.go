@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -95,14 +97,49 @@ func signJWT(key []byte) (string, error) {
 }
 
 // verifyJWT returns true when tokenStr is a valid, non-expired HS256 token.
+//
+// The algorithm is pinned: a bare *jwt.SigningMethodHMAC check also accepts
+// HS384/HS512, so a token re-signed with the leaked key under another HMAC
+// variant would pass while nothing else in the system ever issues one. Pinning
+// keeps exactly one accepted shape.
 func verifyJWT(tokenStr string, key []byte) bool {
+	tokenStr = strings.TrimSpace(tokenStr)
+	if tokenStr == "" || len(key) == 0 {
+		return false
+	}
 	t, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return key, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	return err == nil && t.Valid
+}
+
+// loginLockout is the shared brute-force answer for auth handlers under
+// /api/auth/*, which securityMiddleware's generic rate limiter never sees.
+// It writes 429 + Retry-After and reports true when the caller must stop.
+func (s *Server) loginLockout(w http.ResponseWriter, r *http.Request, key string) bool {
+	wait := s.loginGuard.retryAfter(key)
+	if wait <= 0 {
+		return false
+	}
+	secs := int(wait.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	log.Printf("[auth] login rate limited: ip=%s retry_after=%ds", getClientIP(r), secs)
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeProductError(w, http.StatusTooManyRequests, "too_many_attempts",
+		"Too many failed attempts. Try again later.", map[string]any{"retry_after": secs})
+	return true
+}
+
+// noteLoginFailure records a wrong credential and logs the lockout that starts.
+func (s *Server) noteLoginFailure(r *http.Request, key string) {
+	if wait := s.loginGuard.fail(key); wait > 0 {
+		log.Printf("[auth] too many failed logins: ip=%s locked for %ds", getClientIP(r), int(wait.Seconds()))
+	}
 }
 
 // extractToken reads the JWT from Authorization: Bearer header,
@@ -360,6 +397,13 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 400, "new_password_required", "New password is required", nil)
 		return
 	}
+	// A valid token proves session ownership, not knowledge of the old password:
+	// brute-forcing that bcrypt compare through a stolen token gets its own
+	// namespace so it cannot lock the login flow out.
+	limitKey := "chg:" + getClientIP(r)
+	if s.loginLockout(w, r, limitKey) {
+		return
+	}
 	if msg := validatePassword(req.NewPassword); msg != "" {
 		code, params := passwordValidationCode(req.NewPassword)
 		writeProductError(w, 400, code, msg, params)
@@ -375,9 +419,11 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.OldPassword)); err != nil {
+		s.noteLoginFailure(r, limitKey)
 		writeProductError(w, 401, "current_password_incorrect", "The current password is incorrect", nil)
 		return
 	}
+	s.loginGuard.reset(limitKey)
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		writeProductError(w, 500, "password_hash_failed", "Unable to secure the password", nil)
@@ -404,7 +450,14 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeProductError(w, 400, "invalid_request", "Invalid request format", nil)
 		return
 	}
-	if req.Username != "ARTEX" {
+	// Throttle on the client IP: /api/auth/* bypasses securityMiddleware, so
+	// nothing else rate-limits the bcrypt guesses below.
+	ip := getClientIP(r)
+	if s.loginLockout(w, r, ip) {
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(req.Username), []byte("ARTEX")) != 1 {
+		s.noteLoginFailure(r, ip)
 		writeProductError(w, 401, "invalid_credentials", "Incorrect username or password", nil)
 		return
 	}
@@ -418,9 +471,11 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
+		s.noteLoginFailure(r, ip)
 		writeProductError(w, 401, "invalid_credentials", "Incorrect username or password", nil)
 		return
 	}
+	s.loginGuard.reset(ip)
 	tok, err := signJWT(s.jwtKey)
 	if err != nil {
 		writeProductError(w, 500, "token_failed", "Unable to create a sign-in token", nil)

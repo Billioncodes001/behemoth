@@ -41,7 +41,9 @@ func (s *PGStore) LoadPool() (*proxyPersist, error) {
 
 	var configJSON, proxiesJSON, activeID sql.NullString
 	if err := row.Scan(&configJSON, &proxiesJSON, &activeID); err != nil {
-		if err == sql.ErrNoRows { return nil, nil } // No data yet
+		if err == sql.ErrNoRows {
+			return nil, nil
+		} // No data yet
 		return nil, fmt.Errorf("scan: %w", err)
 	}
 
@@ -68,10 +70,14 @@ func (s *PGStore) LoadPool() (*proxyPersist, error) {
 // SavePool persists the pool state to PostgreSQL.
 func (s *PGStore) SavePool(p *proxyPersist) error {
 	configJSON, err := json.Marshal(p.Config)
-	if err != nil { return fmt.Errorf("marshal config: %w", err) }
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
 
 	proxiesJSON, err := json.Marshal(p.Proxies)
-	if err != nil { return fmt.Errorf("marshal proxies: %w", err) }
+	if err != nil {
+		return fmt.Errorf("marshal proxies: %w", err)
+	}
 
 	query := `
 	INSERT INTO proxy_pool_v2 (key, config, proxies, active_proxy_id, updated_at)
@@ -83,6 +89,8 @@ func (s *PGStore) SavePool(p *proxyPersist) error {
 		updated_at = NOW()
 	`
 	_, err = s.db.Exec(query, configJSON, proxiesJSON, p.Active)
-	if err != nil { return fmt.Errorf("save pool: %w", err) }
+	if err != nil {
+		return fmt.Errorf("save pool: %w", err)
+	}
 	return nil
 }

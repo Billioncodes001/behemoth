@@ -128,13 +128,13 @@ func TestDynamicProxyEnvToolUpdatesMidTurn(t *testing.T) {
 func TestAutoWholeWebsiteScanNudgesSpawnTaskAndPostFindingExploitation(t *testing.T) {
 	prompt := "Scan this entire website https://tax-database.oirs.ng and exploit all vulnerabilities"
 	bound := map[string]bool{
-		"Bash":                                  true,
-		"insert_assets":                         true,
-		"spawn_task":                            true,
-		"report_finding":                        true,
-		"search_patch_arsenal":                  true,
+		"Bash":                                   true,
+		"insert_assets":                          true,
+		"spawn_task":                             true,
+		"report_finding":                         true,
+		"search_patch_arsenal":                   true,
 		"save_verified_exploit_to_patch_monitor": true,
-		"update_finding":                        true,
+		"update_finding":                         true,
 	}
 
 	toolTurn := func(id, name string) (llm.Message, llm.Message) {
@@ -192,4 +192,3 @@ func TestAutoWholeWebsiteScanNudgesSpawnTaskAndPostFindingExploitation(t *testin
 		t.Fatalf("expected clean completion after exploitation loop, got unexpected nudge: %q", nudge3)
 	}
 }
-

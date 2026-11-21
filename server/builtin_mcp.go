@@ -62,12 +62,12 @@ func (s *Server) seedRecommendedPlatformDefaultsAndMCPsV1() {
 
 	// Refresh command/args on Python built-in MCP servers if dataDir or python3 path changed.
 	type builtinMCPSpec struct {
-		name      string
-		command   string
-		args      []string
-		env       map[string]string
-		agents    []string
-		needsNPX  bool
+		name     string
+		command  string
+		args     []string
+		env      map[string]string
+		agents   []string
+		needsNPX bool
 	}
 	specs := []builtinMCPSpec{
 		{

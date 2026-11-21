@@ -45,3 +45,24 @@ func RunInfoFrom(ctx context.Context) RunInfo {
 	}
 	return RunInfo{}
 }
+
+type agentKeyCtxKey struct{}
+
+// WithAgentKey attaches the calling agent's key to ctx. The server's metered
+// tool wrapper injects it at call time, so host tools like report_need can
+// attribute their side effects to the agent that invoked them without the
+// model passing its own name. Zero value = attribution unknown.
+func WithAgentKey(ctx context.Context, key string) context.Context {
+	if key == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, agentKeyCtxKey{}, key)
+}
+
+// AgentKeyFrom reads the calling agent's key (empty when unknown).
+func AgentKeyFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(agentKeyCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}

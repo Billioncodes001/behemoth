@@ -26,16 +26,16 @@ import (
 	"github.com/Autumn-27/artex/llmpool"
 	"github.com/Autumn-27/artex/llmrec"
 	"github.com/Autumn-27/artex/report"
+	"github.com/Autumn-27/artex/server/browser"
 	"github.com/Autumn-27/artex/server/factgraph"
 	"github.com/Autumn-27/artex/server/fingerprint"
+	"github.com/Autumn-27/artex/server/patchmonitor"
 	"github.com/Autumn-27/artex/server/proxy/v2"
 	"github.com/Autumn-27/artex/server/recipes"
 	"github.com/Autumn-27/artex/server/search"
-	"github.com/Autumn-27/artex/server/browser"
 	"github.com/Autumn-27/artex/server/security"
 	"github.com/Autumn-27/artex/server/targets"
 	"github.com/Autumn-27/artex/server/tools"
-	"github.com/Autumn-27/artex/server/patchmonitor"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
@@ -63,6 +63,9 @@ type Server struct {
 	skillDir  string // root directory for skill subdirectories
 	jwtKey    []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
 	basicAuth basicAuthGate
+	// loginGuard throttles repeated wrong credentials on /api/auth/*, which
+	// securityMiddleware's generic limiter never sees (it exempts that prefix).
+	loginGuard loginGuard
 
 	// mcpStoreOverride replaces the PostgreSQL-backed MCP server store in tests.
 	mcpStoreOverride mcpStore
@@ -163,12 +166,12 @@ type Server struct {
 	factGraph *factgraph.Graph
 
 	// Tool catalog and executor (HexStrike-inspired)
-	toolCatalog *tools.Catalog
+	toolCatalog  *tools.Catalog
 	toolExecutor *tools.ToolExecutor
 
 	// Target connectors for remote execution
-	targetMu    sync.Mutex
-	targets     map[string]targets.TargetConnector // keyed by target ID
+	targetMu sync.Mutex
+	targets  map[string]targets.TargetConnector // keyed by target ID
 
 	// Security modules (anti-bot/IOC/backdoor detection)
 	iocBlocklist     *security.IOCBlocklist
@@ -319,6 +322,9 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if searxngURL := os.Getenv("SEARCH_SEARXNG_URL"); searxngURL != "" {
 		searchCfg.SearXNG.URL = searxngURL
 	}
+	if apiKey := os.Getenv("SEARCH_BRAVE_API_KEY"); apiKey != "" {
+		searchCfg.Brave.APIKey = apiKey
+	}
 	if m.pg != nil {
 		if v, ok, _ := m.pg.GetSetting("search_google_api_key"); ok && strings.TrimSpace(v) != "" {
 			if parts := strings.SplitN(strings.TrimSpace(v), "|", 2); len(parts) == 2 {
@@ -342,10 +348,17 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		if v, ok, _ := m.pg.GetSetting("search_searxng_url"); ok && strings.TrimSpace(v) != "" {
 			searchCfg.SearXNG.URL = strings.TrimSpace(v)
 		}
+		if v, ok, _ := m.pg.GetSetting("search_brave_api_key"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.Brave.APIKey = strings.TrimSpace(v)
+		} else if v, ok, _ := m.pg.GetSetting(settingBraveKey); ok && strings.TrimSpace(v) != "" {
+			// Fall back to the Brave key stored for the webfetch search backend.
+			searchCfg.Brave.APIKey = strings.TrimSpace(v)
+		}
 	}
 	searchCfg.Google.Enabled = searchCfg.Google.APIKey != "" && searchCfg.Google.CSEID != ""
 	searchCfg.Tavily.Enabled = searchCfg.Tavily.APIKey != ""
 	searchCfg.SearXNG.Enabled = searchCfg.SearXNG.URL != ""
+	searchCfg.Brave.Enabled = searchCfg.Brave.APIKey != ""
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
 	search.SetProxyProvider(s.m.OutboundProxyAddr)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
@@ -387,6 +400,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
 		s.patchMon.SetAgentWatchCallback(s.launchPatchWatchAgentRun)
 		s.patchMon.SetProxyProvider(s.m.OutboundProxyAddr)
+		s.patchMon.SetNucleiTemplatesDir(filepath.Join(dataDir, "nuclei-templates", "artex"))
 		log.Printf("[patchmon] Patch monitor initialized")
 	}
 
@@ -1207,6 +1221,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/companies/{id}", s.deleteCompany)
 	mux.HandleFunc("POST /api/companies/{id}/scope", s.addCompanyScope)
 	mux.HandleFunc("POST /api/companies/reattribute", s.reattribute)
+	mux.HandleFunc("GET /api/artifacts", s.listArtifacts)
+	mux.HandleFunc("GET /api/artifacts/counts", s.artifactCounts)
+	mux.HandleFunc("POST /api/artifacts", s.uploadArtifact)
+	mux.HandleFunc("GET /api/artifacts/{id}", s.getArtifact)
+	mux.HandleFunc("GET /api/artifacts/{id}/download", s.serveArtifact)
+	mux.HandleFunc("DELETE /api/artifacts/{id}", s.deleteArtifact)
+
+	// Agent capability requests (report_need inbox: System → Agent Requests).
+	mux.HandleFunc("GET /api/agent-requests", s.listAgentRequests)
+	mux.HandleFunc("GET /api/agent-requests/counts", s.agentRequestCounts)
+	mux.HandleFunc("PATCH /api/agent-requests/{id}", s.updateAgentRequest)
+	mux.HandleFunc("DELETE /api/agent-requests/{id}", s.deleteAgentRequest)
 
 	mux.HandleFunc("GET /api/exploration/frontier", s.frontier)
 	mux.HandleFunc("GET /api/exploration/findings", s.findings)
@@ -5838,7 +5864,9 @@ func (s *Server) handleSearchTools(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "tool catalog not initialized")
 		return
 	}
-	var req struct { Query string `json:"query"` }
+	var req struct {
+		Query string `json:"query"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -5853,9 +5881,9 @@ func (s *Server) handleExecuteTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ToolID    string            `json:"tool_id"`
+		ToolID     string            `json:"tool_id"`
 		Parameters map[string]string `json:"parameters"`
-		Timeout   int               `json:"timeout"`
+		Timeout    int               `json:"timeout"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -5998,7 +6026,9 @@ func (s *Server) handleTargetExecute(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "target not connected")
 		return
 	}
-	var req struct { Command string `json:"command"` }
+	var req struct {
+		Command string `json:"command"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -6029,7 +6059,10 @@ func (s *Server) handleSFTPUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "SFTP only available for SSH targets")
 		return
 	}
-	var req struct { LocalPath string `json:"local_path"`; RemotePath string `json:"remote_path"` }
+	var req struct {
+		LocalPath  string `json:"local_path"`
+		RemotePath string `json:"remote_path"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -6061,7 +6094,10 @@ func (s *Server) handleSFTPDownload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "SFTP only available for SSH targets")
 		return
 	}
-	var req struct { RemotePath string `json:"remote_path"`; LocalPath string `json:"local_path"` }
+	var req struct {
+		RemotePath string `json:"remote_path"`
+		LocalPath  string `json:"local_path"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -6266,12 +6302,12 @@ func (s *Server) handleRemoveIOC(w http.ResponseWriter, r *http.Request) {
 // handleSecurityCheck performs a full security check on a request
 func (s *Server) handleSecurityCheck(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL       string            `json:"url"`
-		Method    string            `json:"method"`
-		Headers   map[string]string `json:"headers"`
-		Body      string            `json:"body"`
-		UA        string            `json:"user_agent"`
-		ClientIP  string            `json:"client_ip"`
+		URL      string            `json:"url"`
+		Method   string            `json:"method"`
+		Headers  map[string]string `json:"headers"`
+		Body     string            `json:"body"`
+		UA       string            `json:"user_agent"`
+		ClientIP string            `json:"client_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -6525,7 +6561,7 @@ type SearchConfigRequest struct {
 
 // BrowserConfigRequest is the request to update browser config.
 type BrowserConfigRequest struct {
-	ScraperURL    string `json:"scraper_url"`
+	ScraperURL     string `json:"scraper_url"`
 	UseLocalChrome bool   `json:"use_local_chrome"`
 }
 
@@ -6551,6 +6587,11 @@ func (s *Server) handleSearchConfig(w http.ResponseWriter, r *http.Request) {
 			_ = s.m.SetWebSearch(on, backend, nil, &val, nil)
 		case "searxng":
 			_ = s.m.pg.SetSetting("search_searxng_url", val)
+		case "brave":
+			_ = s.m.pg.SetSetting("search_brave_api_key", val)
+			on, backend, _, tavilyKey, proxy := s.m.WebSearch()
+			tavilyPtr := &tavilyKey
+			_ = s.m.SetWebSearch(on, backend, &val, tavilyPtr, &proxy)
 		}
 	}
 	log.Printf("[search] Config updated for engine: %s", req.Engine)

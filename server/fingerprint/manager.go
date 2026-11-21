@@ -31,7 +31,7 @@ type SessionFingerprint struct {
 	UserAgent    string
 	CookieName   string
 	AuthHeader   string // replaces static "X-Artex-Auth"
-	RequestID    string  // correlation ID for request tracing
+	RequestID    string // correlation ID for request tracing
 	CreatedAt    time.Time
 	RotatedAt    time.Time
 	ExtraHeaders map[string]string // additional randomized headers
@@ -49,10 +49,10 @@ func Initialize() *Manager {
 	once.Do(func() {
 		suffix := generateRandomString(8)
 		globalManager = &Manager{
-			sessionFPs:   make(map[string]*SessionFingerprint),
-			cookieSuffix: suffix,
-			headerSuffix: suffix,
-			uaPool:       getDefaultUAPool(),
+			sessionFPs:     make(map[string]*SessionFingerprint),
+			cookieSuffix:   suffix,
+			headerSuffix:   suffix,
+			uaPool:         getDefaultUAPool(),
 			currentUAIndex: 0,
 		}
 	})
@@ -139,7 +139,7 @@ func (m *Manager) getRandomUA() string {
 func (m *Manager) generateExtraHeaders() map[string]string {
 	return map[string]string{
 		fmt.Sprintf("X-Request-%s", generateRandomString(6)): generateRequestID(),
-		fmt.Sprintf("X-ID-%s", generateRandomString(4)):     generateRandomString(16),
+		fmt.Sprintf("X-ID-%s", generateRandomString(4)):      generateRandomString(16),
 	}
 }
 

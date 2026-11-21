@@ -16,44 +16,47 @@ type Category struct {
 // Built-in attack categories.
 var Categories = []Category{
 	{ID: "recon", Name: "Reconnaissance", Description: "Information gathering and OSINT", Tools: []string{"nmap-scan", "subfinder", "httpx-probe", "theHarvester"}},
-	{ID: "scan", Name: "Scanning", Description: "Port and vulnerability scanning", Tools: []string{"nmap-scan", "nuclei-scan", "nikto-scan"}},
+	{ID: "scan", Name: "Scanning", Description: "Port and vulnerability scanning", Tools: []string{"nmap-scan", "nuclei-scan", "nikto-scan", "rustscan-scan", "masscan-scan"}},
 	{ID: "web", Name: "Web Application", Description: "Web app testing and analysis", Tools: []string{"dirb-scan", "gobuster-scan", "sqlmap-inject", "ffuf-fuzz"}},
-	{ID: "exploit", Name: "Exploitation", Description: "Vulnerability exploitation", Tools: []string{"metasploit", "sqlmap-inject", "searchsploit"}},
-	{ID: "post", Name: "Post-Exploitation", Description: "Post-exploitation activities", Tools: []string{"linpeas", "winpeas", "mimikatz"}},
-	{ID: "network", Name: "Network", Description: "Network protocol analysis", Tools: []string{"wireshark-capture", "responder", "bettercap"}},
+	{ID: "exploit", Name: "Exploitation", Description: "Vulnerability exploitation", Tools: []string{"metasploit", "sqlmap-inject", "searchsploit", "msfvenom-payload", "impacket-secretsdump", "impacket-getnpusers"}},
+	{ID: "post", Name: "Post-Exploitation", Description: "Post-exploitation activities", Tools: []string{"linpeas", "winpeas", "mimikatz", "bloodhound-collect"}},
+	{ID: "network", Name: "Network", Description: "Network protocol analysis", Tools: []string{"wireshark-capture", "responder", "bettercap", "smtp-user-enum", "onesixtyone-scan", "snmpwalk-enum"}},
 	{ID: "wireless", Name: "Wireless", Description: "WiFi/Bluetooth testing", Tools: []string{"aircrack-ng", "wifite", "bluetooth-scanner"}},
 	{ID: "forensic", Name: "Forensics", Description: "Digital forensics", Tools: []string{"autopsy", "volatility", "binwalk"}},
-	{ID: "cloud", Name: "Cloud", Description: "Cloud security testing", Tools: []string{"scout-suite", "cloudmapper", "pacu"}},
+	{ID: "cloud", Name: "Cloud", Description: "Cloud security testing", Tools: []string{"scout-suite", "cloudmapper", "pacu-recon", "aws-recon", "az-recon", "gcloud-recon"}},
+	{ID: "container", Name: "Container & Supply Chain", Description: "Container image and filesystem vulnerability scanning", Tools: []string{"trivy-scan", "grype-scan"}},
+	{ID: "sast", Name: "Source Analysis", Description: "Static application security testing", Tools: []string{"semgrep-scan"}},
 	{ID: "mobile", Name: "Mobile", Description: "Mobile app security", Tools: []string{"mobsf", "frida", "objection"}},
 }
 
 // Tool defines a security tool in the catalog (HexStrike-inspired).
 type Tool struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Category    string            `json:"category"`
-	Version     string            `json:"version"`
-	
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	Version     string `json:"version"`
+
 	// Execution
-	Command     string            `json:"command"`               // Base command
-	ArgsTemplate string           `json:"args_template,omitempty"` // Go template for args
-	
+	Command      string   `json:"command"`                 // Base command
+	ArgsTemplate string   `json:"args_template,omitempty"` // Go template for args
+	FixedArgs    []string `json:"fixed_args,omitempty"`    // Args always prepended (e.g. gobuster's "dir" mode)
+
 	// Parameters
-	Parameters  []ToolParameter   `json:"parameters"`
-	
+	Parameters []ToolParameter `json:"parameters"`
+
 	// Output handling
-	ParseOutput bool              `json:"parse_output"`
-	OutputType  string            `json:"output_type"` // json, text, xml, csv
-	
+	ParseOutput bool   `json:"parse_output"`
+	OutputType  string `json:"output_type"` // json, text, xml, csv
+
 	// Metadata
-	RiskLevel   string            `json:"risk_level"` // low, medium, high, critical
-	Tags        []string          `json:"tags"`
-	Requires    []string          `json:"requires"`   // Required binaries
-	Examples    []ToolExample     `json:"examples"`
-	
+	RiskLevel string        `json:"risk_level"` // low, medium, high, critical
+	Tags      []string      `json:"tags"`
+	Requires  []string      `json:"requires"` // Required binaries
+	Examples  []ToolExample `json:"examples"`
+
 	// Timing
-	Timeout     time.Duration     `json:"timeout"`
+	Timeout time.Duration `json:"timeout"`
 }
 
 // ToolParameter is a tool parameter definition.
@@ -76,9 +79,9 @@ type ToolExample struct {
 
 // ToolCatalog manages the collection of available tools.
 type Catalog struct {
-	mu     sync.RWMutex
-	tools  map[string]*Tool
-	cats   map[string]*Category
+	mu    sync.RWMutex
+	tools map[string]*Tool
+	cats  map[string]*Category
 }
 
 // NewCatalog creates a new tool catalog with built-in tools.
@@ -87,15 +90,15 @@ func NewCatalog() *Catalog {
 		tools: make(map[string]*Tool),
 		cats:  make(map[string]*Category),
 	}
-	
+
 	// Register categories
 	for i := range Categories {
 		c.cats[Categories[i].ID] = &Categories[i]
 	}
-	
+
 	// Register built-in tools
 	c.registerBuiltInTools()
-	
+
 	return c
 }
 

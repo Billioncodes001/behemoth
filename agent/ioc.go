@@ -30,40 +30,40 @@ const (
 
 // IOC represents a single Indicator of Compromise.
 type IOC struct {
-	ID        int64     `json:"id"`
-	Type      IOCType   `json:"type"`
-	Value     string    `json:"value"`
-	Source    string    `json:"source"`
-	TaskID    *int64    `json:"task_id,omitempty"`
-	SessionID string    `json:"session_id,omitempty"`
-	Confidence int      `json:"confidence"`
-	Severity  string    `json:"severity"`
-	Tags      []string  `json:"tags,omitempty"`
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
-	Count     int       `json:"count"`
-	Context   string    `json:"context,omitempty"`
-	Verified  bool      `json:"verified"`
+	ID         int64     `json:"id"`
+	Type       IOCType   `json:"type"`
+	Value      string    `json:"value"`
+	Source     string    `json:"source"`
+	TaskID     *int64    `json:"task_id,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	Confidence int       `json:"confidence"`
+	Severity   string    `json:"severity"`
+	Tags       []string  `json:"tags,omitempty"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastSeen   time.Time `json:"last_seen"`
+	Count      int       `json:"count"`
+	Context    string    `json:"context,omitempty"`
+	Verified   bool      `json:"verified"`
 }
 
 // IOCFilter defines filters for IOC queries.
 type IOCFilter struct {
-	Type      IOCType  `json:"type,omitempty"`
-	TaskID    *int64   `json:"task_id,omitempty"`
-	SessionID string   `json:"session_id,omitempty"`
-	Verified  *bool    `json:"verified,omitempty"`
-	Severity  string   `json:"severity,omitempty"`
-	Limit     int      `json:"limit,omitempty"`
+	Type      IOCType `json:"type,omitempty"`
+	TaskID    *int64  `json:"task_id,omitempty"`
+	SessionID string  `json:"session_id,omitempty"`
+	Verified  *bool   `json:"verified,omitempty"`
+	Severity  string  `json:"severity,omitempty"`
+	Limit     int     `json:"limit,omitempty"`
 }
 
 // IOCStats contains statistics about IOCs.
 type IOCStats struct {
-	Total       int            `json:"total"`
+	Total       int             `json:"total"`
 	ByType      map[IOCType]int `json:"by_type"`
 	BySeverity  map[string]int  `json:"by_severity"`
-	Verified    int            `json:"verified"`
-	Unverified  int            `json:"unverified"`
-	UniqueHosts int            `json:"unique_hosts"`
+	Verified    int             `json:"verified"`
+	Unverified  int             `json:"unverified"`
+	UniqueHosts int             `json:"unique_hosts"`
 }
 
 // ---------- Patterns ----------
@@ -91,9 +91,9 @@ var (
 
 // Collector extracts and manages IOCs.
 type Collector struct {
-	mu    sync.RWMutex
-	iocs  map[string]*IOC
-	order []*IOC
+	mu     sync.RWMutex
+	iocs   map[string]*IOC
+	order  []*IOC
 	config CollectorConfig
 }
 
@@ -213,8 +213,14 @@ func (c *Collector) Stats() IOCStats {
 	for _, ioc := range c.order {
 		stats.ByType[ioc.Type]++
 		_ = stats.BySeverity[ioc.Severity] // Track severity counts
-		if ioc.Verified { stats.Verified++ } else { stats.Unverified++ }
-		if ioc.Type == IOCDomain || ioc.Type == IOCIPv4 { hosts[ioc.Value] = true }
+		if ioc.Verified {
+			stats.Verified++
+		} else {
+			stats.Unverified++
+		}
+		if ioc.Type == IOCDomain || ioc.Type == IOCIPv4 {
+			hosts[ioc.Value] = true
+		}
 	}
 	stats.UniqueHosts = len(hosts)
 	return stats
@@ -245,12 +251,16 @@ func (c *Collector) MarkVerified(typeKey string) bool {
 func (c *Collector) classifySeverity(ioc *IOC) string {
 	switch ioc.Type {
 	case IOCIPv4, IOCIPv6:
-		if isPrivateIP(ioc.Value) { return "low" }
+		if isPrivateIP(ioc.Value) {
+			return "low"
+		}
 		return "medium"
 	case IOCDomain:
 		return "medium"
 	case IOCURL:
-		if strings.Contains(ioc.Value, "admin") || strings.Contains(ioc.Value, "login") { return "high" }
+		if strings.Contains(ioc.Value, "admin") || strings.Contains(ioc.Value, "login") {
+			return "high"
+		}
 		return "medium"
 	case IOCSHA256:
 		return "high"
@@ -272,7 +282,9 @@ func (c *Collector) extractIPv4(text, source string, taskID *int64, sessionID st
 func (c *Collector) extractDomains(text, source string, taskID *int64, sessionID string) []*IOC {
 	var results []*IOC
 	for _, match := range domainPattern.FindAllString(text, -1) {
-		if isFalsePositiveDomain(match) { continue }
+		if isFalsePositiveDomain(match) {
+			continue
+		}
 		results = append(results, &IOC{Type: IOCDomain, Value: strings.ToLower(match), Source: source, TaskID: taskID, SessionID: sessionID})
 	}
 	return results
@@ -283,7 +295,9 @@ func (c *Collector) extractURLs(text, source string, taskID *int64, sessionID st
 	for _, match := range urlPattern.FindAllString(text, -1) {
 		sev := "medium"
 		lower := strings.ToLower(match)
-		if strings.Contains(lower, "admin") || strings.Contains(lower, "login") { sev = "high" }
+		if strings.Contains(lower, "admin") || strings.Contains(lower, "login") {
+			sev = "high"
+		}
 		results = append(results, &IOC{Type: IOCURL, Value: match, Source: source, TaskID: taskID, SessionID: sessionID, Severity: sev})
 	}
 	return results
@@ -309,7 +323,9 @@ func (c *Collector) extractFilePaths(text, source string, taskID *int64, session
 	var results []*IOC
 	for _, match := range filePathPattern.FindAllString(text, -1) {
 		ext := getExt(match)
-		if ext != "" && !sensitiveExtensions[ext] { continue }
+		if ext != "" && !sensitiveExtensions[ext] {
+			continue
+		}
 		results = append(results, &IOC{Type: IOCFile, Value: match, Source: source, TaskID: taskID, SessionID: sessionID, Severity: "medium"})
 	}
 	return results
@@ -319,11 +335,15 @@ func (c *Collector) extractFilePaths(text, source string, taskID *int64, session
 
 func isPrivateIP(ip string) bool {
 	parsed := net.ParseIP(ip)
-	if parsed == nil { return false }
+	if parsed == nil {
+		return false
+	}
 	privateRanges := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
 	for _, cidr := range privateRanges {
 		_, network, _ := net.ParseCIDR(cidr)
-		if network.Contains(parsed) { return true }
+		if network.Contains(parsed) {
+			return true
+		}
 	}
 	return false
 }
@@ -332,15 +352,21 @@ func isFalsePositiveDomain(domain string) bool {
 	falsePositives := []string{"localhost", "example.com", "test.com", "the", "this", "that", "with", "from"}
 	lower := strings.ToLower(domain)
 	for _, fp := range falsePositives {
-		if lower == fp { return true }
+		if lower == fp {
+			return true
+		}
 	}
-	if len(strings.Split(lower, ".")) <= 2 && len(lower) <= 3 { return true }
+	if len(strings.Split(lower, ".")) <= 2 && len(lower) <= 3 {
+		return true
+	}
 	return false
 }
 
 func getExt(path string) string {
 	lastDot := strings.LastIndex(path, ".")
-	if lastDot == -1 { return "" }
+	if lastDot == -1 {
+		return ""
+	}
 	return path[lastDot+1:]
 }
 

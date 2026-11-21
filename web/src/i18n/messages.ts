@@ -1,11 +1,12 @@
+import { agentRequestsMessages } from "./agent-requests-messages";
 import { chatUIMessages } from "./chat-ui-messages";
 import { errorMessages } from "./error-messages";
 import { inlineEditorMessages } from "./inline-editor-messages";
 import { notifyMessages } from "./notify-messages";
 import { overviewMessages } from "./overview-messages";
 import { scheduleMessages } from "./schedule-messages";
-import { searchMessages } from "./search-messages";
 import screenCatalog from "./screen-catalog.json";
+import { searchMessages } from "./search-messages";
 import { settingsMessages } from "./settings-messages";
 import { settingsRuntimeMessages } from "./settings-runtime-messages";
 import { taskMessages } from "./task-messages";
@@ -17,6 +18,7 @@ export const messages = {
   ...termsMessages,
   ...taskMessages,
   ...notifyMessages,
+  ...agentRequestsMessages,
   ...inlineEditorMessages,
   ...scheduleMessages,
   ...searchMessages,
@@ -99,14 +101,23 @@ export const messages = {
   "auth.agreementRequired": ["请先阅读并同意《使用须知》", "Read and accept the Terms of Use first"],
   "auth.invalidCredentials": ["用户名或密码错误", "Incorrect username or password"],
   "auth.checking": ["正在检查登录状态…", "Checking sign-in status…"],
-  "auth.verifyingHuman": ["正在确认您是真人，这可能需要几秒钟。", "Verifying you are human. This may take a few seconds."],
+  "auth.verifyingHuman": [
+    "正在确认您是真人，这可能需要几秒钟。",
+    "Verifying you are human. This may take a few seconds.",
+  ],
   "auth.verifiedRedirect": ["验证成功，正在跳转…", "Verification successful. Redirecting..."],
   "auth.verifying": ["正在验证…", "Verifying..."],
   "auth.verified": ["验证成功！", "Success!"],
-  "auth.connectionCheck": ["继续前，{{host}} 需要检查您的连接是否安全。", "{{host}} needs to review the security of your connection before proceeding."],
+  "auth.connectionCheck": [
+    "继续前，{{host}} 需要检查您的连接是否安全。",
+    "{{host}} needs to review the security of your connection before proceeding.",
+  ],
   "auth.turnstileLinks": ["Turnstile · 隐私 · 条款", "Turnstile · Privacy · Terms"],
   "auth.rayId": ["Ray 标识符", "Ray ID"],
-  "auth.turnstileCredit": ["性能与安全服务由 Cloudflare Turnstile 提供", "Performance & security by Cloudflare Turnstile"],
+  "auth.turnstileCredit": [
+    "性能与安全服务由 Cloudflare Turnstile 提供",
+    "Performance & security by Cloudflare Turnstile",
+  ],
   "auth.login": ["登录", "Sign in"],
   "auth.welcome": [
     "欢迎回来，请输入密码以继续使用 ARTEX",

@@ -27,6 +27,8 @@ const (
 	EngineTavily SearchEngineType = "tavily"
 	// EngineSearXNG is self-hosted SearXNG meta-search.
 	EngineSearXNG SearchEngineType = "searxng"
+	// EngineBrave is the Brave Search API (requires an API key).
+	EngineBrave SearchEngineType = "brave"
 	// EngineSploitus is Sploitus exploit database search.
 	EngineSploitus SearchEngineType = "sploitus"
 )
@@ -52,7 +54,7 @@ type Request struct {
 	Query      string        `json:"query"`
 	MaxResults int           `json:"max_results,omitempty"`
 	Mode       SearchMode    `json:"mode,omitempty"`
-	Engine     string        `json:"engine,omitempty"`      // optional specific engine override
+	Engine     string        `json:"engine,omitempty"` // optional specific engine override
 	Timeout    time.Duration `json:"timeout,omitempty"`
 	SiteFilter string        `json:"site_filter,omitempty"` // e.g., "example.com"
 }
@@ -68,12 +70,12 @@ type Result struct {
 
 // Response contains search results from an engine.
 type Response struct {
-	Results    []Result       `json:"results"`
+	Results    []Result         `json:"results"`
 	Engine     SearchEngineType `json:"engine"`
-	Query      string         `json:"query"`
-	TotalFound int            `json:"total_found,omitempty"`
-	Duration   time.Duration  `json:"duration"`
-	Error      error          `json:"-"`
+	Query      string           `json:"query"`
+	TotalFound int              `json:"total_found,omitempty"`
+	Duration   time.Duration    `json:"duration"`
+	Error      error            `json:"-"`
 }
 
 // SearchEngine is the interface that all search engines must implement.
@@ -107,6 +109,11 @@ type Config struct {
 		URL     string `json:"url"`
 		Enabled bool   `json:"enabled"`
 	} `json:"searxng"`
+
+	Brave struct {
+		APIKey  string `json:"api_key"`
+		Enabled bool   `json:"enabled"`
+	} `json:"brave"`
 
 	Sploitus struct {
 		Enabled bool `json:"enabled"`

@@ -36,7 +36,7 @@ func (vs *VectorStore) Initialize(ctx context.Context) error {
 // Store saves a new memory entry with its embedding.
 func (vs *VectorStore) Store(ctx context.Context, entry MemoryEntry) error {
 	metadataJSON, _ := json.Marshal(entry.Metadata)
-	
+
 	query := `
 		INSERT INTO memory_entries (id, type, content, embedding, metadata, tags, created_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
@@ -47,7 +47,7 @@ func (vs *VectorStore) Store(ctx context.Context, entry MemoryEntry) error {
 			tags = EXCLUDED.tags,
 			expires_at = EXCLUDED.expires_at
 	`
-	
+
 	_, err := vs.pool.Exec(ctx, query,
 		entry.ID, entry.Type, entry.Content,
 		entry.Embedding, metadataJSON, entry.Tags,

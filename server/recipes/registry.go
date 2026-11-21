@@ -17,42 +17,42 @@ var builtinRecipesFS embed.FS
 
 // ToolRecipe defines a tool that can be used by agents.
 type ToolRecipe struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Category    string            `json:"category"`
-	Version     string            `json:"version"`
-	Author      string            `json:"author"`
-	Tags        []string          `json:"tags"`
-	
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Category    string   `json:"category"`
+	Version     string   `json:"version"`
+	Author      string   `json:"author"`
+	Tags        []string `json:"tags"`
+
 	// Execution config
-	Command     string            `json:"command,omitempty"`     // Shell command template
-	Script      string            `json:"script,omitempty"`      // Inline script
-	Handler     string            `json:"handler,omitempty"`    // Go handler name
-	
+	Command string `json:"command,omitempty"` // Shell command template
+	Script  string `json:"script,omitempty"`  // Inline script
+	Handler string `json:"handler,omitempty"` // Go handler name
+
 	// Parameters
-	Parameters  []RecipeParameter `json:"parameters"`
-	
+	Parameters []RecipeParameter `json:"parameters"`
+
 	// Output handling
-	ParseOutput bool              `json:"parse_output,omitempty"`
-	OutputFormat string           `json:"output_format,omitempty"` // json, text, table
-	
+	ParseOutput  bool   `json:"parse_output,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"` // json, text, table
+
 	// Metadata
-	RiskLevel   string            `json:"risk_level"` // low, medium, high, critical
-	Requires    []string          `json:"requires"`    // Required capabilities
-	Examples    []RecipeExample   `json:"examples"`
-	
+	RiskLevel string          `json:"risk_level"` // low, medium, high, critical
+	Requires  []string        `json:"requires"`   // Required capabilities
+	Examples  []RecipeExample `json:"examples"`
+
 	// Internal
-	FilePath    string            `json:"-"`
+	FilePath string `json:"-"`
 }
 
 // RecipeParameter is a parameter definition.
 type RecipeParameter struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"` // string, int, bool, file, select
-	Required    bool   `json:"required"`
-	Default     any    `json:"default,omitempty"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"` // string, int, bool, file, select
+	Required    bool     `json:"required"`
+	Default     any      `json:"default,omitempty"`
+	Description string   `json:"description"`
 	Options     []string `json:"options,omitempty"` // For select type
 }
 
@@ -65,11 +65,11 @@ type RecipeExample struct {
 
 // RecipeRegistry manages tool recipes.
 type RecipeRegistry struct {
-	mu       sync.RWMutex
-	recipes  map[string]*ToolRecipe
-	index    map[string][]*ToolRecipe // category -> recipes
-	tags     map[string][]*ToolRecipe // tag -> recipes
-	dir      string
+	mu      sync.RWMutex
+	recipes map[string]*ToolRecipe
+	index   map[string][]*ToolRecipe // category -> recipes
+	tags    map[string][]*ToolRecipe // tag -> recipes
+	dir     string
 }
 
 // NewRecipeRegistry creates a new recipe registry.
@@ -200,7 +200,7 @@ func (r *RecipeRegistry) Categories() []string {
 func (r *RecipeRegistry) Search(query string) []*ToolRecipe {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	var results []*ToolRecipe
 	for _, recipe := range r.recipes {
 		if matchQuery(recipe, query) {

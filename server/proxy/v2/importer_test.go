@@ -186,4 +186,3 @@ func TestImportTenProxiesAndDisableNeverAutoJumpsToNextRow(t *testing.T) {
 		}
 	}
 }
-

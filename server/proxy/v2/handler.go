@@ -26,7 +26,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v2/proxy-pool/proxies", h.handleListProxies)
 	mux.HandleFunc("POST /api/v2/proxy-pool/proxies", h.handleImportProxies)
 	mux.HandleFunc("POST /api/v2/proxy-pool/import", h.handleImportProxies)
-	mux.HandleFunc("GET /api/v2/proxy-pool/proxies/", h.handleGetProxy)  // trailing slash for path param
+	mux.HandleFunc("GET /api/v2/proxy-pool/proxies/", h.handleGetProxy) // trailing slash for path param
 	mux.HandleFunc("PUT /api/v2/proxy-pool/proxies/", h.handleUpdateProxy)
 	mux.HandleFunc("DELETE /api/v2/proxy-pool/proxies/", h.handleDeleteProxy)
 	// Proxy actions
@@ -160,7 +160,10 @@ func (h *Handler) handleImportProxies(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGetProxy(w http.ResponseWriter, r *http.Request) {
 	id := extractProxyID(r.URL.Path)
 	for _, px := range h.pool.GetProxies() {
-		if px.ID == id { respondJSON(w, http.StatusOK, px); return }
+		if px.ID == id {
+			respondJSON(w, http.StatusOK, px)
+			return
+		}
 	}
 	respondError(w, http.StatusNotFound, "proxy not found")
 }
@@ -170,10 +173,12 @@ func (h *Handler) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 	id := extractProxyID(r.URL.Path)
 	var updates map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid JSON"); return
+		respondError(w, http.StatusBadRequest, "invalid JSON")
+		return
 	}
 	if err := h.pool.UpdateProxy(id, updates); err != nil {
-		respondError(w, http.StatusNotFound, err.Error()); return
+		respondError(w, http.StatusNotFound, err.Error())
+		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -182,7 +187,8 @@ func (h *Handler) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	id := extractProxyID(r.URL.Path)
 	if err := h.pool.RemoveProxy(id); err != nil {
-		respondError(w, http.StatusNotFound, err.Error()); return
+		respondError(w, http.StatusNotFound, err.Error())
+		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -195,11 +201,15 @@ func (h *Handler) handleProxyAction(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "test":
 		result, err := h.pool.TestProxy(id)
-		if err != nil { respondError(w, http.StatusNotFound, err.Error()); return }
+		if err != nil {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		respondJSON(w, http.StatusOK, result)
 	case "toggle":
 		if err := h.pool.ToggleProxyActive(id); err != nil {
-			respondError(w, http.StatusNotFound, err.Error()); return
+			respondError(w, http.StatusNotFound, err.Error())
+			return
 		}
 		respondJSON(w, http.StatusOK, map[string]string{"status": "toggled"})
 	default:
@@ -217,7 +227,11 @@ func (h *Handler) handleTestAll(w http.ResponseWriter, r *http.Request) {
 	// Count results
 	total, passed, failed := len(results), 0, 0
 	for _, res := range results {
-		if res.Success { passed++ } else { failed++ }
+		if res.Success {
+			passed++
+		} else {
+			failed++
+		}
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"results": results,
@@ -288,9 +302,13 @@ func (h *Handler) handleClearFailed(w http.ResponseWriter, r *http.Request) {
 
 // handleForceRotate forces proxy rotation.
 func (h *Handler) handleForceRotate(w http.ResponseWriter, r *http.Request) {
-	var req struct { Reason string `json:"reason"` }
+	var req struct {
+		Reason string `json:"reason"`
+	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Reason == "" { req.Reason = "manual" }
+	if req.Reason == "" {
+		req.Reason = "manual"
+	}
 	proxy, err := h.pool.ForceRotate(req.Reason)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
@@ -325,7 +343,9 @@ func respondError(w http.ResponseWriter, status int, message string) {
 func extractProxyID(path string) string {
 	// Path format: /api/v2/proxy-pool/proxies/{id} or /api/v2/proxy-pool/proxies/{id}/action
 	prefix := "/api/v2/proxy-pool/proxies/"
-	if !strings.HasPrefix(path, prefix) { return "" }
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
 	rest := strings.TrimPrefix(path, prefix)
 	if idx := strings.Index(rest, "/"); idx != -1 {
 		return rest[:idx]

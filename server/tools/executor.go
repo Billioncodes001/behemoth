@@ -10,24 +10,25 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 )
 
 // ExecutionResult represents the result of a tool execution.
 type ExecutionResult struct {
-	ID       string        `json:"id"`
-	ToolID   string        `json:"tool_id"`
-	ToolName string        `json:"tool_name"`
-	Status   string        `json:"status"` // running, completed, failed, timeout
-	Command  string        `json:"command"`
-	Args     []string      `json:"args"`
-	Output   string        `json:"output"`
-	Error    string        `json:"error,omitempty"`
-	ExitCode int           `json:"exit_code"`
-	Duration time.Duration `json:"duration"`
-	Parsed   interface{}   `json:"parsed,omitempty"`
-	StartedAt time.Time    `json:"started_at"`
-	EndedAt   time.Time    `json:"ended_at"`
+	ID        string        `json:"id"`
+	ToolID    string        `json:"tool_id"`
+	ToolName  string        `json:"tool_name"`
+	Status    string        `json:"status"` // running, completed, failed, timeout
+	Command   string        `json:"command"`
+	Args      []string      `json:"args"`
+	Output    string        `json:"output"`
+	Error     string        `json:"error,omitempty"`
+	ExitCode  int           `json:"exit_code"`
+	Duration  time.Duration `json:"duration"`
+	Parsed    interface{}   `json:"parsed,omitempty"`
+	StartedAt time.Time     `json:"started_at"`
+	EndedAt   time.Time     `json:"ended_at"`
 }
 
 // ExecutorConfig holds executor configuration.
@@ -142,12 +143,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, toolID string, params map[st
 	}
 
 	result := &ExecutionResult{
-		ID:       fmt.Sprintf("exec-%d", time.Now().UnixNano()),
-		ToolID:   toolID,
-		ToolName: tool.Name,
-		Status:   "running",
-		Command:  tool.Command,
-		Args:     args,
+		ID:        fmt.Sprintf("exec-%d", time.Now().UnixNano()),
+		ToolID:    toolID,
+		ToolName:  tool.Name,
+		Status:    "running",
+		Command:   tool.Command,
+		Args:      args,
 		StartedAt: time.Now(),
 	}
 
@@ -261,8 +262,21 @@ func (e *ToolExecutor) History(limit int) []*ExecutionResult {
 	return e.history[len(e.history)-limit:]
 }
 
+// boolTrue reports whether a string parameter value represents a truthy boolean.
+func boolTrue(val string) bool {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "1", "t", "true", "yes", "y", "on":
+		return true
+	}
+	return false
+}
+
 func (e *ToolExecutor) buildArgs(tool *Tool, params map[string]string) ([]string, error) {
 	var args []string
+	// FixedArgs always come first (e.g. gobuster's required "dir" subcommand).
+	args = append(args, tool.FixedArgs...)
+
+	tplVals := make(map[string]string, len(tool.Parameters))
 	for _, p := range tool.Parameters {
 		val, ok := params[p.Name]
 		if !ok {
@@ -280,10 +294,44 @@ func (e *ToolExecutor) buildArgs(tool *Tool, params map[string]string) ([]string
 				continue
 			}
 		}
+		tplVals[p.Name] = val
+		if tool.ArgsTemplate != "" {
+			// Free-form template tools (msfconsole -x) consume ALL params inside
+			// the rendered template — positional emission would duplicate them.
+			continue
+		}
+		if strings.EqualFold(p.Type, "bool") {
+			// Boolean parameters are switches: emit only the flag itself when
+			// truthy and nothing when falsy. Never pass the literal word
+			// "true"/"false" — several CLIs (nmap -sV, sqlmap --batch) reject it.
+			if boolTrue(val) && p.Flag != "" {
+				args = append(args, p.Flag)
+			} else if !boolTrue(val) && p.Flag == "" && p.Required {
+				return nil, fmt.Errorf("param %s must be a truthy boolean", p.Name)
+			}
+			continue
+		}
 		if p.Flag != "" {
 			args = append(args, p.Flag)
 		}
 		args = append(args, val)
+	}
+
+	// ArgsTemplate renders a single free-form argument (Go template over the
+	// resolved params). Used for CLIs whose interface is a command string
+	// (e.g. msfconsole -q -x "use ...; set RHOSTS ...; run; exit").
+	if tool.ArgsTemplate != "" {
+		tmpl, err := template.New(tool.ID).Parse(tool.ArgsTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("invalid args template: %w", err)
+		}
+		var sb strings.Builder
+		if err := tmpl.Execute(&sb, tplVals); err != nil {
+			return nil, fmt.Errorf("render args template: %w", err)
+		}
+		if s := sb.String(); strings.TrimSpace(s) != "" {
+			args = append(args, s)
+		}
 	}
 	return args, nil
 }

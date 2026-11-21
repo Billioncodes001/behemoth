@@ -32,14 +32,14 @@ type sploitusResponse struct {
 }
 
 type sploitusExploit struct {
-	ID          string  `json:"id"`
-	Title       string  `json:"title"`
-	Type        string  `json:"type"` // "dos", "local", "remote", "webapp"
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Type        string `json:"type"` // "dos", "local", "remote", "webapp"
 	Description string `json:"description"`
-	Date        string  `json:"date"`
-	Author      string  `json:"author"`
-	Platform    string  `json:"platform"`
-	URL         string  `json:"url"`
+	Date        string `json:"date"`
+	Author      string `json:"author"`
+	Platform    string `json:"platform"`
+	URL         string `json:"url"`
 }
 
 func (s *SploitusSearchEngine) Handle(ctx context.Context, req Request) (Response, error) {

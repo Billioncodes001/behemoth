@@ -59,7 +59,7 @@ func (c *ChromeDP) TakeScreenshot(ctx context.Context, targetURL string) (string
 
 	// First run to start the browser (don't use timeout here)
 	initCtx := taskCtx
-	
+
 	// Navigate first
 	if _, err := chromedp.Run(initCtx, chromedp.Navigate(targetURL)); err != nil {
 		return "", fmt.Errorf("chromedp navigate failed: %w", err)

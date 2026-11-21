@@ -289,6 +289,29 @@ export interface Asset {
   task_source_node_id?: number;
 }
 
+// ---- Artifacts (loot vault: Assets → Files) ----
+export type ArtifactKind = "text" | "image" | "dump" | "archive" | "binary" | "other";
+
+export interface Artifact {
+  id: number;
+  company_id?: number;
+  task_id?: number;
+  asset_id?: number;
+  name: string;
+  filename: string;
+  rel_path: string;
+  kind: ArtifactKind;
+  mime?: string;
+  size: number;
+  sha256?: string;
+  source_url?: string;
+  source_tool?: string;
+  description?: string;
+  extra?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface IntentAsset {
   intent_id: number | string;
   asset_id: number;
@@ -299,6 +322,26 @@ export interface IntentAsset {
   source_node_id?: number;
   source_task_id: number;
   inherited: boolean;
+}
+
+// ---- Agent capability/infra requests (report_need inbox) ----
+export type AgentRequestKind = "tool" | "capability" | "integration" | "infra" | "data" | "other";
+export type AgentRequestUrgency = "low" | "normal" | "high";
+export type AgentRequestStatus = "new" | "acknowledged" | "resolved" | "dismissed";
+
+export interface AgentRequest {
+  id: number;
+  agent_key: string;
+  task_id?: number;
+  session_id?: string;
+  kind: AgentRequestKind;
+  urgency: AgentRequestUrgency;
+  title: string;
+  details?: string;
+  context?: string;
+  status: AgentRequestStatus;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TaskAssetMutation {
@@ -1090,13 +1133,13 @@ export interface ProxyV2Config {
 
 export interface ProxyV2Entry {
   id: string;
-  url: string;                    // Masked in responses (***:****@host:port)
+  url: string; // Masked in responses (***:****@host:port)
   name?: string;
   remark?: string;
   proxy_type: "http" | "https" | "socks5" | "auto";
   enabled: boolean;
   status: "healthy" | "unhealthy" | "unknown" | "disabled";
-  
+
   // Health & Performance
   latency_ms: number;
   consecutive_failures: number;
@@ -1104,7 +1147,7 @@ export interface ProxyV2Entry {
   successful_requests: number;
   last_checked_at?: string;
   last_error?: string;
-  
+
   // GeoIP (populated after test)
   country?: string;
   city?: string;
@@ -2352,7 +2395,7 @@ export interface SecurityCheckResponse {
 // ============================================================
 
 export type SearchMode = "general" | "news" | "exploit" | "technical" | "osint";
-export type SearchEngineType = "google" | "duckduckgo" | "tavily" | "searxng" | "sploitus";
+export type SearchEngineType = "google" | "duckduckgo" | "tavily" | "searxng" | "brave" | "sploitus";
 
 export interface SearchResultItem {
   title: string;
@@ -2413,7 +2456,7 @@ export interface BrowserResult {
   action: BrowserAction;
   screenshot?: string;
   screenshot_path?: string;
-  content?: string;      // Markdown content
+  content?: string; // Markdown content
   title?: string;
   duration: string;
   error?: string;

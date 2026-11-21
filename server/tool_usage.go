@@ -34,6 +34,11 @@ func meterTool(t actool.CoreTool, recorder toolUsageRecorder, toolKey, agentKey 
 }
 
 func (m *meteredTool) Call(ctx context.Context, input json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+	if m.agentKey != "" {
+		// Attribute the call to the invoking agent for host tools that care
+		// (report_need files its row under this agent key).
+		ctx = agent.WithAgentKey(ctx, m.agentKey)
+	}
 	if err := m.recorder.InsertToolUsage(&db.ToolUsage{
 		ToolKey:       m.toolKey,
 		AgentKey:      m.agentKey,

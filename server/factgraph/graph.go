@@ -32,22 +32,22 @@ func NewGraph() *Graph {
 func (g *Graph) Add(fact *Fact) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	if _, exists := g.facts[fact.ID]; exists {
 		return // Already exists
 	}
-	
+
 	fact.CreatedAt = time.Now()
 	fact.UpdatedAt = time.Now()
-	
+
 	g.facts[fact.ID] = fact
 	g.index[fact.Kind] = append(g.index[fact.Kind], fact)
-	
+
 	// Index by task
 	if fact.TaskID != "" {
 		g.taskIdx[fact.TaskID] = append(g.taskIdx[fact.TaskID], fact)
 	}
-	
+
 	// Index by tags and title for search
 	g.search[strings.ToLower(fact.Title)] = append(g.search[strings.ToLower(fact.Title)], fact)
 	for _, tag := range fact.Tags {
@@ -67,14 +67,14 @@ func (g *Graph) Get(id string) (*Fact, bool) {
 func (g *Graph) Remove(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	fact, ok := g.facts[id]
 	if !ok {
 		return
 	}
-	
+
 	delete(g.facts, id)
-	
+
 	// Remove from kind index
 	if facts := g.index[fact.Kind]; facts != nil {
 		for i, f := range facts {
@@ -84,7 +84,7 @@ func (g *Graph) Remove(id string) {
 			}
 		}
 	}
-	
+
 	// Remove from task index
 	if fact.TaskID != "" {
 		if facts := g.taskIdx[fact.TaskID]; facts != nil {
@@ -127,11 +127,11 @@ func (g *Graph) ByTask(taskID string) []*Fact {
 func (g *Graph) Search(query string) []*Fact {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	query = strings.ToLower(query)
 	var results []*Fact
 	seen := make(map[string]bool)
-	
+
 	// Search in indexed fields
 	if facts, ok := g.search[query]; ok {
 		for _, f := range facts {
@@ -141,17 +141,17 @@ func (g *Graph) Search(query string) []*Fact {
 			}
 		}
 	}
-	
+
 	// Fallback: search all facts
 	if len(results) == 0 {
 		for _, f := range g.facts {
 			if strings.Contains(strings.ToLower(f.Title), query) ||
-			   strings.Contains(strings.ToLower(f.Content), query) {
+				strings.Contains(strings.ToLower(f.Content), query) {
 				results = append(results, f)
 			}
 		}
 	}
-	
+
 	return results
 }
 
@@ -159,12 +159,12 @@ func (g *Graph) Search(query string) []*Fact {
 func (g *Graph) Update(id string, fn func(*Fact)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	fact, ok := g.facts[id]
 	if !ok {
 		return fmt.Errorf("fact not found: %s", id)
 	}
-	
+
 	fn(fact)
 	fact.UpdatedAt = time.Now()
 	return nil
@@ -174,27 +174,27 @@ func (g *Graph) Update(id string, fn func(*Fact)) error {
 func (g *Graph) Link(sourceID, targetID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	source, ok := g.facts[sourceID]
 	if !ok {
 		return fmt.Errorf("source fact not found: %s", sourceID)
 	}
-	
+
 	target, ok := g.facts[targetID]
 	if !ok {
 		return fmt.Errorf("target fact not found: %s", targetID)
 	}
-	
+
 	// Add to derived IDs if not already present
 	for _, id := range source.DerivedIDs {
 		if id == targetID {
 			return nil // Already linked
 		}
 	}
-	
+
 	source.DerivedIDs = append(source.DerivedIDs, targetID)
 	target.SourceIDs = append(target.SourceIDs, sourceID)
-	
+
 	return nil
 }
 
@@ -202,14 +202,14 @@ func (g *Graph) Link(sourceID, targetID string) error {
 func (g *Graph) Stats() map[string]int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	stats := make(map[string]int)
 	stats["total"] = len(g.facts)
-	
+
 	for kind, facts := range g.index {
 		stats[string(kind)] = len(facts)
 	}
-	
+
 	return stats
 }
 

@@ -694,5 +694,3 @@ func (d *DB) seedDefaultInterceptRulesV6() error {
 	)
 	return d.SetSetting("intercept_default_rules_v6", "done")
 }
-
-

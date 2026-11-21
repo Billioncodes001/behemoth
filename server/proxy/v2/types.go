@@ -178,17 +178,17 @@ type SwitchLog struct {
 type proxyPersist struct {
 	Config  *ProxyPoolConfig `json:"config"`
 	Proxies []ProxyInfo      `json:"proxies"`
-	Active  string            `json:"active_id"`
+	Active  string           `json:"active_id"`
 }
 
 // proxyPoolState is the in-memory state.
 type proxyPoolState struct {
-	mu      sync.RWMutex
-	proxies []ProxyInfo
-	config  *ProxyPoolConfig
-	index   int
+	mu       sync.RWMutex
+	proxies  []ProxyInfo
+	config   *ProxyPoolConfig
+	index    int
 	activeID string
-	logs    []SwitchLog
+	logs     []SwitchLog
 }
 
 // BuildProxyURL constructs a full URL string from a ProxyInfo.
@@ -233,4 +233,3 @@ func (p *ProxyInfo) IsAvailable() bool {
 func (p *ProxyInfo) IsUsable() bool {
 	return p.Active && p.Status != StatusUnhealthy && p.Status != StatusDisabled
 }
-

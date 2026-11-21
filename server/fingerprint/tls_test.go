@@ -31,7 +31,7 @@ func TestGetAllTLSSpecs(t *testing.T) {
 	if len(specs) == 0 {
 		t.Fatal("GetAllTLSSpecs() returned empty")
 	}
-	
+
 	// Verify all specs have required fields
 	for _, spec := range specs {
 		if spec.ID == "" {

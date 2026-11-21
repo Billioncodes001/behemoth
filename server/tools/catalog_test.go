@@ -17,7 +17,7 @@ func TestNewCatalog(t *testing.T) {
 
 func TestCatalog_Get(t *testing.T) {
 	c := NewCatalog()
-	
+
 	tool, ok := c.Get("nmap-scan")
 	if !ok {
 		t.Fatal("Get(nmap-scan) returned false")
@@ -50,12 +50,12 @@ func TestCatalog_List(t *testing.T) {
 
 func TestCatalog_Search(t *testing.T) {
 	c := NewCatalog()
-	
+
 	results := c.Search("nmap")
 	if len(results) == 0 {
 		t.Error("Search('nmap') should find nmap-scan")
 	}
-	
+
 	results = c.Search("sql")
 	if len(results) == 0 {
 		t.Error("Search('sql') should find sqlmap-inject")
@@ -64,7 +64,7 @@ func TestCatalog_Search(t *testing.T) {
 
 func TestCatalog_ByCategory(t *testing.T) {
 	c := NewCatalog()
-	
+
 	reconTools := c.ByCategory("recon")
 	if len(reconTools) == 0 {
 		t.Error("ByCategory('recon') should return tools")
@@ -82,7 +82,7 @@ func TestCatalog_Categories(t *testing.T) {
 func TestTool_Defaults(t *testing.T) {
 	c := NewCatalog()
 	tool, _ := c.Get("nmap-scan")
-	
+
 	if tool.RiskLevel != "low" {
 		t.Errorf("RiskLevel = %s, want 'low'", tool.RiskLevel)
 	}

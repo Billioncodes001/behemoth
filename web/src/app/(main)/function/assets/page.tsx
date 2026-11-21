@@ -7,6 +7,7 @@ import {
   BuildingIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  FileTextIcon,
   GlobeIcon,
   KeyRoundIcon,
   LayoutTemplateIcon,
@@ -16,6 +17,7 @@ import {
   RefreshCwIcon,
   SmartphoneIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -63,7 +65,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
 import { parseCompanyScopeText } from "@/lib/company-scope";
-import type { Asset, Company, CompanyScopeRule } from "@/lib/types";
+import type { Artifact, Asset, Company, CompanyScopeRule } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const METHOD_COLOR: Record<string, string> = {
@@ -90,6 +92,18 @@ function MethodBadge({ method }: { method: string }) {
   );
 }
 
+function formatArtifactBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v >= 10 || u === 0 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
+}
+
 function statusTone(code: number) {
   if (code >= 500) return "text-red-500";
   if (code >= 400) return "text-amber-500";
@@ -102,6 +116,7 @@ const PAGE_SIZES = [25, 50, 100, 200];
 
 const TABS = (ui: UITranslate): { key: string; label: string; icon: LucideIcon }[] => [
   { key: "company", label: ui("screen.409d0719010a46"), icon: BuildingIcon },
+  { key: "file", label: ui("screen.9f1c2a3b4d5e60"), icon: FileTextIcon },
   { key: "root_domain", label: ui("screen.bc208f697acff9"), icon: GlobeIcon },
   { key: "ip", label: "IP", icon: NetworkIcon },
   { key: "subdomain", label: ui("screen.4b4788120c34db"), icon: GlobeIcon },
@@ -170,6 +185,16 @@ function AssetsContent() {
   const [companyDeleteAssets, setCompanyDeleteAssets] = React.useState(false);
   const [companyDeleting, setCompanyDeleting] = React.useState(false);
 
+  // Company drill-down: clicking a company scopes every tab (assets + files) to it.
+  const [companyFilter, setCompanyFilter] = React.useState<Company | null>(null);
+  // Files (loot vault) tab state.
+  const [files, setFiles] = React.useState<Artifact[]>([]);
+  const [filesTotal, setFilesTotal] = React.useState(0);
+  const [fileCount, setFileCount] = React.useState(0);
+  const [filesLoaded, setFilesLoaded] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
+  const uploadInputRef = React.useRef<HTMLInputElement | null>(null);
+
   // Companies + per-type counts (tab badges) — loaded on demand, no background polling.
   const loadMeta = React.useCallback(() => {
     api
@@ -184,7 +209,13 @@ function AssetsContent() {
       .catch(() => {
         /* Keep the last successful counters on a transient failure. */
       });
-  }, []);
+    api
+      .artifactCounts(companyFilter?.id)
+      .then((c) => setFileCount(c.total ?? 0))
+      .catch(() => {
+        /* Keep the last successful file counter on a transient failure. */
+      });
+  }, [companyFilter?.id]);
 
   // Manual refresh: reload counts/companies and re-fetch the current page.
   const refresh = React.useCallback(() => {
@@ -239,6 +270,33 @@ function AssetsContent() {
     }
   };
 
+  const handleDeleteArtifact = async (id: number) => {
+    try {
+      await api.deleteArtifact(id);
+      toast.success(ui("screen.1e2f3041526374"));
+      refresh();
+    } catch (e) {
+      toast.error(ui("screen.2f304152637485") + " " + String((e as Error)?.message ?? e));
+    }
+  };
+
+  const handleUploadArtifact = async (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(list)) {
+        await api.artifactUpload(f, { company_id: companyFilter?.id });
+      }
+      toast.success(ui("screen.3a4b5c6d7e8f90"));
+      refresh();
+    } catch (e) {
+      toast.error(ui("screen.4b5c6d7e8f90a1") + " " + String((e as Error)?.message ?? e));
+    } finally {
+      setUploading(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = "";
+    }
+  };
+
   const confirmDeleteCompany = async () => {
     if (!companyDeleteTarget) return;
     setCompanyDeleting(true);
@@ -263,7 +321,7 @@ function AssetsContent() {
     loadMeta();
   }, [loadMeta]);
 
-  // Reset query + page + selection when switching tabs
+  // Reset query + page + selection when switching tabs or company focus
   // biome-ignore lint/correctness/useExhaustiveDependencies: tab changes intentionally reset tab-local controls.
   React.useEffect(() => {
     setQuery(assetTarget?.type === tab ? `id==${assetTarget.id}` : "");
@@ -273,19 +331,26 @@ function AssetsContent() {
     setRowsTab("");
     setTotal(0);
     setLoaded(false);
-  }, [tab, assetTarget]);
+    setFiles([]);
+    setFilesTotal(0);
+    setFilesLoaded(false);
+  }, [tab, assetTarget, companyFilter]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: these controls intentionally reset server pagination.
-  React.useEffect(() => setPage(0), [tab, size, query]);
+  React.useEffect(() => setPage(0), [tab, size, query, companyFilter]);
 
   const dslMode = query.trim() !== "";
 
-  // Server-side paginated page loader for the active data tab (company tab excluded).
+  // Company drill-down scopes every asset tab via the server-side DSL.
+  const scopeDsl = companyFilter ? `company_id==${companyFilter.id}` : "";
+  const effectiveDsl = [scopeDsl, query.trim()].filter(Boolean).join(" && ");
+
+  // Server-side paginated page loader for the active data tab (company/file tabs excluded).
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is an explicit manual-reload trigger.
   React.useEffect(() => {
-    if (tab === "company") return;
+    if (tab === "company" || tab === "file") return;
     const request = ++assetsRequestRef.current;
-    const dsl = query.trim();
+    const dsl = effectiveDsl;
     setLoading(true);
     const offset = page * size;
     const run = async () => {
@@ -314,10 +379,41 @@ function AssetsContent() {
       clearTimeout(tid);
       if (assetsRequestRef.current === request) assetsRequestRef.current++;
     };
-  }, [tab, page, size, query, refreshKey]);
+  }, [tab, page, size, effectiveDsl, refreshKey]);
+
+  // Files (loot vault) loader for the active company scope.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is an explicit manual-reload trigger.
+  React.useEffect(() => {
+    if (tab !== "file") return;
+    const request = ++assetsRequestRef.current;
+    const run = async () => {
+      try {
+        const r = await api.artifacts({
+          company_id: companyFilter?.id,
+          limit: size,
+          offset: page * size,
+        });
+        if (assetsRequestRef.current !== request) return;
+        setFiles(r.artifacts);
+        setFilesTotal(r.total);
+        setFilesLoaded(true);
+      } catch (e) {
+        if (assetsRequestRef.current !== request) return;
+        setFiles([]);
+        setFilesTotal(0);
+        setFilesLoaded(true);
+        toast.error(String((e as Error)?.message ?? e));
+      }
+    };
+    const tid = setTimeout(run, 0);
+    return () => {
+      clearTimeout(tid);
+      if (assetsRequestRef.current === request) assetsRequestRef.current++;
+    };
+  }, [tab, page, size, companyFilter, refreshKey]);
 
   React.useEffect(() => {
-    if (tab === "company") return;
+    if (tab === "company" || tab === "file") return;
     const lastPage = Math.max(0, Math.ceil(total / size) - 1);
     if (page > lastPage) setPage(lastPage);
   }, [page, size, tab, total]);
@@ -330,7 +426,7 @@ function AssetsContent() {
 
   const companyName = (id?: number) => (id ? (companyById.get(id) ?? "") : "");
 
-  const tabCounts: Record<string, number> = { ...counts, company: companies.length };
+  const tabCounts: Record<string, number> = { ...counts, company: companies.length, file: fileCount };
   const totalAssets = Object.values(counts).reduce((a, b) => a + b, 0);
 
   // rows are already the current server-side page.
@@ -412,6 +508,32 @@ function AssetsContent() {
         </div>
       </div>
 
+      {companyFilter ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <CompanyAvatar name={companyFilter.name} logo={companyFilter.logo} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {ui("screen.7a8b9c0d1e2f30")} · {companyFilter.name}
+                <span className="tabular-nums text-muted-foreground">{companyFilter.asset_count}</span>
+              </div>
+              <p className="truncate text-xs text-muted-foreground">
+                {companyFilter.scope?.map((s) => s.raw).join(" · ") || ui("screen.0d1e2f30415263")}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setTab("file")}>
+              <FileTextIcon className="size-3.5" /> {ui("screen.9f1c2a3b4d5e60")}
+              <span className="tabular-nums text-muted-foreground">{fileCount}</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setCompanyFilter(null)}>
+              <XIcon className="size-3.5" /> {ui("screen.8b9c0d1e2f3041")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="overflow-x-auto overflow-y-hidden">
           <TabsList variant="default">
@@ -440,11 +562,18 @@ function AssetsContent() {
                 </TableHeader>
                 <TableBody>
                   {companies.map((c) => (
-                    <TableRow key={c.id}>
+                    <TableRow key={c.id} className={cn(companyFilter?.id === c.id && "bg-muted/40")}>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <CompanyAvatar name={c.name} logo={c.logo} />
-                          <span className="font-medium">{c.name}</span>
+                          <button
+                            type="button"
+                            className="cursor-pointer text-left font-medium hover:underline"
+                            title={ui("screen.0d1e2f30415263")}
+                            onClick={() => setCompanyFilter(c)}
+                          >
+                            {c.name}
+                          </button>
                         </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-sm">{c.asset_count}</TableCell>
@@ -490,6 +619,142 @@ function AssetsContent() {
                   )}
                 </TableBody>
               </Table>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* 文件 (loot vault) */}
+        <TabsContent value="file" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
+            <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+              <span className="text-sm text-muted-foreground">
+                <span className="tabular-nums">{filesTotal}</span> {ui("screen.9f1c2a3b4d5e60")}
+                {companyFilter ? ` · ${companyFilter.name}` : ""}
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={uploadInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleUploadArtifact(e.target.files)}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={uploading}
+                  onClick={() => uploadInputRef.current?.click()}
+                >
+                  <FileTextIcon className="size-3.5" /> {ui("screen.5c6d7e8f90a1b2")}
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead>{ui("screen.1a2b3c4d5e6f70")}</TableHead>
+                    <TableHead className="w-20">{ui("screen.2b3c4d5e6f7081")}</TableHead>
+                    <TableHead className="w-20 text-right">{ui("screen.3c4d5e6f708192")}</TableHead>
+                    <TableHead className="w-40">{ui("screen.409d0719010a46")}</TableHead>
+                    <TableHead className="w-64">{ui("screen.4d5e6f708192a3")}</TableHead>
+                    <TableHead className="w-44">{ui("screen.5e6f708192a3b4")}</TableHead>
+                    <TableHead className="w-24 text-right">{ui("screen.ed31fbb483ee1b")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {files.map((f) => (
+                    <TableRow key={f.id}>
+                      <TableCell>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{f.name}</div>
+                          {f.description ? (
+                            <div className="truncate text-xs text-muted-foreground">{f.description}</div>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className="text-[11px]">
+                          {f.kind}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="tabular-nums text-xs">{formatArtifactBytes(f.size)}</TableCell>
+                      <TableCell className="text-xs">{companyName(f.company_id) || "—"}</TableCell>
+                      <TableCell className="max-w-64 truncate font-mono text-xs">
+                        {f.source_url ? (
+                          <a
+                            href={f.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="hover:underline"
+                            title={f.source_url}
+                          >
+                            {f.source_url}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {f.created_at ? new Date(f.created_at).toLocaleString() : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title={ui("screen.9c0d1e2f304152")}
+                            onClick={() =>
+                              api
+                                .artifactDownload(f.id, f.filename || f.name)
+                                .catch((e) => toast.error(String((e as Error)?.message ?? e)))
+                            }
+                          >
+                            <FileTextIcon className="size-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => handleDeleteArtifact(f.id)}
+                          >
+                            <Trash2Icon className="size-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {files.length === 0 && filesLoaded && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                        {ui("screen.6f708192a3b4c5")}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-7"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeftIcon className="size-3.5" />
+              </Button>
+              <span className="tabular-nums">{page + 1}</span>
+              <Button
+                variant="outline"
+                size="icon"
+                className="size-7"
+                disabled={(page + 1) * size >= filesTotal}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <ChevronRightIcon className="size-3.5" />
+              </Button>
             </div>
           </Card>
         </TabsContent>

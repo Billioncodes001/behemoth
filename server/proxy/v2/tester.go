@@ -218,7 +218,9 @@ func testProxyDirect(px *ProxyInfo) (bool, string, int64, string) {
 // Returns: country name, city, country code.
 func lookupGeoIP(ip string) (string, string, string) {
 	// Strip port if present
-	if idx := strings.Index(ip, ":"); idx != -1 { ip = ip[:idx] }
+	if idx := strings.Index(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
 
 	// Skip local IPs
 	if strings.HasPrefix(ip, "127.") || strings.HasPrefix(ip, "192.168.") ||

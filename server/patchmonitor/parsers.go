@@ -24,11 +24,15 @@ func parseNVD(body []byte) []Vulnerability {
 	var result struct {
 		Vulnerabilities []struct {
 			CVE struct {
-				ID      string                            `json:"id"`
-				Desc    []struct{ Value string `json:"value"` } `json:"descriptions"`
+				ID   string `json:"id"`
+				Desc []struct {
+					Value string `json:"value"`
+				} `json:"descriptions"`
 				Metrics struct {
 					CVSS31 []struct {
-						Data struct{ Score *float64 `json:"score"` } `json:"cvssData"`
+						Data struct {
+							Score *float64 `json:"score"`
+						} `json:"cvssData"`
 					} `json:"cvssMetricV31"`
 				} `json:"metrics"`
 			} `json:"cve"`
@@ -137,7 +141,6 @@ func parseMSRC(body []byte) []Vulnerability {
 	}
 	return vulns
 }
-
 
 // ---------- Red Hat Security Data Parser ----------
 
@@ -362,4 +365,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-

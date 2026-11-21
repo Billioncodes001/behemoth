@@ -141,6 +141,7 @@ func (s *Server) arsenalTools() []actool.CoreTool {
 		s.toolListSecurityArsenal(),
 		s.toolRunSecurityTool(),
 		s.toolBrowserInspect(),
+		s.toolVerifyXSSExecution(),
 		s.toolDetectDeceptionAndHoneypot(),
 		s.toolProxiedTCPRelay(),
 		s.toolCreateCallbackListener(),
@@ -163,6 +164,10 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				"ffuf", "gobuster", "dirb", "sqlmap", "nikto", "whatweb",
 				"wafw00f", "hydra", "sslscan", "dig", "whois", "nc",
 				"socat", "openssl", "curl", "python3", "rg", "jq",
+				"rustscan", "masscan", "smtp-user-enum", "onesixtyone", "snmpwalk",
+				"impacket-secretsdump", "impacket-GetNPUsers", "bloodhound-python",
+				"msfvenom", "trivy", "grype", "semgrep",
+				"aws", "az", "gcloud", "pacu", "scout",
 			}
 			installed := make([]map[string]string, 0, len(cliNames))
 			var missing []string
@@ -238,6 +243,16 @@ func (s *Server) toolRunSecurityTool() actool.CoreTool {
 				strParams["wordlist"] = wls["common_web"]
 			}
 
+			// Auto-inject the ARTEX private nuclei template repo (fed by verified
+			// Patch Monitor exploits) when the caller didn't specify templates.
+			if a.ToolID == "nuclei-scan" {
+				if tpl, ok := strParams["templates"]; !ok || strings.TrimSpace(tpl) == "" {
+					if dir := s.customNucleiTemplateDir(); dir != "" {
+						strParams["templates"] = dir
+					}
+				}
+			}
+
 			timeout := 180 * time.Second
 			if a.TimeoutSeconds > 0 {
 				if a.TimeoutSeconds > 900 {
@@ -264,6 +279,78 @@ func (s *Server) toolRunSecurityTool() actool.CoreTool {
 				"parsed":      res.Parsed,
 				"output":      out,
 				"error":       res.Error,
+			})
+		})
+}
+
+// customNucleiTemplateDir returns the ARTEX private nuclei template directory
+// (fed by verified Patch Monitor exploits) when it exists and is non-empty.
+func (s *Server) customNucleiTemplateDir() string {
+	if s.patchMon == nil {
+		return ""
+	}
+	dir := s.patchMon.NucleiTemplatesDir()
+	if dir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	return dir
+}
+
+func (s *Server) toolVerifyXSSExecution() actool.CoreTool {
+	return roTool("verify_xss_execution",
+		"Execute a JavaScript/XSS payload against a URL in headless Chromium and report hard execution evidence: alert dialog fired, in-page DOM marker set, and/or unescaped payload reflection in the live DOM. Use this to AUTOMATICALLY verify reflected/DOM XSS before reporting a finding (replaces manual 'open in browser and watch for the alert').",
+		objSchema(map[string]any{
+			"url":             strParam("Target URL. The payload is appended as query parameter ?<param>=<payload> when 'param' is given; otherwise the payload must already be embedded in this URL"),
+			"param":           strParam("Optional query parameter name to inject the payload into (e.g. 'q', 'search', 'name')"),
+			"payload":         strParam("Optional JS payload; default is <svg/onload=\"window.__artexXss=true;alert('artex_xss_probe')\">"),
+			"timeout_seconds": map[string]any{"type": "integer", "description": "Optional execution wait in seconds (default 30, max 90)"},
+		}, "url"),
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+			if s.browserScraper == nil {
+				return actool.Errorf("headless browser scraper is not initialized"), nil
+			}
+			var a struct {
+				URL            string `json:"url"`
+				Param          string `json:"param"`
+				Payload        string `json:"payload"`
+				TimeoutSeconds int    `json:"timeout_seconds"`
+			}
+			_ = json.Unmarshal(in, &a)
+			a.URL = strings.TrimSpace(a.URL)
+			if a.URL == "" {
+				return actool.Errorf("url is required"), nil
+			}
+			to := 30 * time.Second
+			if a.TimeoutSeconds > 0 && a.TimeoutSeconds <= 90 {
+				to = time.Duration(a.TimeoutSeconds) * time.Second
+			}
+			runCtx, cancel := context.WithTimeout(ctx, to)
+			defer cancel()
+			res, err := s.browserScraper.VerifyXSS(runCtx, browser.XSSVerifyRequest{
+				URL:     a.URL,
+				Param:   strings.TrimSpace(a.Param),
+				Payload: a.Payload,
+				Timeout: to,
+			})
+			if err != nil {
+				return actool.Errorf(fmt.Sprintf("verify_xss_execution failed: %v", err)), nil
+			}
+			return jsonResult(map[string]any{
+				"url":              res.URL,
+				"payload":          res.Payload,
+				"confirmed":        res.Confirmed,
+				"dialog_fired":     res.DialogFired,
+				"dialog_message":   res.DialogMessage,
+				"dom_marker":       res.DOMMarker,
+				"reflection_raw":   res.ReflectionRaw,
+				"console_messages": res.ConsoleMessages,
+				"evidence":         res.Evidence,
+				"error":            res.Error,
+				"duration_ms":      res.Duration.Milliseconds(),
 			})
 		})
 }

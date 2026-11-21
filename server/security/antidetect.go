@@ -15,7 +15,7 @@ import (
 
 // StealthConfig holds stealth configuration
 type StealthConfig struct {
-	Enabled            bool          `json:"enabled"`
+	Enabled           bool          `json:"enabled"`
 	RequestJitter     time.Duration `json:"request_jitter"`
 	UserAgentRotation bool          `json:"ua_rotation"`
 	HeaderRandomize   bool          `json:"header_randomize"`
@@ -27,7 +27,7 @@ type StealthConfig struct {
 // DefaultStealthConfig returns sensible defaults
 func DefaultStealthConfig() StealthConfig {
 	return StealthConfig{
-		Enabled:            true,
+		Enabled:           true,
 		RequestJitter:     500 * time.Millisecond,
 		UserAgentRotation: true,
 		HeaderRandomize:   true,
@@ -206,11 +206,12 @@ func (ad *AntiDetect) CheckRateLimit(ip string) (bool, time.Duration) {
 
 	now := time.Now()
 	windowStart, exists := ad.windowStart[ip]
-	
+
 	// Reset window if expired
 	if !exists || now.Sub(windowStart) > time.Minute {
 		ad.windowStart[ip] = now
 		ad.requestCount[ip] = 1
+		ad.pruneExpiredWindows(now)
 		return true, 0
 	}
 
@@ -221,6 +222,25 @@ func (ad *AntiDetect) CheckRateLimit(ip string) (bool, time.Duration) {
 	}
 
 	return true, 0
+}
+
+// pruneExpiredWindows drops per-IP entries whose rate-limit window expired long
+// ago. Nothing else removes them, so an internet-facing deployment would grow
+// requestCount/windowStart by one pair per unique IP forever — public cloud
+// scanners alone turn this into a slow leak. Called with ad.mu held. Threshold
+// keeps pruning off the hot path for the common single-user case.
+func (ad *AntiDetect) pruneExpiredWindows(now time.Time) {
+	const pruneAfter = 2 * time.Minute
+	const minEntries = 4096
+	if len(ad.windowStart) < minEntries {
+		return
+	}
+	for ip, ws := range ad.windowStart {
+		if now.Sub(ws) > pruneAfter {
+			delete(ad.windowStart, ip)
+			delete(ad.requestCount, ip)
+		}
+	}
 }
 
 // GetJitter returns a random jitter duration

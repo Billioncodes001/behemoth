@@ -11,14 +11,21 @@ import type {
   Activity,
   Agent,
   AgentDetail,
+  AgentRequest,
+  AgentRequestStatus,
   AgentTrigger,
   ArchiveBatchItem,
+  Artifact,
   Asset,
   AssetInterceptRule,
   AssetInterceptRuleInput,
   Audit,
   BatchCategoryItem,
   BatchControlItem,
+  // Search & Browser types (Pentagi-inspired)
+  BrowserRequest,
+  BrowserResult,
+  CatalogTool,
   ChatAttachment,
   CommandRecord,
   Company,
@@ -28,6 +35,8 @@ import type {
   ConvTokenSummary,
   CoverageAssetRefs,
   CoverageGraphData,
+  // Proxy Pool V2, Recipes, Facts, Execution, Targets & Security types
+  CreateFactRequest,
   CredentialTrafficDetail,
   DailyTokenBucket,
   DeleteTaskOptions,
@@ -35,8 +44,10 @@ import type {
   Edge,
   EgressReport,
   EvidenceBodyPreview,
+  ExecutionResult,
   ExplorationNodePage,
   ExplorationNodeQuery,
+  Fact,
   Finding,
   FindingAssetTree,
   FindingCaseDetail,
@@ -80,17 +91,34 @@ import type {
   PromptVersion,
   ProxyPoolEntry,
   ProxySwitchLog,
+  ProxyV2Config,
+  ProxyV2Entry,
+  ProxyV2ImportResult,
+  ProxyV2Stats,
+  ProxyV2SwitchLog,
+  ProxyV2TestResult,
+  Recipe,
   RepeaterSendRequest,
   RepeaterSendResponse,
+  SearchEnginesStatus,
+  SearchRequest,
+  SearchResult,
+  SecurityCheckRequest,
+  SecurityCheckResponse,
+  SecurityStats,
   SessionTokenUsage,
   Settings,
   Severity,
   SkillCall,
   SkillItem,
+  SSHConfig,
   SSProject,
   SSTask,
   Stats,
+  StealthConfig,
   SystemMetrics,
+  Target,
+  TargetExecResult,
   Task,
   TaskArchive,
   TaskArchivePage,
@@ -110,7 +138,6 @@ import type {
   TokenTotal,
   TokenUsage,
   Tool,
-  CatalogTool,
   ToolCategory,
   ToolStat,
   TrafficDetail,
@@ -125,30 +152,6 @@ import type {
   WinRMConfig,
   WorkspaceFile,
   WorkspaceListing,
-  // Proxy Pool V2, Recipes, Facts, Execution, Targets & Security types
-  CreateFactRequest,
-  ExecutionResult,
-  Fact,
-  ProxyV2Config,
-  ProxyV2Entry,
-  ProxyV2ImportResult,
-  ProxyV2Stats,
-  ProxyV2SwitchLog,
-  ProxyV2TestResult,
-  Recipe,
-  SecurityCheckRequest,
-  SecurityCheckResponse,
-  SecurityStats,
-  SSHConfig,
-  StealthConfig,
-  Target,
-  TargetExecResult,
-  // Search & Browser types (Pentagi-inspired)
-  BrowserRequest,
-  BrowserResult,
-  SearchEnginesStatus,
-  SearchResult,
-  SearchRequest,
 } from "@/lib/types";
 
 /**
@@ -851,6 +854,109 @@ export const api = {
   taskIntentAssets: (taskId: string) =>
     get<{ assets: IntentAsset[] }>(`/tasks/${taskId}/intent-assets`).then((r) => arr(r.assets)),
 
+  // ---- artifacts (loot vault: Assets → Files) ----
+  artifacts: (
+    params: {
+      company_id?: number;
+      task_id?: number;
+      asset_id?: number;
+      kind?: string;
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (params.company_id) p.set("company_id", String(params.company_id));
+    if (params.task_id) p.set("task_id", String(params.task_id));
+    if (params.asset_id) p.set("asset_id", String(params.asset_id));
+    if (params.kind) p.set("kind", params.kind);
+    if (params.q) p.set("q", params.q);
+    if (params.limit) p.set("limit", String(params.limit));
+    if (params.offset) p.set("offset", String(params.offset));
+    const qs = p.toString();
+    return get<{ artifacts: Artifact[]; total: number; counts: Record<string, number> }>(
+      `/artifacts${qs ? `?${qs}` : ""}`,
+    ).then((r) => ({
+      artifacts: arr(r?.artifacts),
+      total: r?.total ?? 0,
+      counts: r?.counts ?? {},
+    }));
+  },
+  artifactCounts: (companyId?: number) =>
+    get<Record<string, number>>(`/artifacts/counts${companyId ? `?company_id=${companyId}` : ""}`),
+  deleteArtifact: (id: number) => http<{ deleted: number }>(`/artifacts/${id}`, { method: "DELETE" }),
+  artifactUpload: async (
+    file: File,
+    meta: { name?: string; company_id?: number; task_id?: number; source_url?: string; description?: string } = {},
+  ) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (meta.name) fd.append("name", meta.name);
+    if (meta.company_id) fd.append("company_id", String(meta.company_id));
+    if (meta.task_id) fd.append("task_id", String(meta.task_id));
+    if (meta.source_url) fd.append("source_url", meta.source_url);
+    if (meta.description) fd.append("description", meta.description);
+    const token = getToken();
+    const r = await apiFetch("/api/artifacts", {
+      method: "POST",
+      body: fd,
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!r.ok) throw new Error(`Upload failed: ${r.status}`);
+    return r.json() as Promise<{ artifacts: Artifact[]; errors?: string }>;
+  },
+  artifactDownload: async (id: number, filename: string) => {
+    const token = getToken();
+    const r = await apiFetch(`/api/artifacts/${id}/download`, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!r.ok) throw new Error(`Download failed: ${r.status}`);
+    const blob = await r.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename || `artifact-${id}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
+  },
+
+  // ---- agent requests (report_need inbox: System → Agent Requests) ----
+  agentRequests: (
+    params: {
+      status?: string;
+      kind?: string;
+      agent?: string;
+      q?: string;
+      task_id?: number;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (params.status) p.set("status", params.status);
+    if (params.kind) p.set("kind", params.kind);
+    if (params.agent) p.set("agent", params.agent);
+    if (params.q) p.set("q", params.q);
+    if (params.task_id) p.set("task_id", String(params.task_id));
+    if (params.limit) p.set("limit", String(params.limit));
+    if (params.offset) p.set("offset", String(params.offset));
+    const qs = p.toString();
+    return get<{ requests: AgentRequest[]; total: number; counts: Record<string, number> }>(
+      `/agent-requests${qs ? `?${qs}` : ""}`,
+    ).then((r) => ({
+      requests: arr(r?.requests),
+      total: r?.total ?? 0,
+      counts: r?.counts ?? {},
+    }));
+  },
+  agentRequestCounts: () => get<Record<string, number>>(`/agent-requests/counts`),
+  setAgentRequestStatus: (id: number, status: AgentRequestStatus) =>
+    patch<AgentRequest>(`/agent-requests/${id}`, { status }),
+  deleteAgentRequest: (id: number) => del<{ deleted: number }>(`/agent-requests/${id}`),
+
   // ---- companies (企业 + 资产范围；归属唯一来源) ----
   companies: () => get<Company[]>("/companies").then(arr),
   createCompany: (name: string, scope: CompanyScopeRule[]) =>
@@ -1225,7 +1331,10 @@ export const api = {
         page.total < 0 ||
         typeof page.enabled !== "boolean"
       ) {
-        throw new ApiError("The intelligence response is incomplete. Refresh to try again.", "intelligence_response_invalid");
+        throw new ApiError(
+          "The intelligence response is incomplete. Refresh to try again.",
+          "intelligence_response_invalid",
+        );
       }
       return page;
     }),
@@ -1304,12 +1413,9 @@ export const api = {
   // === PROXY POOL V2 API ===
   // New enhanced proxy pool with GeoIP, multi-format import, rotation strategies
   proxyV2: {
-    getConfig: () =>
-      get<ProxyV2Config>(`/v2/proxy-pool/config`),
-    updateConfig: (cfg: Partial<ProxyV2Config>) =>
-      put<{ ok: boolean }>(`/v2/proxy-pool/config`, cfg),
-    listProxies: () =>
-      get<ProxyV2Entry[]>(`/v2/proxy-pool/proxies`),
+    getConfig: () => get<ProxyV2Config>(`/v2/proxy-pool/config`),
+    updateConfig: (cfg: Partial<ProxyV2Config>) => put<{ ok: boolean }>(`/v2/proxy-pool/config`, cfg),
+    listProxies: () => get<ProxyV2Entry[]>(`/v2/proxy-pool/proxies`),
     importProxies: (payload: {
       data: string;
       default_type?: string;
@@ -1337,26 +1443,29 @@ export const api = {
       if (!r.ok) throw new Error(body?.error || `Proxy upload failed (${r.status})`);
       return body as ProxyV2ImportResult;
     },
-    getProxy: (id: string) =>
-      get<ProxyV2Entry>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
+    getProxy: (id: string) => get<ProxyV2Entry>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
     updateProxy: (id: string, payload: Partial<ProxyV2Entry>) =>
       put<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`, payload),
-    deleteProxy: (id: string) =>
-      del<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
+    deleteProxy: (id: string) => del<{ ok: boolean }>(`/v2/proxy-pool/proxies/${encodeURIComponent(id)}`),
     proxyAction: (id: string, action: "activate" | "deactivate" | "test" | "toggle") =>
-      post<{ ok?: boolean; status?: string; success?: boolean; latency_ms?: number; response_ip?: string; error?: string }>(`/v2/proxy-pool/action`, { id, action }),
+      post<{
+        ok?: boolean;
+        status?: string;
+        success?: boolean;
+        latency_ms?: number;
+        response_ip?: string;
+        error?: string;
+      }>(`/v2/proxy-pool/action`, { id, action }),
     testAll: () =>
-      post<{ results: ProxyV2TestResult[]; summary: { total: number; passed: number; failed: number } }>(`/v2/proxy-pool/test-all`, {}),
-    clearFailed: () =>
-      post<{ cleared: number }>(`/v2/proxy-pool/clear-failed`, {}),
-    clearAll: () =>
-      post<{ cleared: number }>(`/v2/proxy-pool/clear-all`, {}),
-    forceRotate: () =>
-      get<ProxyV2Entry | null>(`/v2/proxy-pool/rotate`),
-    getStats: () =>
-      get<ProxyV2Stats>(`/v2/proxy-pool/stats`),
-    getLogs: () =>
-      get<ProxyV2SwitchLog[]>(`/v2/proxy-pool/logs`),
+      post<{ results: ProxyV2TestResult[]; summary: { total: number; passed: number; failed: number } }>(
+        `/v2/proxy-pool/test-all`,
+        {},
+      ),
+    clearFailed: () => post<{ cleared: number }>(`/v2/proxy-pool/clear-failed`, {}),
+    clearAll: () => post<{ cleared: number }>(`/v2/proxy-pool/clear-all`, {}),
+    forceRotate: () => get<ProxyV2Entry | null>(`/v2/proxy-pool/rotate`),
+    getStats: () => get<ProxyV2Stats>(`/v2/proxy-pool/stats`),
+    getLogs: () => get<ProxyV2SwitchLog[]>(`/v2/proxy-pool/logs`),
   },
 
   commercial: {
@@ -1665,19 +1774,16 @@ export const api = {
     put<{ ok: boolean }>(`/agents/${key}/visibility`, { mcp, skill }),
 
   // ---- tools (内置工具目录) ----
-  tools: Object.assign(
-    () => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)),
-    {
-      list: () => get<{ tools: CatalogTool[]; count: number }>("/v2/tools"),
-      get: (id: string) => get<CatalogTool>(`/v2/tools/${id}`),
-      categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
-      search: (query: string) => post<{ results: CatalogTool[]; count: number }>("/v2/tools/search", { query }),
-      execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
-        post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
-      getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),
-      history: () => get<{ history: ExecutionResult[]; count: number }>("/v2/tools/history"),
-    },
-  ),
+  tools: Object.assign(() => get<{ tools: Tool[] }>("/tools").then((r) => arr(r.tools)), {
+    list: () => get<{ tools: CatalogTool[]; count: number }>("/v2/tools"),
+    get: (id: string) => get<CatalogTool>(`/v2/tools/${id}`),
+    categories: () => get<{ categories: ToolCategory[]; count: number }>("/v2/tools/categories"),
+    search: (query: string) => post<{ results: CatalogTool[]; count: number }>("/v2/tools/search", { query }),
+    execute: (toolId: string, params: Record<string, string>, timeout?: number) =>
+      post<ExecutionResult>("/v2/tools/execute", { tool_id: toolId, parameters: params, timeout }),
+    getExecution: (id: string) => get<ExecutionResult>(`/v2/tools/execution/${id}`),
+    history: () => get<{ history: ExecutionResult[]; count: number }>("/v2/tools/history"),
+  }),
   saveTool: (key: string, patch: Pick<Tool, "description" | "schema" | "agents" | "enabled">) =>
     put<{ ok: boolean }>(`/tools/${key}`, patch),
   resetTool: (key: string) => post<{ ok: boolean }>(`/tools/${key}/reset`, {}),
@@ -1916,7 +2022,8 @@ export const api = {
     list: () => get<{ recipes: Recipe[]; count: number }>("/v2/recipes"),
     get: (id: string) => get<Recipe>(`/v2/recipes/${id}`),
     categories: () => get<{ categories: string[]; count: number }>("/v2/recipes/categories"),
-    search: (query: string) => post<{ results: Recipe[]; query: string; count: number }>("/v2/recipes/search", { query }),
+    search: (query: string) =>
+      post<{ results: Recipe[]; query: string; count: number }>("/v2/recipes/search", { query }),
   },
 
   // ============================================================
@@ -1931,7 +2038,10 @@ export const api = {
     search: (query: string) => post<{ results: Fact[]; query: string; count: number }>("/v2/facts/search", { query }),
     stats: () => get<Record<string, number>>("/v2/facts/stats"),
     link: (sourceId: string, targetId: string) =>
-      post<{ message: string; source_id: string; target_id: string }>("/v2/facts/link", { source_id: sourceId, target_id: targetId }),
+      post<{ message: string; source_id: string; target_id: string }>("/v2/facts/link", {
+        source_id: sourceId,
+        target_id: targetId,
+      }),
   },
 
   // ============================================================
@@ -1960,19 +2070,22 @@ export const api = {
   // TARGET CONNECTORS API (HackingBuddyGPT-inspired)
   // ============================================================
   targets: {
-    connectSSH: (config: SSHConfig) =>
-      post<Target>("/v2/targets/connect/ssh", config),
-    connectWinRM: (config: WinRMConfig) =>
-      post<Target>("/v2/targets/connect/winrm", config),
-    disconnect: (id: string) =>
-      del<{ message: string; target_id: string }>(`/v2/targets/${id}`),
+    connectSSH: (config: SSHConfig) => post<Target>("/v2/targets/connect/ssh", config),
+    connectWinRM: (config: WinRMConfig) => post<Target>("/v2/targets/connect/winrm", config),
+    disconnect: (id: string) => del<{ message: string; target_id: string }>(`/v2/targets/${id}`),
     list: () => get<{ targets: Target[]; count: number }>("/v2/targets"),
     execute: (targetId: string, command: string) =>
       post<TargetExecResult>(`/v2/targets/${targetId}/execute`, { command }),
     sftpUpload: (targetId: string, localPath: string, remotePath: string) =>
-      post<{ message: string; local: string; remote: string }>(`/v2/targets/${targetId}/sftp/upload`, { local_path: localPath, remote_path: remotePath }),
+      post<{ message: string; local: string; remote: string }>(`/v2/targets/${targetId}/sftp/upload`, {
+        local_path: localPath,
+        remote_path: remotePath,
+      }),
     sftpDownload: (targetId: string, remotePath: string, localPath: string) =>
-      post<{ message: string; remote: string; local: string }>(`/v2/targets/${targetId}/sftp/download`, { remote_path: remotePath, local_path: localPath }),
+      post<{ message: string; remote: string; local: string }>(`/v2/targets/${targetId}/sftp/download`, {
+        remote_path: remotePath,
+        local_path: localPath,
+      }),
   },
 
   // ============================================================
@@ -1981,12 +2094,9 @@ export const api = {
   security: {
     stats: () => get<SecurityStats>("/v2/security/stats"),
     listIOCs: () => get<{ blocked_ips: string[]; total_blocked: number }>("/v2/security/iocs"),
-    addIOC: (ip: string, reason?: string) =>
-      post<{ message: string; ip: string }>("/v2/security/iocs", { ip, reason }),
-    removeIOC: (ip: string) =>
-      del<{ message: string; ip: string }>(`/v2/security/iocs/${ip}`),
-    check: (request: SecurityCheckRequest) =>
-      post<SecurityCheckResponse>("/v2/security/check", request),
+    addIOC: (ip: string, reason?: string) => post<{ message: string; ip: string }>("/v2/security/iocs", { ip, reason }),
+    removeIOC: (ip: string) => del<{ message: string; ip: string }>(`/v2/security/iocs/${ip}`),
+    check: (request: SecurityCheckRequest) => post<SecurityCheckResponse>("/v2/security/check", request),
     getStealthConfig: () => get<StealthConfig>("/v2/security/stealth/config"),
     updateStealthConfig: (config: StealthConfig) =>
       post<{ message: string; config: StealthConfig }>("/v2/security/stealth/config", config),
@@ -1997,12 +2107,10 @@ export const api = {
   // ============================================================
   search: {
     engines: () => get<SearchEnginesStatus>("/v2/search/engines"),
-    search: (request: SearchRequest) =>
-      post<SearchResult>("/v2/search", request),
+    search: (request: SearchRequest) => post<SearchResult>("/v2/search", request),
     exploit: (query: string, maxResults?: number) =>
       post<SearchResult>("/v2/search/exploit", { query, max_results: maxResults ?? 15 }),
-    saveConfig: (config: { engine: string; api_key: string }) =>
-      post<{ ok: boolean }>("/v2/search/config", config),
+    saveConfig: (config: { engine: string; api_key: string }) => post<{ ok: boolean }>("/v2/search/config", config),
   },
 
   // ============================================================
@@ -2010,11 +2118,12 @@ export const api = {
   // ============================================================
   browser: {
     getConfig: () =>
-      get<{ scraper_url: string; use_local_chrome: boolean; chrome_path?: string; available?: boolean }>("/v2/browser/config"),
+      get<{ scraper_url: string; use_local_chrome: boolean; chrome_path?: string; available?: boolean }>(
+        "/v2/browser/config",
+      ),
     screenshot: (url: string, fullPage?: boolean) =>
       post<BrowserResult>("/v2/browser/screenshot", { url, full_page: fullPage }),
-    content: (url: string) =>
-      post<BrowserResult>("/v2/browser/content", { url }),
+    content: (url: string) => post<BrowserResult>("/v2/browser/content", { url }),
     saveConfig: (config: { scraper_url: string; use_local_chrome: boolean }) =>
       post<{ ok: boolean }>("/v2/browser/config", config),
   },

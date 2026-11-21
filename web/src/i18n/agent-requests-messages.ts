@@ -1,0 +1,42 @@
+// Agent capability/infra request inbox (System → Agent Requests + top-bar
+// alerts bell). Kept as a static [zh, en] message module like notify-messages,
+// so every key used by the page/alerts button resolves without catalog churn.
+export const agentRequestsMessages = {
+  "nav.agent-requests": ["Agent 请求", "Agent Requests"],
+  "agentRequests.title": ["Agent 能力请求", "Agent Requests"],
+  "agentRequests.subtitle": [
+    "Agent 在任务中发现平台缺少的工具 / 能力 / 集成 / 基础设施，会通过 report_need 上报到这里，供纳入后续更新。",
+    "Needs agents reported via report_need during tasks — missing tools, capabilities, integrations or infrastructure — queued for a future update.",
+  ],
+  "agentRequests.tab.new": ["待处理 ({{count}})", "New ({{count}})"],
+  "agentRequests.tab.acknowledged": ["已确认 ({{count}})", "Acknowledged ({{count}})"],
+  "agentRequests.tab.resolved": ["已解决 ({{count}})", "Resolved ({{count}})"],
+  "agentRequests.tab.dismissed": ["已忽略 ({{count}})", "Dismissed ({{count}})"],
+  "agentRequests.tab.all": ["全部 ({{count}})", "All ({{count}})"],
+  "agentRequests.empty": ["暂无请求", "No requests yet"],
+  "agentRequests.emptyHint": [
+    "当 Agent 发现缺少某个工具或能力时，会自动在这里上报。",
+    "Agents will report missing tools or capabilities here automatically.",
+  ],
+  "agentRequests.acknowledge": ["确认", "Acknowledge"],
+  "agentRequests.resolve": ["标记已解决", "Mark resolved"],
+  "agentRequests.dismiss": ["忽略", "Dismiss"],
+  "agentRequests.reopen": ["重新打开", "Reopen"],
+  "agentRequests.delete": ["删除", "Delete"],
+  "agentRequests.deleted": ["请求已删除", "Request deleted"],
+  "agentRequests.statusUpdated": ["状态已更新", "Status updated"],
+  "agentRequests.loadFailed": ["加载请求失败：{{message}}", "Failed to load requests: {{message}}"],
+  "agentRequests.actionFailed": ["操作失败：{{message}}", "Action failed: {{message}}"],
+  "agentRequests.task": ["任务", "Task"],
+  "agentRequests.details": ["详情", "Details"],
+  "agentRequests.context": ["背景", "Context"],
+  "agentRequests.refresh": ["刷新", "Refresh"],
+  "agentRequests.alertsTitle": ["Agent 请求", "Agent requests"],
+  "agentRequests.alertsHint": [
+    "{{count}} 条新的 Agent 能力请求待处理",
+    "{{count}} new agent request(s) awaiting triage",
+  ],
+  "agentRequests.prevPage": ["上一页", "Previous page"],
+  "agentRequests.nextPage": ["下一页", "Next page"],
+  "agentRequests.pageInfo": ["第 {{page}} 页 · 共 {{total}} 条", "Page {{page}} · {{total}} total"],
+} as const;

@@ -16,7 +16,7 @@ func (vs *VectorStore) Search(ctx context.Context, queryEmbedding []float32, mem
 
 	var rows interface{ Close() }
 	var err error
-	
+
 	if memType != "" {
 		rows, err = vs.pool.Query(ctx, `
 			SELECT id, type, content, embedding, metadata, tags, created_at, expires_at,
@@ -45,11 +45,11 @@ func (vs *VectorStore) Search(ctx context.Context, queryEmbedding []float32, mem
 	for rows.(interface{ Next() bool }).Next() {
 		var e MemoryEntry
 		var metadataJSON []byte
-		
+
 		r := rows.(interface {
 			Scan(dest ...interface{}) error
 		})
-		
+
 		err := r.Scan(
 			&e.ID, &e.Type, &e.Content, &e.Embedding,
 			&metadataJSON, &e.Tags, &e.CreatedAt, &e.ExpiresAt,
@@ -58,7 +58,7 @@ func (vs *VectorStore) Search(ctx context.Context, queryEmbedding []float32, mem
 		if err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-		
+
 		json.Unmarshal(metadataJSON, &e.Metadata)
 		entries = append(entries, e)
 	}
@@ -70,20 +70,20 @@ func (vs *VectorStore) Search(ctx context.Context, queryEmbedding []float32, mem
 func (vs *VectorStore) GetByID(ctx context.Context, id string) (*MemoryEntry, error) {
 	var e MemoryEntry
 	var metadataJSON []byte
-	
+
 	err := vs.pool.QueryRow(ctx, `
 		SELECT id, type, content, embedding, metadata, tags, created_at, expires_at
 		FROM memory_entries WHERE id = $1 AND expires_at > NOW()
 	`, id).Scan(&e.ID, &e.Type, &e.Content, &e.Embedding,
 		&metadataJSON, &e.Tags, &e.CreatedAt, &e.ExpiresAt)
-	
+
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	
+
 	json.Unmarshal(metadataJSON, &e.Metadata)
 	return &e, nil
 }

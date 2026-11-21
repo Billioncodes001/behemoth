@@ -146,10 +146,10 @@ func (m *Monitor) AutoMatchAuthorizedTargets(vulns []Vulnerability) ([]AutoMatch
 
 	for rows.Next() {
 		var (
-			assetID                                                          int64
-			aType, domain, rootDom, ipStr, rawURL, svcType, svcName, title   string
-			techJSON, portsJSON                                              string
-			portNull                                                         sql.NullInt64
+			assetID                                                        int64
+			aType, domain, rootDom, ipStr, rawURL, svcType, svcName, title string
+			techJSON, portsJSON                                            string
+			portNull                                                       sql.NullInt64
 		)
 		if err := rows.Scan(&assetID, &aType, &domain, &rootDom, &ipStr, &portNull, &rawURL, &svcType, &svcName, &title, &techJSON, &portsJSON); err != nil {
 			continue
@@ -322,13 +322,13 @@ var excludedDirectoryDomains = []string{
 // NotificationCandidateEntry describes a publicly indexed website running an affected
 // technology, enrolled passively for responsible vulnerability notification (never auto-exploited).
 type NotificationCandidateEntry struct {
-	TargetID          int64    `json:"target_id"`
-	Host              string   `json:"host"`
-	URL               string   `json:"url"`
-	DetectedTech      string   `json:"detected_tech"`
-	DisclosureContact string   `json:"disclosure_contact"`
-	NewlyAdded        bool     `json:"newly_added"`
-	Notes             string   `json:"notes"`
+	TargetID          int64  `json:"target_id"`
+	Host              string `json:"host"`
+	URL               string `json:"url"`
+	DetectedTech      string `json:"detected_tech"`
+	DisclosureContact string `json:"disclosure_contact"`
+	NewlyAdded        bool   `json:"newly_added"`
+	Notes             string `json:"notes"`
 }
 
 // EnrollNotificationCandidates passively inspects public candidate URLs discovered via

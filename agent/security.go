@@ -1,9 +1,9 @@
 // Package agent implements offensive enhancement capabilities for ARTEX:
 //
 // This module ENHANCES offensive security operations by:
-//   1. Benign Reframing: decomposing refusal-triggering commands into technical subtasks
-//   2. Intent Encryption: encrypting sensitive objectives to bypass AI safety filters
-//   3. Refusal Detection: identifying when LLM might refuse and auto-reframing
+//  1. Benign Reframing: decomposing refusal-triggering commands into technical subtasks
+//  2. Intent Encryption: encrypting sensitive objectives to bypass AI safety filters
+//  3. Refusal Detection: identifying when LLM might refuse and auto-reframing
 //
 // PURPOSE: Help the agent execute legitimate security testing tasks even when
 // cloud AI models might refuse "offensive-sounding" but technically valid requests.
@@ -32,28 +32,27 @@ import (
 
 // OffensiveConfig holds the offensive enhancement module configuration.
 type OffensiveConfig struct {
-	EnableReframing         bool `json:"enable_reframing"`
-	EnableIntentEncryption  bool `json:"enable_intent_encryption"`
-	EnableRefusalDetection  bool `json:"enable_refusal_detection"`
+	EnableReframing         bool   `json:"enable_reframing"`
+	EnableIntentEncryption  bool   `json:"enable_intent_encryption"`
+	EnableRefusalDetection  bool   `json:"enable_refusal_detection"`
 	CryptoKey               string `json:"crypto_key,omitempty"`
-	RefusalThreshold        int    `json:"refusal_threshold"`          // default: 40
-	AnalysisWindow          int    `json:"analysis_window"`            // default: 30
-	MaxHistoryTurns         int    `json:"max_history_turns"`          // default: 20
-	AutoReframeWhenHighRisk bool  `json:"auto_reframe_when_high_risk"`
+	RefusalThreshold        int    `json:"refusal_threshold"` // default: 40
+	AnalysisWindow          int    `json:"analysis_window"`   // default: 30
+	MaxHistoryTurns         int    `json:"max_history_turns"` // default: 20
+	AutoReframeWhenHighRisk bool   `json:"auto_reframe_when_high_risk"`
 }
 
 func DefaultOffensiveConfig() OffensiveConfig {
 	return OffensiveConfig{
 		EnableReframing:         true,
 		EnableIntentEncryption:  true,
-		EnableRefusalDetection:   true,
-		RefusalThreshold:         40,
-		AnalysisWindow:           30,
+		EnableRefusalDetection:  true,
+		RefusalThreshold:        40,
+		AnalysisWindow:          30,
 		MaxHistoryTurns:         20,
-		AutoReframeWhenHighRisk:  true,
+		AutoReframeWhenHighRisk: true,
 	}
 }
-
 
 // ---------- Core Module ----------
 
@@ -140,12 +139,12 @@ func (o *OffensiveEnhancer) GetCryptoKey() string {
 
 // ReframeResult contains the result of decomposing a request into benign subtasks.
 type ReframeResult struct {
-	Original           string   `json:"original"`
-	Reframed           string   `json:"reframed,omitempty"`
-	MightTriggerRefusal bool    `json:"might_trigger_refusal"`
-	RiskScore          int      `json:"risk_score"`
-	DecomposedTasks    []string `json:"decomposed_tasks,omitempty"`
-	Technique          string   `json:"technique"`
+	Original            string   `json:"original"`
+	Reframed            string   `json:"reframed,omitempty"`
+	MightTriggerRefusal bool     `json:"might_trigger_refusal"`
+	RiskScore           int      `json:"risk_score"`
+	DecomposedTasks     []string `json:"decomposed_tasks,omitempty"`
+	Technique           string   `json:"technique"`
 }
 
 // taskDecomposer breaks down offensive-sounding requests into technical equivalents.
@@ -498,14 +497,14 @@ func (o *OffensiveEnhancer) DecryptIntent(ctx context.Context, enc *EncryptedCon
 
 // RefusalAnalysis contains analysis of potential LLM refusal triggers.
 type RefusalAnalysis struct {
-	Input              string          `json:"input"`
-	Score              int             `json:"score"`
-	MightBeRefused     bool            `json:"might_be_refused"`
-	DetectedPatterns   []PatternMatch  `json:"detected_patterns"`
-	RecommendedAction  string          `json:"recommended_action"` // "proceed" | "reframe" | "encrypt"
-	SuggestedReframe   string          `json:"suggested_reframe,omitempty"`
-	AnalyzedAt         time.Time       `json:"analyzed_at"`
-	TurnAnalysis       []TurnAnalysis  `json:"turn_analysis,omitempty"`
+	Input             string         `json:"input"`
+	Score             int            `json:"score"`
+	MightBeRefused    bool           `json:"might_be_refused"`
+	DetectedPatterns  []PatternMatch `json:"detected_patterns"`
+	RecommendedAction string         `json:"recommended_action"` // "proceed" | "reframe" | "encrypt"
+	SuggestedReframe  string         `json:"suggested_reframe,omitempty"`
+	AnalyzedAt        time.Time      `json:"analyzed_at"`
+	TurnAnalysis      []TurnAnalysis `json:"turn_analysis,omitempty"`
 }
 
 // PatternMatch represents a detected pattern.
@@ -694,7 +693,7 @@ func (o *OffensiveEnhancer) AnalyzeConversation(ctx context.Context, turns []str
 	overall := &RefusalAnalysis{
 		AnalyzedAt:       time.Now(),
 		DetectedPatterns: []PatternMatch{},
-		TurnAnalysis:      make([]TurnAnalysis, 0),
+		TurnAnalysis:     make([]TurnAnalysis, 0),
 	}
 
 	if !o.config.EnableRefusalDetection {
@@ -892,13 +891,13 @@ func (m *OffensiveMiddleware) DecryptObjective(ctx context.Context, enc *Encrypt
 func (m *OffensiveMiddleware) GetStatus() map[string]interface{} {
 	cfg := m.enhancer.GetConfig()
 	return map[string]interface{}{
-		"reframing_enabled":        cfg.EnableReframing,
-		"encryption_enabled":       cfg.EnableIntentEncryption,
+		"reframing_enabled":         cfg.EnableReframing,
+		"encryption_enabled":        cfg.EnableIntentEncryption,
 		"refusal_detection_enabled": cfg.EnableRefusalDetection,
-		"refusal_threshold":        cfg.RefusalThreshold,
-		"auto_reframe":             cfg.AutoReframeWhenHighRisk,
-		"has_crypto_key":           cfg.CryptoKey != "",
-		"purpose":                  "OFFENSIVE_ENHANCEMENT",
+		"refusal_threshold":         cfg.RefusalThreshold,
+		"auto_reframe":              cfg.AutoReframeWhenHighRisk,
+		"has_crypto_key":            cfg.CryptoKey != "",
+		"purpose":                   "OFFENSIVE_ENHANCEMENT",
 	}
 }
 

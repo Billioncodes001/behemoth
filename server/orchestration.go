@@ -86,6 +86,9 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 	}, s.findingCaseTools()...)
 	out = append(out, s.patchMonitorTools()...)
 	out = append(out, s.arsenalTools()...)
+	out = append(out, s.artifactTools()...)
+	out = append(out, s.captchaTools()...)
+	out = append(out, s.agentRequestTools()...)
 	return append(out, s.proxyPoolAgentTools()...)
 }
 
@@ -646,6 +649,9 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedFindingCaseTools()
 	s.seedArsenalAndAutoUpgradeV1()
 	s.seedProxyPoolAgentToolsV1()
+	s.seedSelfImprovingScannerToolsV1()
+	s.seedLootAndCaptchaToolsV1()
+	s.seedAgentRequestToolsV1()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
@@ -1278,6 +1284,88 @@ func (s *Server) seedArsenalAndAutoUpgradeV1() {
 				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
 			}
 		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedSelfImprovingScannerToolsV1 binds the new self-improving scanner tools
+// (nuclei templates fed by Patch Monitor + automatic XSS execution verification)
+// to the offensive agents on databases that were seeded before they existed.
+func (s *Server) seedSelfImprovingScannerToolsV1() {
+	const flag = "self_improving_scanner_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	newKeys := []string{"sync_nuclei_templates", "verify_xss_execution"}
+	for _, t := range append(s.patchMonitorTools(), s.arsenalTools()...) {
+		key := t.Name()
+		match := false
+		for _, k := range newKeys {
+			if key == k {
+				match = true
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "patch_watch", "retester"})
+		_ = s.m.pg.SeedTool(key, t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(key, t.Description(), schema)
+	}
+	for _, agKey := range []string{"auto", "pentest", "worker", "patch_watch", "retester"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, newKeys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedLootAndCaptchaToolsV1 seeds save_artifact / list_artifacts (loot vault)
+// and solve_captcha into the tools table and binds them to the operational +
+// reporting agents (one-shot, settings-flag guarded).
+func (s *Server) seedLootAndCaptchaToolsV1() {
+	const flag = "loot_and_captcha_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	tools := append(s.artifactTools(), s.captchaTools()...)
+	for _, t := range tools {
+		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "reporter", "patch_watch", "retester"})
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+	}
+	keys := make([]string, 0, len(tools))
+	for _, t := range tools {
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "reporter", "patch_watch", "retester"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedAgentRequestToolsV1 seeds report_need (agent → developer capability
+// requests) into the tools table and binds it to every operational + reporting
+// agent (one-shot, settings-flag guarded).
+func (s *Server) seedAgentRequestToolsV1() {
+	const flag = "agent_request_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	tools := s.agentRequestTools()
+	for _, t := range tools {
+		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "reporter", "patch_watch", "retester"})
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+	}
+	keys := make([]string, 0, len(tools))
+	for _, t := range tools {
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "reporter", "patch_watch", "retester"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }

@@ -26,22 +26,22 @@ const (
 type ReportFormat string
 
 const (
-	FormatHTML  ReportFormat = "html"
-	FormatJSON  ReportFormat = "json"
-	FormatText  ReportFormat = "text"
-	FormatPDF   ReportFormat = "pdf" // Placeholder
+	FormatHTML ReportFormat = "html"
+	FormatJSON ReportFormat = "json"
+	FormatText ReportFormat = "text"
+	FormatPDF  ReportFormat = "pdf" // Placeholder
 )
 
 // Report represents a generated report.
 type Report struct {
-	ID          int64       `json:"id"`
-	Type        ReportType  `json:"type"`
-	Title       string      `json:"title"`
-	GeneratedAt time.Time   `json:"generated_at"`
-	TaskID      *int64      `json:"task_id,omitempty"`
+	ID          int64        `json:"id"`
+	Type        ReportType   `json:"type"`
+	Title       string       `json:"title"`
+	GeneratedAt time.Time    `json:"generated_at"`
+	TaskID      *int64       `json:"task_id,omitempty"`
 	Format      ReportFormat `json:"format"`
-	Content     []byte      `json:"content"`
-	Size        int64       `json:"size"`
+	Content     []byte       `json:"content"`
+	Size        int64        `json:"size"`
 }
 
 // ActivityEntry represents a single activity log entry.
@@ -55,36 +55,36 @@ type ActivityEntry struct {
 
 // HostSummary contains a summary of a target host.
 type HostSummary struct {
-	Hostname   string            `json:"hostname"`
-	IP         string            `json:"ip"`
-	OS         string            `json:"os,omitempty"`
-	Status     string            `json:"status"`
-	NumSessions int              `json:"num_sessions"`
-	FirstSeen  time.Time         `json:"first_seen"`
-	LastSeen   time.Time         `json:"last_seen"`
-	IOCs       []string          `json:"iocs,omitempty"`
-	Credentials []string          `json:"credentials,omitempty"`
-	Tags       []string           `json:"tags,omitempty"`
+	Hostname    string    `json:"hostname"`
+	IP          string    `json:"ip"`
+	OS          string    `json:"os,omitempty"`
+	Status      string    `json:"status"`
+	NumSessions int       `json:"num_sessions"`
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+	IOCs        []string  `json:"iocs,omitempty"`
+	Credentials []string  `json:"credentials,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
 }
 
 // IOCSummary contains a summary of an IOC.
 type IOCSummary struct {
-	Type      string `json:"type"`
-	Value     string `json:"value"`
-	Severity  string `json:"severity"`
-	Count     int    `json:"count"`
+	Type      string    `json:"type"`
+	Value     string    `json:"value"`
+	Severity  string    `json:"severity"`
+	Count     int       `json:"count"`
 	FirstSeen time.Time `json:"first_seen"`
-	Sources   []string `json:"sources,omitempty"`
+	Sources   []string  `json:"sources,omitempty"`
 }
 
 // FullReportData contains all data for a full report.
 type FullReportData struct {
-	Metadata  ReportMetadata    `json:"metadata"`
-	Activities []ActivityEntry  `json:"activities"`
-	Hosts     []HostSummary     `json:"hosts"`
-	IOCs      []IOCSummary      `json:"iocs"`
+	Metadata    ReportMetadata  `json:"metadata"`
+	Activities  []ActivityEntry `json:"activities"`
+	Hosts       []HostSummary   `json:"hosts"`
+	IOCs        []IOCSummary    `json:"iocs"`
 	Credentials []CredSummary   `json:"credentials"`
-	Stats     ReportStats       `json:"stats"`
+	Stats       ReportStats     `json:"stats"`
 }
 
 // CredSummary contains a summary of a credential.
@@ -131,7 +131,9 @@ type GeneratorConfig struct {
 
 // NewGenerator creates a new report generator.
 func NewGenerator(config GeneratorConfig) *Generator {
-	if config.Title == "" { config.Title = "ARTEX Pentest Report" }
+	if config.Title == "" {
+		config.Title = "ARTEX Pentest Report"
+	}
 	return &Generator{config: config}
 }
 
@@ -152,7 +154,9 @@ func (g *Generator) Generate(data FullReportData, format ReportFormat) (*Report,
 // generateJSON generates a JSON report.
 func (g *Generator) generateJSON(data FullReportData) (*Report, error) {
 	content, err := json.MarshalIndent(data, "", "  ")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return &Report{
 		Type:        ReportFull,
 		Title:       data.Metadata.Title,
@@ -171,7 +175,9 @@ func (g *Generator) generateText(data FullReportData) (*Report, error) {
 	buf.WriteString("=" + strings.Repeat("=", 69) + "\n")
 	buf.WriteString(fmt.Sprintf("  %s\n", data.Metadata.Title))
 	buf.WriteString(fmt.Sprintf("  Generated: %s\n", data.Metadata.GeneratedAt.Format("2006-01-02 15:04:05")))
-	if data.Metadata.TaskID != nil { buf.WriteString(fmt.Sprintf("  Task ID: %d\n", *data.Metadata.TaskID)) }
+	if data.Metadata.TaskID != nil {
+		buf.WriteString(fmt.Sprintf("  Task ID: %d\n", *data.Metadata.TaskID))
+	}
 	buf.WriteString("=" + strings.Repeat("=", 69) + "\n\n")
 
 	// Stats
@@ -190,7 +196,9 @@ func (g *Generator) generateText(data FullReportData) (*Report, error) {
 		buf.WriteString("-" + strings.Repeat("-", 40) + "\n")
 		for _, h := range data.Hosts {
 			buf.WriteString(fmt.Sprintf("  [%s] %s (%s)\n", h.Status, h.Hostname, h.IP))
-			if h.OS != "" { buf.WriteString(fmt.Sprintf("       OS: %s\n", h.OS)) }
+			if h.OS != "" {
+				buf.WriteString(fmt.Sprintf("       OS: %s\n", h.OS))
+			}
 			buf.WriteString(fmt.Sprintf("       Sessions: %d | First Seen: %s\n", h.NumSessions, h.FirstSeen.Format("2006-01-02 15:04")))
 		}
 		buf.WriteString("\n")

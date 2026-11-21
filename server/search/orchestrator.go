@@ -51,6 +51,10 @@ func (o *Orchestrator) registerEngines() {
 		o.engines[EngineSearXNG] = NewSearXNGSearchEngine(cfg.SearXNG.URL, true)
 		log.Printf("[search] SearXNG search enabled at %s", cfg.SearXNG.URL)
 	}
+	if cfg.Brave.Enabled && cfg.Brave.APIKey != "" {
+		o.engines[EngineBrave] = NewBraveSearchEngine(cfg.Brave.APIKey, true)
+		log.Printf("[search] Brave search enabled")
+	}
 	if cfg.Sploitus.Enabled {
 		o.engines[EngineSploitus] = NewSploitusSearchEngine(true)
 		log.Printf("[search] Sploitus exploit search enabled")
@@ -59,11 +63,11 @@ func (o *Orchestrator) registerEngines() {
 
 // setupFallbackChains defines priority order for each search mode.
 func (o *Orchestrator) setupFallbackChains() {
-	o.fallbackChains[ModeGeneral] = []SearchEngineType{EngineTavily, EngineGoogle, EngineDuckDuckGo, EngineSearXNG}
-	o.fallbackChains[ModeNews] = []SearchEngineType{EngineGoogle, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
-	o.fallbackChains[ModeExploit] = []SearchEngineType{EngineSploitus, EngineGoogle, EngineDuckDuckGo, EngineTavily}
-	o.fallbackChains[ModeTechnical] = []SearchEngineType{EngineTavily, EngineGoogle, EngineSearXNG, EngineDuckDuckGo}
-	o.fallbackChains[ModeOSINT] = []SearchEngineType{EngineGoogle, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
+	o.fallbackChains[ModeGeneral] = []SearchEngineType{EngineTavily, EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG}
+	o.fallbackChains[ModeNews] = []SearchEngineType{EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
+	o.fallbackChains[ModeExploit] = []SearchEngineType{EngineSploitus, EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineTavily}
+	o.fallbackChains[ModeTechnical] = []SearchEngineType{EngineTavily, EngineGoogle, EngineBrave, EngineSearXNG, EngineDuckDuckGo}
+	o.fallbackChains[ModeOSINT] = []SearchEngineType{EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
 }
 
 // Search executes a search using the appropriate fallback chain (or a specific requested engine).
@@ -176,6 +180,12 @@ func (o *Orchestrator) UpdateEngine(engine string, value string) {
 		if !o.config.Tavily.Enabled {
 			delete(o.engines, EngineTavily)
 		}
+	case EngineBrave:
+		o.config.Brave.APIKey = val
+		o.config.Brave.Enabled = val != ""
+		if !o.config.Brave.Enabled {
+			delete(o.engines, EngineBrave)
+		}
 	case EngineSearXNG:
 		o.config.SearXNG.URL = val
 		o.config.SearXNG.Enabled = val != ""
@@ -223,7 +233,7 @@ func (o *Orchestrator) GetAvailableEngines() []SearchEngineType {
 func (o *Orchestrator) GetStats() map[string]interface{} {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	allTypes := []SearchEngineType{EngineGoogle, EngineDuckDuckGo, EngineTavily, EngineSearXNG, EngineSploitus}
+	allTypes := []SearchEngineType{EngineGoogle, EngineDuckDuckGo, EngineTavily, EngineSearXNG, EngineBrave, EngineSploitus}
 	engineStatus := make(map[string]bool, len(allTypes))
 	availableCount := 0
 	for _, t := range allTypes {

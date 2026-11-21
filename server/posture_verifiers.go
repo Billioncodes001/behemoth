@@ -117,9 +117,9 @@ func (s *Server) toolCreateCallbackListener() actool.CoreTool {
 	return wrTool("create_callback_listener",
 		"Register a temporary correlation callback URL (/api/oast-cb/<token>/<tag>) to verify asynchronous webhook delivery or outbound egress filtering policies during authorized testing.",
 		objSchema(map[string]any{
-			"label":            strParam("Short label describing what webhook or async flow is being verified"),
-			"public_base_url":  strParam("Optional externally reachable base URL of this ARTEX instance (e.g. https://console.example.com)"),
-			"ttl_seconds":      map[string]any{"type": "integer", "description": "Listener lifetime in seconds (default 900, max 3600)"},
+			"label":           strParam("Short label describing what webhook or async flow is being verified"),
+			"public_base_url": strParam("Optional externally reachable base URL of this ARTEX instance (e.g. https://console.example.com)"),
+			"ttl_seconds":     map[string]any{"type": "integer", "description": "Listener lifetime in seconds (default 900, max 3600)"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -467,8 +467,8 @@ func extractTopLevelJSONKeys(b []byte) []string {
 // ============================================================================
 
 var (
-	scriptSrcRe   = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.m?js(?:\?[^"']*)?)["']`)
-	apiRouteLitRe = regexp.MustCompile(`["'` + "`" + `](/(?:api|v[1-4]|graphql|trpc|rest|auth|oauth|admin|internal)/[A-Za-z0-9_\-./:{}]+)["'` + "`" + `]`)
+	scriptSrcRe       = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.m?js(?:\?[^"']*)?)["']`)
+	apiRouteLitRe     = regexp.MustCompile(`["'` + "`" + `](/(?:api|v[1-4]|graphql|trpc|rest|auth|oauth|admin|internal)/[A-Za-z0-9_\-./:{}]+)["'` + "`" + `]`)
 	sdkConfigPatterns = []struct {
 		Name        string
 		Pattern     *regexp.Regexp
@@ -683,10 +683,10 @@ func (s *Server) toolVerifyEndpointIdempotency() actool.CoreTool {
 
 			client := s.newProxyAwareHTTPClient(15*time.Second, false)
 			type sample struct {
-				Index      int   `json:"index"`
-				StatusCode int   `json:"status_code"`
-				DurationMs int64 `json:"duration_ms"`
-				BodyLength int   `json:"body_length"`
+				Index      int    `json:"index"`
+				StatusCode int    `json:"status_code"`
+				DurationMs int64  `json:"duration_ms"`
+				BodyLength int    `json:"body_length"`
 				Err        string `json:"error,omitempty"`
 			}
 			results := make([]sample, n)

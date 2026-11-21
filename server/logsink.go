@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
 )
@@ -110,7 +111,18 @@ func (s *logSinkT) SetDB(ctx context.Context, pg *db.DB) {
 					}
 					s.mu.Unlock()
 				case <-ctx.Done():
-					return
+					// Shutdown drains whatever is still buffered so lines
+					// captured in the final seconds are not silently dropped.
+					for {
+						select {
+						case req := <-ch:
+							if _, err := pg.InsertLog(req.ll.Level, req.ll.Tag, req.ll.Text); err != nil {
+								_, _ = os.Stderr.Write([]byte("[logsink] db write: " + err.Error() + "\n"))
+							}
+						default:
+							return
+						}
+					}
 				}
 			}
 		}()
@@ -131,14 +143,22 @@ func (s *logSinkT) add(l LogLine) {
 	s.mu.Lock()
 	s.seq++
 	l.Seq = s.seq
+	// Cap the stored text: the ring holds 3000 entries and a single huge
+	// log.Printf line (a dumped response body, a panic trace) would otherwise
+	// pin that size for every entry it occupies.
+	l.Text = clipText(l.Text)
 	s.ring = append(s.ring, l)
 	if len(s.ring) > s.cap {
 		s.ring = s.ring[len(s.ring)-s.cap:]
 	}
 	ch := s.dbCh
-	subs := make([]chan LogLine, 0, len(s.subs))
-	for sub := range s.subs {
-		subs = append(subs, sub)
+	var subs []chan LogLine
+	if len(s.subs) > 0 {
+		// Most lines have zero SSE subscribers; skip the slice allocation.
+		subs = make([]chan LogLine, 0, len(s.subs))
+		for sub := range s.subs {
+			subs = append(subs, sub)
+		}
 	}
 	s.mu.Unlock()
 
@@ -223,4 +243,19 @@ func levelOf(msg string) string {
 		}
 	}
 	return "info"
+}
+
+// maxLogTextLen bounds how much of one log line the sink keeps. Truncation is
+// rune-safe so multi-byte tags/text never end on a half rune.
+const maxLogTextLen = 16 << 10
+
+func clipText(s string) string {
+	if len(s) <= maxLogTextLen {
+		return s
+	}
+	cut := maxLogTextLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }

@@ -14,7 +14,7 @@ type TelemetryConfig struct {
 	ServiceName    string
 	ServiceVersion string
 	Enabled        bool
-	OTLPEndpoint   string // e.g., "localhost:4317" for OTLP gRPC
+	OTLPEndpoint   string  // e.g., "localhost:4317" for OTLP gRPC
 	SampleRate     float64 // 1.0 = all traces, 0.1 = 10%
 }
 
@@ -31,24 +31,24 @@ func DefaultConfig() *TelemetryConfig {
 
 // Telemetry provides observability functionality.
 type Telemetry struct {
-	config  *TelemetryConfig
-	tracer  trace.Tracer
-	meter   metric.Meter
-	counter metric.Int64Counter
+	config    *TelemetryConfig
+	tracer    trace.Tracer
+	meter     metric.Meter
+	counter   metric.Int64Counter
 	histogram metric.Float64Histogram
 }
 
 // New creates a new Telemetry instance.
 func New(cfg *TelemetryConfig) (*Telemetry, error) {
 	t := &Telemetry{config: cfg}
-	
+
 	if !cfg.Enabled {
 		return t, nil
 	}
 
 	// Get global tracer provider
 	t.tracer = otel.Tracer(cfg.ServiceName)
-	
+
 	// Get global meter provider
 	meter := otel.Meter(cfg.ServiceName)
 	t.meter = meter
@@ -59,7 +59,7 @@ func New(cfg *TelemetryConfig) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create counter: %w", err)
 	}
-	
+
 	t.histogram, err = meter.Float64Histogram("artex.operation.duration.ms")
 	if err != nil {
 		return nil, fmt.Errorf("create histogram: %w", err)

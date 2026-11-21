@@ -329,7 +329,7 @@ Be concise, focused, and effective.`
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir)
+	return body + artifactSpec(workDir) + needReportNote
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -413,7 +413,7 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 		TavilySearchAPIKey: p.webSearch.TavilyKey,
 		WebSearchProxy:     p.webSearch.Proxy,
 		BashEnv:            agentBashEnv(proxyAddr, p.proxyCACert), // Bash 子命令默认走代理+信任 CA
-		WorkingDir:         taskDir,                            // 本任务工作目录 <workDir>/tasks/<taskID>
+		WorkingDir:         taskDir,                                // 本任务工作目录 <workDir>/tasks/<taskID>
 		ToolOutputDir:      cmdOutDir(taskDir),
 		MaxTurns:           p.maxTurns, // 0 = unlimited (configurable in agent management)
 		MaxDuration:        maxDur,     // 0=不限;有 deadline 时=距 deadline 剩余

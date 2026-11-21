@@ -32,7 +32,7 @@ func (g *GoogleSearchEngine) IsAvailable() bool {
 
 // googleResponse represents the JSON response from Google CSE API.
 type googleResponse struct {
-	Items []googleItem `json:"items"`
+	Items      []googleItem `json:"items"`
 	SearchInfo struct {
 		TotalResults string `json:"totalResults"`
 	} `json:"searchInformation"`

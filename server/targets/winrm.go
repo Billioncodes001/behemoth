@@ -94,7 +94,7 @@ func (c *WinRMConnector) Execute(ctx context.Context, cmd string) (*ExecResult, 
 	var stdout, stderr strings.Builder
 
 	exitCode, err := client.RunWithContext(ctx, cmd, &stdout, &stderr)
-	
+
 	result := &ExecResult{
 		ExitCode: exitCode,
 		Stdout:   stdout.String(),

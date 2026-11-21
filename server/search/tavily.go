@@ -31,27 +31,27 @@ func (t *TavilySearchEngine) IsAvailable() bool { return t.enabled && t.apiKey !
 
 // tavilyRequest is the JSON request body for Tavily API.
 type tavilyRequest struct {
-	Query     string   `json:"query"`
-	APIKey    string   `json:"api_key"`
-	MaxResults int     `json:"max_results"`
-	SearchDepth string `json:"search_depth,omitempty"` // "basic" or "advanced"
-	IncludeAnswer bool `json:"include_answer,omitempty"`
-	IncludeRawContent bool `json:"include_raw_content,omitempty"`
-	IncludeImages bool `json:"include_images,omitempty"`
+	Query             string `json:"query"`
+	APIKey            string `json:"api_key"`
+	MaxResults        int    `json:"max_results"`
+	SearchDepth       string `json:"search_depth,omitempty"` // "basic" or "advanced"
+	IncludeAnswer     bool   `json:"include_answer,omitempty"`
+	IncludeRawContent bool   `json:"include_raw_content,omitempty"`
+	IncludeImages     bool   `json:"include_images,omitempty"`
 }
 
 // tavilyResponse is the JSON response from Tavily API.
 type tavilyResponse struct {
-	Answer   string       `json:"answer"`
-	Results  []tavilyResult `json:"results"`
-	ResponseTime float64  `json:"response_time"`
+	Answer       string         `json:"answer"`
+	Results      []tavilyResult `json:"results"`
+	ResponseTime float64        `json:"response_time"`
 }
 
 type tavilyResult struct {
-	Title    string `json:"title"`
-	URL      string `json:"url"`
-	Content  string `json:"content"`
-	Score    float64 `json:"score"`
+	Title   string  `json:"title"`
+	URL     string  `json:"url"`
+	Content string  `json:"content"`
+	Score   float64 `json:"score"`
 }
 
 func (t *TavilySearchEngine) Handle(ctx context.Context, req Request) (Response, error) {
@@ -68,11 +68,11 @@ func (t *TavilySearchEngine) Handle(ctx context.Context, req Request) (Response,
 	}
 
 	tavilyReq := tavilyRequest{
-		Query:     req.Query,
-		APIKey:    t.apiKey,
-		MaxResults: min(req.MaxResults, 10),
-		SearchDepth: searchDepth,
-		IncludeAnswer: true,
+		Query:             req.Query,
+		APIKey:            t.apiKey,
+		MaxResults:        min(req.MaxResults, 10),
+		SearchDepth:       searchDepth,
+		IncludeAnswer:     true,
 		IncludeRawContent: false,
 	}
 
