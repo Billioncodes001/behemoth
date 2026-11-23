@@ -75,7 +75,8 @@ type Worker struct {
 	noaEnabledFn func() bool
 	// maxTokensFn resolves the per-reply output cap in tokens, on the same
 	// per-run basis. nil or 0 = send no cap and let the endpoint decide.
-	maxTokensFn func() int
+	maxTokensFn     func() int
+	webFetchProxyFn func() string
 }
 
 // WorkerSessionID returns the stable transcript key used by a worker intent.
@@ -179,7 +180,8 @@ func (w *Worker) compactionWindow() int {
 // that MITM proxy. Empty addr disables the hint.
 func (w *Worker) SetProxy(addr, caCert string) { w.proxyAddr, w.proxyCACert = addr, caCert }
 
-func (w *Worker) SetProxyProvider(fn func() string) { w.proxyAddrFn = fn }
+func (w *Worker) SetProxyProvider(fn func() string)         { w.proxyAddrFn = fn }
+func (w *Worker) SetWebFetchProxyProvider(fn func() string) { w.webFetchProxyFn = fn }
 
 // SetWebSearch selects the web_search backend for this worker (off by default).
 func (w *Worker) SetWebSearch(o WebSearchOpts) { w.webSearch = o }
@@ -412,18 +414,28 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
 	}
+	resolveWorkerProxy := func() string {
+		if w.proxyAddrFn != nil {
+			return w.proxyAddrFn()
+		}
+		return w.proxyAddr
+	}
+	webFetchProxy := proxyAddr
+	if webFetchProxy == "" && w.webFetchProxyFn != nil {
+		webFetchProxy = w.webFetchProxyFn()
+	}
 	opts := agentcore.Options{
 		Provider:        w.prov,
 		SystemPrompt:    system,
 		DynamicBoundary: boundary,
-		Tools:           append(tools, deepSeekTools(w.webSearch)...),
+		Tools:           wrapDynamicProxyEnvTools(append(tools, deepSeekTools(w.webSearch)...), resolveWorkerProxy, w.proxyCACert),
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
 		// WebFetch 走记录代理，其 HTTP 与 curl 一样被留痕；载入代理 CA 让经 MITM
 		// 重签的 HTTPS 证书能【正常校验通过】（而非关掉校验）。proxy 空则直连。
 		EnableWebFetch: true,
-		WebFetchProxy:  proxyAddr,
+		WebFetchProxy:  webFetchProxy,
 		WebFetchCACert: w.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立的出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。

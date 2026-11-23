@@ -32,6 +32,7 @@ type ChatAgent struct {
 	window          int
 	proxyAddr       string
 	proxyAddrFn     func() string
+	webFetchProxyFn func() string
 	outboundProxyFn func() bool
 	proxyCACert     string
 	webSearch       WebSearchOpts
@@ -69,9 +70,10 @@ func (c *ChatAgent) maxTokens() int {
 
 // SetProxy points the chat agent's WebFetch/Bash at the recording proxy plus the
 // CA cert it trusts (empty addr = direct). Kept for parity with the other agents.
-func (c *ChatAgent) SetProxy(addr, caCert string)         { c.proxyAddr, c.proxyCACert = addr, caCert }
-func (c *ChatAgent) SetProxyProvider(fn func() string)    { c.proxyAddrFn = fn }
-func (c *ChatAgent) SetOutboundProxyCheck(fn func() bool) { c.outboundProxyFn = fn }
+func (c *ChatAgent) SetProxy(addr, caCert string)           { c.proxyAddr, c.proxyCACert = addr, caCert }
+func (c *ChatAgent) SetProxyProvider(fn func() string)      { c.proxyAddrFn = fn }
+func (c *ChatAgent) SetWebFetchProxyProvider(fn func() string) { c.webFetchProxyFn = fn }
+func (c *ChatAgent) SetOutboundProxyCheck(fn func() bool)   { c.outboundProxyFn = fn }
 
 // SetWebSearch selects the web_search backend for the chat agent (off by default).
 func (c *ChatAgent) SetWebSearch(o WebSearchOpts) { c.webSearch = o }
@@ -154,6 +156,10 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		return c.proxyAddr
 	}
 	proxyAddr := resolveLiveProxy()
+	webFetchProxy := proxyAddr
+	if webFetchProxy == "" && !strings.EqualFold(strings.TrimSpace(agentKey), "proxy_harvester") && isActiveProbingAgent(agentKey) && c.webFetchProxyFn != nil {
+		webFetchProxy = c.webFetchProxyFn()
+	}
 	allTools := wrapDynamicProxyEnvTools(append(tools, deepSeekTools(ws)...), resolveLiveProxy, c.proxyCACert)
 	boundToolMap := make(map[string]bool, len(allTools))
 	for _, t := range allTools {
@@ -169,7 +175,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		UnlockSet:          def.Unlock,
 		PermissionMode:     permission.ModeBypass,
 		EnableWebFetch:     true,
-		WebFetchProxy:      proxyAddr,
+		WebFetchProxy:      webFetchProxy,
 		WebFetchCACert:     c.proxyCACert,
 		EnableWebSearch:    ws.Enabled && ws.Backend != "deepseek",
 		WebSearchBackend:   ws.Backend,

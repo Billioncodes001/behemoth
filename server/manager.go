@@ -300,13 +300,75 @@ type Manager struct {
 	// (http/https/socks5, optional user:pass). Empty = direct. When traffic
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
-	globalProxy         string
-	proxyPool           *proxyPoolState
-	forwardProxy        *dynamicForwardProxy
-	proxyPoolConfigured atomic.Bool
-	proxyPoolFailClosed atomic.Bool
-	onCloseMu           sync.Mutex
-	onClose             []func()
+	globalProxy          string
+	userStaticGlobal     string
+	proxyPool            *proxyPoolState
+	forwardProxy         *dynamicForwardProxy
+	proxyPoolConfigured  atomic.Bool
+	proxyPoolFailClosed  atomic.Bool
+	exclusiveTorMu       sync.RWMutex
+	exclusiveTorEnabled  bool
+	exclusiveTorCircuits []string
+	exclusiveTorSeq      atomic.Uint64
+	onCloseMu            sync.Mutex
+	onClose              []func()
+}
+
+const settingStaticGlobalProxy = "static_global_proxy"
+
+// SetExclusiveTor activates or deactivates standalone Exclusive Tor routing.
+// While enabled, Proxy Pool is OFF, direct egress is fail-closed blocked if 0 Tor
+// circuits are healthy, and outbound traffic rotates across circuitURLs.
+func (m *Manager) SetExclusiveTor(enabled bool, circuitURLs []string) {
+	if m == nil {
+		return
+	}
+	cleaned := make([]string, 0, len(circuitURLs))
+	for _, u := range circuitURLs {
+		if s := strings.TrimSpace(u); s != "" {
+			cleaned = append(cleaned, s)
+		}
+	}
+	m.exclusiveTorMu.Lock()
+	m.exclusiveTorEnabled = enabled
+	m.exclusiveTorCircuits = cleaned
+	m.exclusiveTorMu.Unlock()
+
+	if m.traffic != nil {
+		m.traffic.SetFailClosed(enabled || m.proxyPoolFailClosed.Load())
+		if enabled {
+			first := ""
+			if len(cleaned) > 0 {
+				first = cleaned[0]
+			}
+			_ = m.traffic.SetUpstreamProxy(first)
+		} else {
+			_ = m.traffic.SetUpstreamProxy(m.GlobalProxy())
+		}
+	}
+	if m.pg != nil {
+		m.syncBrowserMCPProxy()
+	}
+}
+
+func (m *Manager) IsExclusiveTorEnabled() bool {
+	if m == nil {
+		return false
+	}
+	m.exclusiveTorMu.RLock()
+	on := m.exclusiveTorEnabled
+	m.exclusiveTorMu.RUnlock()
+	return on
+}
+
+func (m *Manager) ExclusiveTorCircuitCount() int {
+	if m == nil {
+		return 0
+	}
+	m.exclusiveTorMu.RLock()
+	n := len(m.exclusiveTorCircuits)
+	m.exclusiveTorMu.RUnlock()
+	return n
 }
 
 // SetProxyPoolFailClosed toggles strict fail-closed egress blocking when Proxy Pool
@@ -318,7 +380,7 @@ func (m *Manager) SetProxyPoolFailClosed(enabled bool) {
 	}
 	m.proxyPoolFailClosed.Store(enabled)
 	if m.traffic != nil {
-		m.traffic.SetFailClosed(enabled)
+		m.traffic.SetFailClosed(enabled || m.IsExclusiveTorEnabled())
 	}
 	if m.pg != nil {
 		m.syncBrowserMCPProxy()
@@ -326,7 +388,7 @@ func (m *Manager) SetProxyPoolFailClosed(enabled bool) {
 }
 
 func (m *Manager) IsProxyPoolFailClosed() bool {
-	return m != nil && m.proxyPoolFailClosed.Load()
+	return m != nil && (m.proxyPoolFailClosed.Load() || m.IsExclusiveTorEnabled())
 }
 
 // RegisterOnClose registers a cleanup hook invoked at the start of Manager.Close
@@ -640,11 +702,10 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		log.Printf("[llmusage] create table: %v", err)
 	}
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
-	if fp, ferr := newDynamicForwardProxy(func() string { return m.GlobalProxy() }); ferr == nil {
+	if fp, ferr := newDynamicForwardProxy(func() string { return m.NextUpstreamProxy() }); ferr == nil {
 		m.forwardProxy = fp
-		// Direct egress is allowed ONLY when fail-closed Proxy Pool mode is OFF
-		// and no Global Proxy is set. When Proxy Pool is enabled and all proxies
-		// are unhealthy, direct() returns false so requests fail-closed (503).
+		// Direct egress is allowed ONLY when fail-closed Proxy Pool / Exclusive Tor
+		// mode is OFF and no Global Proxy is set.
 		fp.direct = func() bool { return !m.IsProxyPoolFailClosed() && strings.TrimSpace(m.GlobalProxy()) == "" }
 	} else {
 		log.Printf("[proxy] local forwarder disabled: %v", ferr)
@@ -704,6 +765,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// Global egress proxy (default: direct). When capture is on, feed it to the
 	// MITM as its upstream so recorded traffic exits through it; when capture is
 	// off, ProxyAddr hands it to agents directly (bash env / WebFetch).
+	if v, ok, _ := pg.GetSetting(settingStaticGlobalProxy); ok {
+		m.userStaticGlobal = strings.TrimSpace(v)
+	}
 	if v, ok, _ := pg.GetSetting(settingGlobalProxy); ok {
 		m.globalProxy = strings.TrimSpace(v)
 	}
@@ -1078,19 +1142,36 @@ func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 // Global Proxy or an enabled Proxy Pool with at least one active entry) is configured.
 // Local traffic capture (127.0.0.1:8788) alone is NOT an outbound proxy.
 func (m *Manager) HasOutboundProxy() bool {
-	m.mu.RLock()
-	global := strings.TrimSpace(m.globalProxy)
-	m.mu.RUnlock()
-	return global != "" || m.proxyPoolConfigured.Load() || m.proxyPoolFailClosed.Load()
+	if m == nil {
+		return false
+	}
+	return strings.TrimSpace(m.GlobalProxy()) != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed()
 }
 
 // ForwardProxyAddr returns the local dynamic forward-proxy listener address (if running),
-// used internally when a proxy is enabled mid-session.
+// used internally so running agents seamlessly pick up mid-run Direct <-> Tor <-> Pool switches.
 func (m *Manager) ForwardProxyAddr() string {
-	if m.forwardProxy != nil {
+	if m != nil && m.forwardProxy != nil {
 		return m.forwardProxy.Addr()
 	}
 	return ""
+}
+
+// WebFetchProxyAddr returns the proxy URL for agent WebFetch calls:
+//   - Traffic Capture ON -> MITM recording proxy (which dynamically switches upstreams)
+//   - Traffic Capture OFF -> local dynamicForwardProxy (which dials direct when all
+//     proxies are off, and immediately tunnels through Tor/Pool/GlobalProxy when enabled mid-run!)
+func (m *Manager) WebFetchProxyAddr() string {
+	if m == nil {
+		return ""
+	}
+	if m.traffic != nil && m.TrafficEnabled() {
+		return m.traffic.ProxyAddr()
+	}
+	if m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return m.ProxyAddr()
 }
 
 // OutboundProxyAddr returns the credential-free local dynamic forwarder URL
@@ -1118,10 +1199,8 @@ func (m *Manager) ProxyAddr() string {
 	if m.traffic != nil && m.TrafficEnabled() {
 		return m.traffic.ProxyAddr()
 	}
-	m.mu.RLock()
-	global := strings.TrimSpace(m.globalProxy)
-	m.mu.RUnlock()
-	if (global != "" || m.proxyPoolConfigured.Load() || m.proxyPoolFailClosed.Load()) && m.forwardProxy != nil {
+	global := strings.TrimSpace(m.GlobalProxy())
+	if (global != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed()) && m.forwardProxy != nil {
 		return m.forwardProxy.Addr()
 	}
 	return maskSecrets(global)
@@ -1148,11 +1227,81 @@ func (m *Manager) ProxyCACert() string {
 	return m.traffic.CACertPath()
 }
 
-// GlobalProxy returns the configured global egress proxy URL (empty = direct).
+// GlobalProxy returns the currently effective egress proxy URL (empty = direct or fail-closed).
 func (m *Manager) GlobalProxy() string {
+	if m == nil {
+		return ""
+	}
+	m.exclusiveTorMu.RLock()
+	torOn := m.exclusiveTorEnabled
+	var torFirst string
+	if len(m.exclusiveTorCircuits) > 0 {
+		torFirst = m.exclusiveTorCircuits[0]
+	}
+	m.exclusiveTorMu.RUnlock()
+	if torOn {
+		return torFirst
+	}
+
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.globalProxy
+	gp := m.globalProxy
+	staticGP := m.userStaticGlobal
+	m.mu.RUnlock()
+	if gp != "" || m.proxyPoolFailClosed.Load() {
+		return gp
+	}
+	return staticGP
+}
+
+// NextUpstreamProxy selects the upstream proxy URL for an outbound HTTP/CONNECT request.
+// In Exclusive Tor mode it round-robins across healthy isolated Tor circuits; in non-sticky
+// Proxy Pool / Hybrid mode it rotates across healthy pool members; otherwise it returns GlobalProxy().
+func (m *Manager) NextUpstreamProxy() string {
+	if m == nil {
+		return ""
+	}
+	m.exclusiveTorMu.RLock()
+	if m.exclusiveTorEnabled {
+		n := len(m.exclusiveTorCircuits)
+		if n == 0 {
+			m.exclusiveTorMu.RUnlock()
+			return ""
+		}
+		idx := int(m.exclusiveTorSeq.Add(1)-1) % n
+		u := m.exclusiveTorCircuits[idx]
+		m.exclusiveTorMu.RUnlock()
+		return u
+	}
+	m.exclusiveTorMu.RUnlock()
+
+	if ppV2 != nil && ppV2.Pool != nil {
+		cfg := ppV2.Pool.GetConfig()
+		if cfg != nil && cfg.Enabled && !cfg.SessionSticky {
+			if u, err := ppV2.Pool.GetProxyForRequest(nil); err == nil && u != nil {
+				return u.String()
+			}
+		}
+	}
+	return m.GlobalProxy()
+}
+
+// StaticGlobalProxy returns only the manual Static Global Proxy saved in System -> Settings
+// (never polluted by transient Proxy Pool or Tor URLs).
+func (m *Manager) StaticGlobalProxy() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.RLock()
+	staticGP := strings.TrimSpace(m.userStaticGlobal)
+	gp := strings.TrimSpace(m.globalProxy)
+	m.mu.RUnlock()
+	if staticGP != "" {
+		return staticGP
+	}
+	if !m.proxyPoolConfigured.Load() && !m.IsProxyPoolFailClosed() {
+		return gp
+	}
+	return ""
 }
 
 // SetGlobalProxy validates, persists and applies the global egress proxy
@@ -1210,10 +1359,14 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 			return nil
 		}
 	}
+	if m.pg != nil {
+		_ = m.pg.SetSetting(settingStaticGlobalProxy, raw)
+	}
 	if err := m.pg.SetSetting(settingGlobalProxy, raw); err != nil {
 		return err
 	}
 	m.mu.Lock()
+	m.userStaticGlobal = raw
 	m.globalProxy = raw
 	m.mu.Unlock()
 	if m.traffic != nil {

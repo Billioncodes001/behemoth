@@ -68,6 +68,7 @@ export default function ProxyPoolPage() {
     daemon_running: boolean;
     mode?: "exclusive" | "hybrid";
     enabled_in_pool: boolean;
+    exclusive_active?: boolean;
     hybrid_pool_active?: boolean;
     suspended_pool_count?: number;
     circuits_total: number;
@@ -383,11 +384,14 @@ export default function ProxyPoolPage() {
   };
 
   const handleTogglePoolEnabled = async (checked: boolean) => {
+    const wasExclusiveTor = Boolean(torStatus?.exclusive_active);
     setPoolEnabled(checked);
     await persistPoolConfig(checked, false);
     toast.success(
       checked
-        ? "Proxy Pool enabled — outbound target & scanner traffic now routes through the pool"
+        ? wasExclusiveTor
+          ? "Proxy Pool enabled — Exclusive Tor automatically shut down"
+          : "Proxy Pool enabled — outbound target & scanner traffic now routes through the pool"
         : "Proxy Pool disabled — target traffic connects directly (unless a static Global Proxy is set)",
     );
   };
@@ -418,7 +422,7 @@ export default function ProxyPoolPage() {
       const res = await api.proxyV2.enableTor(count, useMode);
       toast.success(
         useMode === "exclusive"
-          ? `Exclusive Tor enabled (${res.circuits_healthy}/${res.circuits_total} circuits) — running agents switched immediately & paid proxies paused`
+          ? `Exclusive Tor enabled (${res.circuits_healthy}/${res.circuits_total} circuits) — Proxy Pool auto-disabled & running agents switched immediately`
           : `Hybrid Tor + Pool enabled (${res.circuits_healthy}/${res.circuits_total} Tor circuits + active pool proxies)`,
       );
       await fetchData();
@@ -646,9 +650,13 @@ export default function ProxyPoolPage() {
                 Tor Anonymity Network
               </span>
               <Badge variant="secondary" className="text-[10px]">Free · Unlimited Bandwidth</Badge>
-              {torStatus?.enabled_in_pool ? (
+              {torStatus?.exclusive_active ? (
                 <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
-                  Active ({torStatus.circuits_healthy}/{torStatus.circuits_total} Circuits)
+                  Exclusive Tor Active ({torStatus.circuits_healthy}/{torStatus.circuits_total} Circuits)
+                </Badge>
+              ) : torStatus?.enabled_in_pool ? (
+                <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
+                  Hybrid Active ({torStatus.circuits_healthy}/{torStatus.circuits_total} Circuits)
                 </Badge>
               ) : torStatus?.daemon_running ? (
                 <Badge variant="outline" className="text-[10px]">Daemon Running</Badge>
@@ -657,10 +665,10 @@ export default function ProxyPoolPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Routes scanning &amp; agent traffic over isolated SOCKS5 Tor exit circuits (<code className="bg-muted px-1 rounded">IsolateSOCKSAuth</code> + <code className="bg-muted px-1 rounded">SIGNAL NEWNYM</code>) with zero bandwidth charges. Running agents automatically pick up Tor mid-task without restarting.
-              {torStatus?.enabled_in_pool && torStatus.mode === "exclusive" && (torStatus.suspended_pool_count ?? 0) > 0 && (
-                <span className="ml-1 text-amber-500">
-                  ({torStatus.suspended_pool_count} non-Tor pool proxies paused to save bandwidth — restored automatically when Tor is disabled)
+              Routes scanning &amp; agent traffic over isolated SOCKS5 Tor exit circuits (<code className="bg-muted px-1 rounded">IsolateSOCKSAuth</code> + <code className="bg-muted px-1 rounded">SIGNAL NEWNYM</code>) with zero bandwidth charges. Running agents automatically pick up switches mid-task without restarting.
+              {torStatus?.exclusive_active && (
+                <span className="ml-1 text-emerald-500 font-medium">
+                  (Proxy Pool auto-disabled — switching Proxy Pool ON automatically shuts down Exclusive Tor)
                 </span>
               )}
               {torStatus?.exit_ips && torStatus.exit_ips.length > 0 && (
@@ -738,9 +746,13 @@ export default function ProxyPoolPage() {
                   />
                   <Label htmlFor="header-pool-switch" className="cursor-pointer text-xs font-medium">
                     {!poolEnabled
-                      ? "Pool Disabled"
+                      ? torStatus?.exclusive_active
+                        ? "Pool Disabled (Exclusive Tor Active)"
+                        : "Pool Disabled"
                       : stats.active_proxy_id
-                        ? "Pool Active"
+                        ? torStatus?.hybrid_pool_active
+                          ? "Pool Active (Hybrid Tor + Pool)"
+                          : "Pool Active"
                         : "Pool Active (Fail-Closed · No Healthy Proxy)"}
                   </Label>
                 </div>

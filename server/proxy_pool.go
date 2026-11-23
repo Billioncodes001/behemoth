@@ -322,9 +322,14 @@ func (m *Manager) applyActiveProxyLockedWithHealth(id, reason string, allowUnhea
 	}
 	m.mu.RLock()
 	from := m.globalProxy
+	staticGP := m.userStaticGlobal
 	m.mu.RUnlock()
-	if m.traffic != nil {
-		if err := m.traffic.SetUpstreamProxy(next); err != nil {
+	if m.traffic != nil && !m.IsExclusiveTorEnabled() {
+		effective := next
+		if effective == "" && !m.proxyPoolFailClosed.Load() {
+			effective = staticGP
+		}
+		if err := m.traffic.SetUpstreamProxy(effective); err != nil {
 			return err
 		}
 	}
@@ -333,7 +338,11 @@ func (m *Manager) applyActiveProxyLockedWithHealth(id, reason string, allowUnhea
 	m.mu.Unlock()
 	m.proxyPool.active = id
 	if m.pg != nil {
-		_ = m.pg.SetSetting(settingGlobalProxy, next)
+		persistedGP := next
+		if persistedGP == "" && !m.proxyPoolFailClosed.Load() {
+			persistedGP = staticGP
+		}
+		_ = m.pg.SetSetting(settingGlobalProxy, persistedGP)
 		_ = m.pg.SetSetting(settingProxyPoolActive, id)
 	}
 	if from != next {

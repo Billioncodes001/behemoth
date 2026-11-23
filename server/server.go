@@ -788,6 +788,7 @@ func (s *Server) applyLLM(cfg agent.Config) error {
 	s.chatAgent = agent.NewChatAgent(prov, cfg.Model, s.m.dir, tx, win) // chat page runner
 	s.chatAgent.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
 	s.chatAgent.SetProxyProvider(s.m.SessionProxyAddr)
+	s.chatAgent.SetWebFetchProxyProvider(s.m.WebFetchProxyAddr)
 	s.chatAgent.SetOutboundProxyCheck(s.m.HasOutboundProxy)
 	s.chatAgent.SetWebSearch(s.m.WebSearchOpts())
 	s.chatAgent.SetGuard(s.chatGuard())
@@ -996,6 +997,7 @@ func (s *Server) chatAgentForProfile(id int64) *agent.ChatAgent {
 	ca := agent.NewChatAgent(s.poolForBinding(id, prov, cfg), cfg.Model, s.m.dir, tx, cfg.CompactionWindow())
 	ca.SetProxy(s.m.SessionProxyAddr(), s.m.ProxyCACert())
 	ca.SetProxyProvider(s.m.SessionProxyAddr)
+	ca.SetWebFetchProxyProvider(s.m.WebFetchProxyAddr)
 	ca.SetOutboundProxyCheck(s.m.HasOutboundProxy)
 	ca.SetWebSearch(s.m.WebSearchOpts())
 	ca.SetGuard(s.chatGuard())
@@ -4169,8 +4171,9 @@ func (s *Server) settingsPayload() map[string]any {
 		"brave_key_set":                        strings.TrimSpace(braveKey) != "",
 		"tavily_key_set":                       strings.TrimSpace(tavilyKey) != "",
 		"deepseek_search_key_set":              s.m.deepSeekSearchKey() != "",
-		"web_search_proxy":                     maskSecrets(proxy),             // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":                         maskSecrets(s.m.GlobalProxy()), // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"web_search_proxy":                     maskSecrets(proxy),                   // 独立出口代理(http/https/socks5)，空=直连
+		"global_proxy":                         maskSecrets(s.m.StaticGlobalProxy()), // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"exclusive_tor_active":                 s.isExclusiveTorActive(),
 		"proxy_pool":                           func() []ProxyPoolEntry { e, _, _ := s.m.ProxyPoolSnapshot(); return e }(),
 		"proxy_pool_active_id":                 func() string { _, a, _ := s.m.ProxyPoolSnapshot(); return a }(),
 		"proxy_pool_switch_log":                func() []ProxySwitchLog { _, _, l := s.m.ProxyPoolSnapshot(); return l }(),
@@ -4573,7 +4576,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if req.GlobalProxy != nil {
 		globalProxyValue := strings.TrimSpace(*req.GlobalProxy)
 		if strings.Contains(globalProxyValue, "***") || strings.Contains(globalProxyValue, "******") {
-			globalProxyValue = s.m.GlobalProxy()
+			globalProxyValue = s.m.StaticGlobalProxy()
+		}
+		if globalProxyValue != "" && s.isExclusiveTorActive() {
+			s.shutdownExclusiveTor()
 		}
 		var proxyGuards map[string]proxyReconnectGuard
 		if globalProxyValue == "" {
@@ -5369,6 +5375,7 @@ func (s *Server) initProxyPoolV2(m *Manager) {
 
 	proxies := pool.GetProxies()
 	log.Printf("[proxy-v2] Proxy Pool v2 initialized and unified with core agent proxy engine (%d proxies)", len(proxies))
+	s.restorePersistedTorOnBoot()
 }
 
 var proxyV2SyncMu sync.Mutex
@@ -5383,6 +5390,23 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 		proxies, activeID, cfg = ppV2.Pool.GetRawState()
 	}
 	poolEnabled := cfg != nil && cfg.Enabled
+	if poolEnabled && s.isExclusiveTorActive() {
+		log.Printf("[tor] Proxy Pool switched ON while Exclusive Tor was active — shutting down Exclusive Tor daemon")
+		s.shutdownExclusiveTor()
+	} else if !poolEnabled && !s.isExclusiveTorActive() {
+		// If Pool Active was turned OFF while Hybrid Tor circuits were inside the pool,
+		// remove the Hybrid Tor circuits and stop the Tor daemon cleanly!
+		hasHybridTor := false
+		for _, px := range proxies {
+			if strings.HasPrefix(px.ID, torManagedPrefix) {
+				hasHybridTor = true
+				break
+			}
+		}
+		if hasHybridTor && ppV2 != nil && ppV2.Pool != nil {
+			go s.shutdownHybridTorIfPoolDisabled()
+		}
+	}
 	s.m.SetProxyPoolFailClosed(poolEnabled)
 	entries := make([]proxyPoolEntry, 0, len(proxies))
 	if poolEnabled {

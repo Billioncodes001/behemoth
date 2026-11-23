@@ -34,6 +34,7 @@ type MainAgent struct {
 	nonStreamingFn  func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
 	noaEnabledFn    func() bool                            // resolver: use experimental noa compaction? (nil = off)
 	maxTokensFn     func() int                             // resolver: per-reply output cap (nil/0 = send no cap)
+	webFetchProxyFn func() string
 }
 
 // SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
@@ -74,7 +75,8 @@ func (m *MainAgent) compactionWindow() int {
 // SetProxy points the main agent's WebFetch at the recording proxy plus the CA
 // cert it trusts to verify HTTPS through it (empty addr = direct).
 func (m *MainAgent) SetProxy(addr, caCert string)      { m.proxyAddr, m.proxyCACert = addr, caCert }
-func (m *MainAgent) SetProxyProvider(fn func() string) { m.proxyAddrFn = fn }
+func (m *MainAgent) SetProxyProvider(fn func() string)         { m.proxyAddrFn = fn }
+func (m *MainAgent) SetWebFetchProxyProvider(fn func() string) { m.webFetchProxyFn = fn }
 
 // SetWebSearch selects the web_search backend for the main agent (off by default).
 func (m *MainAgent) SetWebSearch(o WebSearchOpts) { m.webSearch = o }
@@ -134,20 +136,27 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
 	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
-	proxyAddr := m.proxyAddr
-	if m.proxyAddrFn != nil {
-		proxyAddr = m.proxyAddrFn()
+	resolveMainProxy := func() string {
+		if m.proxyAddrFn != nil {
+			return m.proxyAddrFn()
+		}
+		return m.proxyAddr
+	}
+	proxyAddr := resolveMainProxy()
+	webFetchProxy := proxyAddr
+	if webFetchProxy == "" && m.webFetchProxyFn != nil {
+		webFetchProxy = m.webFetchProxyFn()
 	}
 	opts := agentcore.Options{
 		Provider:        m.prov,
 		SystemPrompt:    system,
 		DynamicBoundary: boundary,
-		Tools:           append(tools, deepSeekTools(m.webSearch)...),
+		Tools:           wrapDynamicProxyEnvTools(append(tools, deepSeekTools(m.webSearch)...), resolveMainProxy, m.proxyCACert),
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
 		EnableWebFetch:  true, // 走记录代理留痕；载入代理 CA 验证 MITM 重签的 HTTPS 证书
-		WebFetchProxy:   proxyAddr,
+		WebFetchProxy:   webFetchProxy,
 		WebFetchCACert:  m.proxyCACert,
 		// 联网搜索(可选)。ddgs 无需 key；brave-free 需 BraveKey；tavily 需 TavilyKey。
 		// WebSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关；空则直连。

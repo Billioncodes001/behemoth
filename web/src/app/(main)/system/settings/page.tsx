@@ -71,6 +71,7 @@ export default function SystemSettingsPage() {
   const [globalProxyInput, setGlobalProxyInput] = React.useState("");
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
   const [v2PoolManaged, setV2PoolManaged] = React.useState(false);
+  const [exclusiveTorManaged, setExclusiveTorManaged] = React.useState(false);
   const [v2PoolStats, setV2PoolStats] = React.useState<{ total: number; healthy: number } | null>(null);
   const [proxyReconnectMax, setProxyReconnectMax] = React.useState("5");
   const [proxyReconnectInterval, setProxyReconnectInterval] = React.useState("30");
@@ -243,11 +244,18 @@ export default function SystemSettingsPage() {
         void Promise.all([
           api.proxyV2.getConfig().catch(() => null),
           api.proxyV2.getStats().catch(() => null),
-        ]).then(([cfg, st]) => {
+          api.proxyV2.getTorStatus().catch(() => null),
+        ]).then(([cfg, st, torSnap]) => {
           const total = st?.total ?? 0;
           const healthy = st?.healthy ?? 0;
-          setV2PoolStats({ total, healthy });
-          setV2PoolManaged(Boolean(cfg?.enabled && total > 0));
+          const isExcTor = Boolean(torSnap?.exclusive_active);
+          setExclusiveTorManaged(isExcTor);
+          setV2PoolStats(
+            isExcTor
+              ? { total: torSnap?.circuits_total ?? 0, healthy: torSnap?.circuits_healthy ?? 0 }
+              : { total, healthy },
+          );
+          setV2PoolManaged(Boolean(isExcTor || (cfg?.enabled && total > 0)));
         });
       })
       .catch(() => {
@@ -832,8 +840,9 @@ export default function SystemSettingsPage() {
                 {v2PoolManaged && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300">
                     <span>
-                      {t("settings.proxyPoolManagedNotice")}
-                      {v2PoolStats ? ` (${v2PoolStats.healthy}/${v2PoolStats.total} healthy)` : ""}
+                      {exclusiveTorManaged
+                        ? `Outbound target traffic is currently managed by Exclusive Tor Network${v2PoolStats ? ` (${v2PoolStats.healthy}/${v2PoolStats.total} circuits healthy)` : ""}. Disable Tor in Proxy Pool to use a single static Global Proxy.`
+                        : `${t("settings.proxyPoolManagedNotice")}${v2PoolStats ? ` (${v2PoolStats.healthy}/${v2PoolStats.total} healthy)` : ""}`}
                     </span>
                   </div>
                 )}

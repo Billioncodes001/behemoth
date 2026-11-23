@@ -181,6 +181,9 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		trafficCapture = s.m.TrafficEnabled()
 	}
 	poolEnabled := cfg != nil && cfg.Enabled
+	exclusiveTor := s.isExclusiveTorActive()
+	torSnap := s.torStatusSnapshot()
+	torHealthyCount, _ := torSnap["circuits_healthy"].(int)
 	totalInPool := 0
 	activeProxyID := ""
 	if stats != nil {
@@ -189,10 +192,20 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	}
 	poolActive := poolEnabled && totalInPool > 0 && activeProxy != nil
 	poolExhausted := poolEnabled && !poolActive
-	globalActive := globalRaw != ""
+	globalActive := !exclusiveTor && !poolEnabled && globalRaw != ""
 	routingMode := "direct"
-	if poolActive {
-		routingMode = "proxy_pool"
+	if exclusiveTor {
+		if torHealthyCount > 0 || (s.m != nil && s.m.ExclusiveTorCircuitCount() > 0) {
+			routingMode = "exclusive_tor"
+		} else {
+			routingMode = "exclusive_tor_exhausted_fail_closed"
+		}
+	} else if poolActive {
+		if hyb, _ := torSnap["hybrid_pool_active"].(bool); hyb {
+			routingMode = "hybrid_tor_pool"
+		} else {
+			routingMode = "proxy_pool"
+		}
 	} else if poolExhausted {
 		routingMode = "proxy_pool_exhausted_fail_closed"
 	} else if globalActive {
@@ -203,17 +216,19 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	if s.m != nil {
 		localForwarder = s.m.OutboundProxyAddr()
 	}
-	instruction := "NO outbound proxy is enabled (Proxy Pool is OFF and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
-	if routingMode == "proxy_pool" {
-		torSnap := s.torStatusSnapshot()
-		if hyb, _ := torSnap["hybrid_pool_active"].(bool); hyb {
-			instruction = "HYBRID TOR + PROXY POOL MODE ACTIVE: Both free Tor SOCKS5 circuits (tor-circuit-*) and non-Tor pool proxies are enabled! Running agents automatically pick up pool changes on every request without restarting. Use free Tor circuits for bulk scanning/fuzzing ($0 bandwidth); if a target WAF/Cloudflare challenges Tor exit IPs (403/429/Captcha), call manage_proxy_pool(action='activate', proxy_id='<non-tor-proxy-id>') or manage_proxy_pool(action='tor_newnym')."
-		} else {
-			instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy (picking up Tor/pool switches live mid-run). In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY. If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate', 'tor_newnym', or 'disable_proxy') or scrape_online_proxies."
-		}
-	} else if routingMode == "proxy_pool_exhausted_fail_closed" {
+	instruction := "NO outbound proxy is enabled (Tor is OFF, Proxy Pool is OFF, and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
+	switch routingMode {
+	case "exclusive_tor":
+		instruction = "EXCLUSIVE TOR NETWORK ACTIVE (Proxy Pool is auto-disabled): 100% of external target requests automatically route over isolated Tor SOCKS5 exit circuits ($0 bandwidth). Running agents pick up switches live per command without restarting. If a target WAF/Cloudflare challenges a Tor exit IP (403/429/Captcha), call manage_proxy_pool(action='tor_newnym') to rotate exit IPs or manage_proxy_pool(action='enable_tor', tor_mode='hybrid') to allow fallback to pool proxies."
+	case "exclusive_tor_exhausted_fail_closed":
+		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED TOR GUARD ACTIVE: Exclusive Tor is ENABLED, and 0 Tor circuits are currently reachable/bootstrapped! Direct target connections are strictly blocked to protect the server IP. Call manage_proxy_pool(action='tor_newnym') once or stop and inform the operator."
+	case "hybrid_tor_pool":
+		instruction = "HYBRID TOR + PROXY POOL MODE ACTIVE: Both free Tor SOCKS5 circuits (tor-circuit-*) and non-Tor pool proxies are enabled together! Running agents automatically pick up pool changes on every request without restarting. Use free Tor circuits for bulk scanning/fuzzing ($0 bandwidth); if a target WAF/Cloudflare challenges Tor exit IPs (403/429/Captcha), call manage_proxy_pool(action='activate', proxy_id='<non-tor-proxy-id>') or manage_proxy_pool(action='tor_newnym')."
+	case "proxy_pool":
+		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy (picking up Tor/pool switches live mid-run). In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY. If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate' or 'disable_proxy') or scrape_online_proxies."
+	case "proxy_pool_exhausted_fail_closed":
 		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! ARTEX has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Immediately stop and inform the user that all proxies in the Proxy Pool are down/exhausted, and let them know they can click 'Enable Free Tor Network' in System -> Proxy Pool (or ask you to call manage_proxy_pool(action='enable_tor')) or import working proxies."
-	} else if routingMode == "static_global_proxy" {
+	case "static_global_proxy":
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
 	return map[string]any{
@@ -221,17 +236,18 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		"any_proxy_enabled":          anyOutbound,
 		"effective_routing_mode":     routingMode,
 		"local_proxy_env_url":        localForwarder,
+		"exclusive_tor_active":       exclusiveTor,
 		"proxy_pool_enabled":         poolEnabled,
 		"proxy_pool_active":          poolActive,
-		"proxy_pool_exhausted":       poolExhausted,
-		"fail_closed":                poolEnabled,
+		"proxy_pool_exhausted":       poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
+		"fail_closed":                poolEnabled || exclusiveTor,
 		"global_proxy_enabled":       globalActive,
-		"static_global_proxy":        maskSecrets(globalRaw),
+		"static_global_proxy":        maskSecrets(func() string { if s.m != nil { return s.m.StaticGlobalProxy() }; return "" }()),
 		"local_traffic_capture_only": trafficCapture && !anyOutbound,
 		"traffic_capture":            trafficCapture,
 		"active_proxy_id":            activeProxyID,
 		"active_proxy":               activeProxy,
-		"tor":                        s.torStatusSnapshot(),
+		"tor":                        torSnap,
 		"instruction":                instruction,
 		"config":                     cfg,
 		"stats":                      stats,
@@ -275,6 +291,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 			"action":                        strParam("Action: rotate | enable_tor | tor_newnym | disable_tor | tor_status | test_all | test_one | activate | disable_proxy | enable_proxy | clear_failed | clear_all | enable | disable | configure | delete"),
 			"proxy_id":                      strParam("Target proxy ID (used by test_one, activate, disable_proxy, enable_proxy, delete)"),
 			"tor_circuits":                  map[string]any{"type": "integer", "description": "Optional number of isolated Tor SOCKS5 circuits (1-10, default 5) when action=enable_tor"},
+			"tor_mode":                      strParam("Optional Tor coexistence mode when action=enable_tor: exclusive (default: auto-disables Proxy Pool and routes 100% via Tor) | hybrid (enables Proxy Pool and rotates Tor + Pool proxies together)"),
 			"rotation_strategy":             strParam("Optional rotation strategy: round_robin | random | least_used"),
 			"rotation_interval_seconds":     map[string]any{"type": "integer", "description": "Optional rotation interval in seconds (>= 5)"},
 			"auto_rotate_on_failure":        map[string]any{"type": "boolean", "description": "Optional toggle to auto-rotate when a proxy fails"},
@@ -291,6 +308,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				Action                     string `json:"action"`
 				ProxyID                    string `json:"proxy_id"`
 				TorCircuits                int    `json:"tor_circuits"`
+				TorMode                    string `json:"tor_mode"`
 				RotationStrategy           string `json:"rotation_strategy"`
 				RotationIntervalSeconds    *int   `json:"rotation_interval_seconds"`
 				AutoRotateOnFailure        *bool  `json:"auto_rotate_on_failure"`
@@ -416,7 +434,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				return jsonResult(s.torStatusSnapshot())
 
 			case "enable_tor":
-				out, err := s.enableTorInPool(ctx, a.TorCircuits)
+				out, err := s.enableTorInPool(ctx, a.TorCircuits, a.TorMode)
 				if err != nil {
 					return actool.Errorf(err.Error()), nil
 				}

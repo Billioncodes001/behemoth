@@ -1475,6 +1475,7 @@ export const api = {
         socks_port: number;
         mode?: "exclusive" | "hybrid";
         enabled_in_pool: boolean;
+        exclusive_active?: boolean;
         hybrid_pool_active?: boolean;
         suspended_pool_count?: number;
         circuits_total: number;
@@ -1485,6 +1486,7 @@ export const api = {
       post<{
         mode?: "exclusive" | "hybrid";
         enabled_in_pool: boolean;
+        exclusive_active?: boolean;
         hybrid_pool_active?: boolean;
         circuits_total: number;
         circuits_healthy: number;

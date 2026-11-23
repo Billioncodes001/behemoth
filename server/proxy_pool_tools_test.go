@@ -287,4 +287,105 @@ func TestTorCoexistenceModesScraperToolsAndSkillAutoDiscovery(t *testing.T) {
 	}
 }
 
+func TestExclusiveTorAutoDisablesPoolAndPoolEnableShutsDownExclusiveTor(t *testing.T) {
+	poolProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "via-pool-proxy")
+	}))
+	defer poolProxy.Close()
+	torMockProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "via-exclusive-tor")
+	}))
+	defer torMockProxy.Close()
+
+	pu, _ := url.Parse(poolProxy.URL)
+	pHost, pPort, _ := net.SplitHostPort(pu.Host)
+
+	m := proxyTestManager(t)
+	s := &Server{m: m}
+	pool := proxyv2.NewPool(nil)
+	ppV2 = &proxyPoolV2{
+		Pool:    pool,
+		Handler: proxyv2.NewHandler(pool),
+	}
+	pool.SetSyncHook(func(proxies []proxyv2.ProxyInfo, activeID string, cfg *proxyv2.ProxyPoolConfig) {
+		s.syncProxyPoolV2ToV1(proxies, activeID, cfg)
+	})
+
+	// 1. Import & activate a pool proxy; verify agent WebFetchProxyAddr routes via pool!
+	if _, err := pool.ImportProxies(pHost+":"+pPort, proxyv2.ProxyTypeHTTP); err != nil {
+		t.Fatal(err)
+	}
+	pxList := pool.GetProxies()
+	if err := pool.ActivateProxy(pxList[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	s.syncProxyPoolNow()
+
+	// Pre-capture WebFetchProxyAddr (simulating an already-running agent session!)
+	liveForwarderURL, _ := url.Parse(s.m.WebFetchProxyAddr())
+	runningAgentClient := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(liveForwarderURL)}}
+
+	resp1, err := runningAgentClient.Get("http://external.target.example/step1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := io.ReadAll(resp1.Body)
+	_ = resp1.Body.Close()
+	if string(b1) != "via-pool-proxy" {
+		t.Fatalf("expected initial request via pool proxy, got %q", string(b1))
+	}
+
+	// 2. Activate Exclusive Tor: Proxy Pool auto-disables (while pool entry stays active/untouched),
+	//    and the ALREADY-RUNNING agent client immediately switches to Exclusive Tor!
+	poolCfg := pool.GetConfig()
+	poolCfg.Enabled = false
+	_ = pool.UpdateConfig(poolCfg)
+	s.syncProxyPoolNow()
+	s.m.SetExclusiveTor(true, []string{torMockProxy.URL})
+
+	if pool.GetConfig().Enabled {
+		t.Fatalf("expected Proxy Pool to be auto-disabled while Exclusive Tor is active")
+	}
+	if !pool.GetProxies()[0].Active {
+		t.Fatalf("expected pool entry to remain untouched/active in table while pool itself is disabled")
+	}
+	stRes, _ := s.toolCheckProxyStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
+	if !strings.Contains(stRes.Flatten(), `"effective_routing_mode":"exclusive_tor"`) {
+		t.Fatalf("expected check_proxy_status to report exclusive_tor, got %s", stRes.Flatten())
+	}
+
+	resp2, err := runningAgentClient.Get("http://external.target.example/step2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, _ := io.ReadAll(resp2.Body)
+	_ = resp2.Body.Close()
+	if string(b2) != "via-exclusive-tor" {
+		t.Fatalf("expected running agent to immediately switch to Exclusive Tor mid-run, got %q", string(b2))
+	}
+
+	// 3. Switch Proxy Pool back ON while Exclusive Tor is active -> Exclusive Tor MUST auto-shutdown,
+	//    and the running agent immediately switches back to the Pool proxy!
+	if err := pool.ActivateProxy(pxList[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	s.syncProxyPoolNow()
+
+	if s.isExclusiveTorActive() {
+		t.Fatalf("expected Exclusive Tor to auto-shutdown as soon as Proxy Pool was switched ON")
+	}
+	resp3, err := runningAgentClient.Get("http://external.target.example/step3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b3, _ := io.ReadAll(resp3.Body)
+	_ = resp3.Body.Close()
+	if string(b3) != "via-pool-proxy" {
+		t.Fatalf("expected running agent to switch back to pool proxy after Exclusive Tor auto-shutdown, got %q", string(b3))
+	}
+}
+
+
 
