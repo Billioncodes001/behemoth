@@ -462,30 +462,136 @@ function ProfileSheet({
   const profileId = profile ? Number(profile.id) : undefined;
 
   const isLocalEndpoint = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(\/|$)/i.test(baseUrl.trim());
+  const [modelSearch, setModelSearch] = React.useState("");
+  const lastAutoFetchSigRef = React.useRef<string>("");
 
-  async function loadModels() {
-    if (loadingModels) return;
-    if (!isLocalEndpoint && !apiKey.trim() && !keyHint && format !== "jev") {
-      toast.warning("Please enter an API Key before fetching models from this provider.");
+  // Automatically preload smart platform & model defaults based on Base URL and Model ID
+  const applySmartDefaults = React.useCallback(
+    (nextBaseUrl: string, nextModel: string, allowFormatFlip: boolean) => {
+      const b = nextBaseUrl.trim().toLowerCase();
+      const m = nextModel.trim().toLowerCase();
+
+      if (b.includes("featherless.ai")) {
+        if (allowFormatFlip) setFormat("openai");
+        if (isNew && !name.trim()) setName("Featherless AI");
+        if (cw === "0") setCw("32");
+        if (maxTokens === "0") setMaxTokens("4096");
+      } else if (b.includes("openrouter.ai")) {
+        if (allowFormatFlip) setFormat("openai");
+        if (isNew && !name.trim()) setName("OpenRouter");
+        if (cw === "0") setCw("200");
+        if (maxTokens === "0") setMaxTokens("8192");
+      } else if (b.includes("generativelanguage.googleapis.com")) {
+        if (allowFormatFlip) setFormat("openai");
+        if (isNew && !name.trim()) setName("Google Gemini");
+        if (cw === "0") setCw("1000");
+        if (maxTokens === "0") setMaxTokens("8192");
+      } else if (b.includes("deepseek.com")) {
+        if (allowFormatFlip && !b.includes("/anthropic")) setFormat("openai");
+        if (isNew && !name.trim()) setName("DeepSeek");
+        if (cw === "0") setCw("128");
+        if (maxTokens === "0") setMaxTokens("8192");
+      } else if (b.includes("groq.com")) {
+        if (allowFormatFlip) setFormat("openai");
+        if (isNew && !name.trim()) setName("Groq");
+        if (cw === "0") setCw("128");
+        if (maxTokens === "0") setMaxTokens("8192");
+      } else if (b.includes("together.xyz") || b.includes("fireworks.ai") || b.includes("mistral.ai") || b.includes("api.x.ai")) {
+        if (allowFormatFlip) setFormat("openai");
+        if (cw === "0") setCw("128");
+        if (maxTokens === "0") setMaxTokens("4096");
+      } else if (b.includes("anthropic.com")) {
+        if (allowFormatFlip) setFormat("anthropic");
+        if (isNew && !name.trim()) setName("Anthropic");
+        if (cw === "0") setCw("200");
+        if (maxTokens === "0") setMaxTokens("8192");
+      } else if (b.includes("api.openai.com")) {
+        if (allowFormatFlip && format === "anthropic") setFormat("openai");
+        if (isNew && !name.trim()) setName("OpenAI");
+        if (cw === "0") setCw("200");
+      } else if (/^https?:\/\/(localhost|127\.0\.0\.1)(?::11434)?(\/|$)/i.test(b)) {
+        if (allowFormatFlip) setFormat("openai");
+        if (isNew && !name.trim()) setName("Ollama (Local)");
+        if (!apiKey.trim()) setApiKey("ollama");
+      }
+
+      if (m) {
+        if (/^(o1|o3|o4|gpt-5)/i.test(m)) {
+          setMaxTokensField("max_completion_tokens");
+          if (effort === NONE) setEffort("medium");
+        } else if (m.includes("reasoner") || m.includes("deepseek-r1")) {
+          if (thinkingType === NONE) setThinkingType("enabled");
+        } else if (/claude-(opus-4|sonnet-4|3-7)/i.test(m)) {
+          if (cw === "0") setCw("200");
+          if (maxTokens === "0") setMaxTokens("8192");
+        }
+      }
+    },
+    [apiKey, cw, effort, format, isNew, maxTokens, name, thinkingType],
+  );
+
+  const loadModels = React.useCallback(
+    async (silent = false) => {
+      if (loadingModels) return;
+      const hasEffectiveKey = Boolean(apiKey.trim() || keyHint || isLocalEndpoint || format === "jev");
+      if (!hasEffectiveKey) {
+        if (!silent) {
+          toast.warning("Enter your Base URL and API Key first to fetch available models.");
+        }
+        return;
+      }
+      setLoadingModels(true);
+      try {
+        const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId);
+        if (r.ok && r.models && r.models.length > 0) {
+          setModels(r.models);
+          if (!silent) {
+            setModelsOpen(true);
+            toast.success(ui("screen.cba1025637836d", { v0: r.models.length }));
+          }
+        } else if (!silent) {
+          toast.error(ui("screen.72346c6155f559", { v0: r.error ?? ui("screen.093bf588b825d2") }));
+        }
+      } catch (e) {
+        if (!silent) {
+          toast.error(ui("screen.bf7c248d779cd7", { v0: (e as Error).message }));
+        }
+      } finally {
+        setLoadingModels(false);
+      }
+    },
+    [apiKey, baseUrl, format, isLocalEndpoint, keyHint, loadingModels, profileId, proxy, ui],
+  );
+
+  // Automatically fetch and preload available platform models as soon as Base URL + API Key are provided!
+  React.useEffect(() => {
+    if (!open) {
+      lastAutoFetchSigRef.current = "";
       return;
     }
-    setLoadingModels(true);
-    setModels([]);
-    try {
-      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId);
-      if (r.ok && r.models && r.models.length > 0) {
-        setModels(r.models);
-        setModelsOpen(true);
-        toast.success(ui("screen.cba1025637836d", { v0: r.models.length }));
-      } else {
-        toast.error(ui("screen.72346c6155f559", { v0: r.error ?? ui("screen.093bf588b825d2") }));
-      }
-    } catch (e) {
-      toast.error(ui("screen.bf7c248d779cd7", { v0: (e as Error).message }));
-    } finally {
-      setLoadingModels(false);
-    }
-  }
+    const trimmedKey = apiKey.trim();
+    const trimmedBase = baseUrl.trim();
+    const canAutoFetch =
+      (trimmedKey.length >= 6 && (trimmedBase.length > 0 || format === "openai" || format === "anthropic")) ||
+      (Boolean(profileId && keyHint) && (trimmedBase.length > 0 || format === "openai" || format === "anthropic")) ||
+      isLocalEndpoint;
+    if (!canAutoFetch) return;
+
+    const sig = `${format}|${trimmedBase}|${trimmedKey}|${profileId ?? ""}`;
+    if (lastAutoFetchSigRef.current === sig) return;
+
+    const timer = window.setTimeout(() => {
+      lastAutoFetchSigRef.current = sig;
+      void loadModels(true);
+    }, 550);
+    return () => window.clearTimeout(timer);
+  }, [open, format, baseUrl, apiKey, keyHint, profileId, isLocalEndpoint, loadModels]);
+
+  const filteredModels = React.useMemo(() => {
+    const q = (modelSearch || model).trim().toLowerCase();
+    if (!q || models.includes(model.trim())) return models;
+    return models.filter((m) => m.toLowerCase().includes(q));
+  }, [models, model, modelSearch]);
 
   async function testConnection(): Promise<boolean> {
     if (testing) return false;
@@ -634,131 +740,136 @@ function ProfileSheet({
             </div>
           </div>
 
-          {/* Provider presets: one click fills format/base URL/default model.
-              Ollama & friends run locally via their OpenAI-compatible endpoint,
-              so no API key is needed (a dummy key is stored to enter the pool). */}
-          <div className="grid gap-2">
-            <Label>Quick preset (Provider)</Label>
-            <div className="flex flex-wrap gap-1.5">
-              {LLM_PRESETS.map((p) => (
-                <button
-                  key={p.name}
-                  type="button"
-                  title={p.hint}
-                  onClick={() => applyPresetOption(p, p.models[0], isNew)}
-                  className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground ${
-                    activePreset?.name === p.name ? "border-primary bg-primary/10 text-primary" : "bg-muted/40"
-                  }`}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-            {activePreset && activePreset.models.length > 0 && (
-              <div className="mt-1.5 grid gap-1.5 rounded-lg border bg-muted/20 p-2.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-foreground">
-                    {activePreset.name} — Select Preset Model (auto-configures reasoning, context window &amp; max tokens)
-                  </Label>
-                  <Badge variant="outline" className="text-[10px]">
-                    {activePreset.models.length} models
-                  </Badge>
-                </div>
-                <Select
-                  value={activePreset.models.some((m) => m.id === model) ? model : activePreset.models[0].id}
-                  onValueChange={(selectedId) => {
-                    const chosen = activePreset.models.find((m) => m.id === selectedId);
-                    if (chosen) applyPresetOption(activePreset, chosen, false);
-                  }}
-                >
-                  <SelectTrigger className="font-mono text-xs">
-                    <SelectValue placeholder="Choose a model preset..." />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-80">
-                    {activePreset.models.map((m) => (
-                      <SelectItem key={m.id} value={m.id} className="font-mono text-xs">
-                        <span className="flex items-center gap-2">
-                          <span>{m.label}</span>
-                          {m.badge && (
-                            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                              {m.badge}
-                            </span>
-                          )}
-                          <span className="text-muted-foreground text-[11px]">({m.id})</span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            <p className="text-muted-foreground text-xs">
-              Select a provider above, then pick a model from the dropdown to automatically configure Base URL, Format, Thinking/Reasoning effort, and Context Window. You only need to enter your API Key below.
-            </p>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="p-model">{ui("screen.c98e118e0a43f0")}</Label>
-            <div className="flex gap-2">
-              <Input
-                id="p-model"
-                className="font-mono"
-                placeholder="claude-opus-4-8"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-              {/* modal: 这个 Popover 的内容被 portal 到 <body>，在 Sheet 的滚动锁之外，
-                  不加 modal 时列表能渲染却滚不动。modal 让它自己持有最上层滚动锁。 */}
-              <Popover open={modelsOpen} onOpenChange={setModelsOpen} modal>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="shrink-0"
-                    disabled={loadingModels}
-                    onClick={loadModels}
-                    title={ui("screen.8df45c6e6154da")}
-                  >
-                    {loadingModels ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-                  </Button>
-                </PopoverTrigger>
-                {models.length > 0 && (
-                  <PopoverContent className="max-h-72 w-72 gap-0 overflow-y-auto overscroll-contain p-1" align="end">
-                    {models.map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        className="w-full shrink-0 rounded-md px-2 py-1.5 text-left font-mono text-xs hover:bg-accent hover:text-accent-foreground"
-                        onClick={() => {
-                          setModel(m);
-                          setModelsOpen(false);
-                        }}
-                      >
-                        {m}
-                      </button>
-                    ))}
-                  </PopoverContent>
-                )}
-              </Popover>
-            </div>
-            {format === "jev" && (
-              <p className="text-muted-foreground text-xs">
-                {ui("screen.2b226df50885ba")}
-                <code className="font-mono">jev-latest</code>。
-              </p>
-            )}
-          </div>
-
           <div className="grid gap-2">
             <Label htmlFor="p-base-url">{ui("screen.d1200d4f462127")}</Label>
             <Input
               id="p-base-url"
               className="font-mono"
-              placeholder="https://api.openai.com/v1"
+              placeholder={format === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
               value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBaseUrl(next);
+                applySmartDefaults(next, model, isNew);
+              }}
             />
+            <p className="text-muted-foreground text-xs">
+              Enter your provider Base URL (e.g. OpenAI, Anthropic, Featherless AI, OpenRouter, DeepSeek, Gemini, Groq, or local Ollama/vLLM), then enter your API Key below to automatically preload all available models.
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="p-api-key">API Key</Label>
+            <Input
+              id="p-api-key"
+              type="password"
+              placeholder={keyHint ? ui("screen.d717c6180a8bd7", { v0: keyHint }) : "sk-…"}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="p-model">{ui("screen.c98e118e0a43f0")}</Label>
+              {loadingModels ? (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Loader2Icon className="size-3 animate-spin" /> Fetching platform models...
+                </span>
+              ) : models.length > 0 ? (
+                <Badge variant="secondary" className="text-[10px]">
+                  {models.length} models preloaded
+                </Badge>
+              ) : null}
+            </div>
+            <div className="flex gap-2">
+              <Popover open={modelsOpen && models.length > 0} onOpenChange={setModelsOpen} modal>
+                <PopoverTrigger asChild>
+                  <div className="relative flex-1">
+                    <Input
+                      id="p-model"
+                      className="font-mono"
+                      placeholder={
+                        models.length > 0
+                          ? `Search or select from ${models.length} preloaded models...`
+                          : format === "anthropic"
+                            ? "claude-sonnet-4-5"
+                            : "gpt-4o / model-id"
+                      }
+                      value={model}
+                      onFocus={() => {
+                        if (models.length > 0) {
+                          setModelSearch("");
+                          setModelsOpen(true);
+                        }
+                      }}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setModel(next);
+                        setModelSearch(next);
+                        applySmartDefaults(baseUrl, next, false);
+                        if (models.length > 0) setModelsOpen(true);
+                      }}
+                    />
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="max-h-80 w-[var(--radix-popover-trigger-width)] min-w-72 gap-0 overflow-y-auto overscroll-contain p-1.5"
+                  align="start"
+                  onOpenAutoFocus={(ev) => ev.preventDefault()}
+                >
+                  <div className="sticky top-0 z-10 bg-popover pb-1.5">
+                    <Input
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      placeholder={`Filter ${models.length} models...`}
+                      className="h-7 text-xs font-mono"
+                    />
+                  </div>
+                  {filteredModels.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      No matching model in list — your typed ID will be used directly.
+                    </p>
+                  ) : (
+                    filteredModels.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        className={cn(
+                          "w-full shrink-0 rounded-md px-2 py-1.5 text-left font-mono text-xs hover:bg-accent hover:text-accent-foreground",
+                          m === model && "bg-primary/10 text-primary font-medium",
+                        )}
+                        onClick={() => {
+                          setModel(m);
+                          setModelSearch("");
+                          applySmartDefaults(baseUrl, m, false);
+                          setModelsOpen(false);
+                        }}
+                      >
+                        {m}
+                      </button>
+                    ))
+                  )}
+                </PopoverContent>
+              </Popover>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                disabled={loadingModels}
+                onClick={() => void loadModels(false)}
+                title={ui("screen.8df45c6e6154da")}
+              >
+                {loadingModels ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+              </Button>
+            </div>
+            {format === "jev" && (
+              <p className="text-muted-foreground text-xs">
+                {ui("screen.2b226df50885ba")}
+                <code className="font-mono">jev-latest</code>.
+              </p>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -787,17 +898,6 @@ function ProfileSheet({
               <b>{ui("screen.b6b1d20850b049")}</b>
               {ui("screen.ce053ce3d5ec1a")}
             </p>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="p-api-key">API Key</Label>
-            <Input
-              id="p-api-key"
-              type="password"
-              placeholder={keyHint ? ui("screen.d717c6180a8bd7", { v0: keyHint }) : "sk-…"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-3">

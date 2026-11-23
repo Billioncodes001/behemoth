@@ -1015,7 +1015,7 @@ export default function ProxyPoolPage() {
                 </Button>
                 {scraper?.last_agent_conv_id ? (
                   <Button size="sm" variant="outline" asChild>
-                    <a href={`/chat?id=${scraper.last_agent_conv_id}`}>
+                    <a href={`/chat?c=${scraper.last_agent_conv_id}`}>
                       <ExternalLink className="w-3.5 h-3.5 mr-1" />
                       <span>Agent Run #{scraper.last_agent_conv_id}</span>
                     </a>

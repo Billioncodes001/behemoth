@@ -4,12 +4,17 @@ import * as React from "react";
 import Link from "next/link";
 
 import {
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ArrowUpIcon,
   ArrowUpRightIcon,
   ChevronRightIcon,
   FileTextIcon,
   FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
+  GlobeIcon,
+  PlayIcon,
   RotateCcwIcon,
   ShieldAlertIcon,
   Trash2Icon,
@@ -66,6 +71,55 @@ export const FINDING_STATUSES: FindingStatus[] = [
 ];
 
 export const UNASSIGNED_TASK = "__unassigned__";
+
+const NON_DOMAIN_EXTS = new Set([
+  "html", "htm", "js", "ts", "tsx", "jsx", "css", "json", "php", "asp", "aspx",
+  "jsp", "py", "go", "rb", "sql", "txt", "md", "xml", "svg", "png", "jpg", "jpeg",
+  "gif", "pdf", "zip", "gz", "tar", "env", "bak", "log", "map", " min",
+]);
+
+function parseHostFromCandidate(raw: string): string {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  const urlMatch = s.match(/https?:\/\/([a-zA-Z0-9.-]+(?::\d+)?)/i);
+  if (urlMatch?.[1]) {
+    const h = urlMatch[1].replace(/:\d+$/, "").toLowerCase();
+    if (h && h !== "localhost" && h !== "127.0.0.1") return h;
+  }
+  const domMatch = s.match(/\b((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,24}|\d{1,3}(?:\.\d{1,3}){3})\b/);
+  if (domMatch?.[1]) {
+    const cand = domMatch[1].toLowerCase();
+    const parts = cand.split(".");
+    const tld = parts[parts.length - 1] || "";
+    if (!NON_DOMAIN_EXTS.has(tld) && cand !== "127.0.0.1" && cand !== "0.0.0.0") {
+      return cand;
+    }
+  }
+  return "";
+}
+
+export function extractFindingWebsite(f: Finding): string {
+  if (Array.isArray(f.assets)) {
+    for (const a of f.assets) {
+      const h = parseHostFromCandidate(a.label || "");
+      if (h) return h;
+    }
+  }
+  for (const field of [f.name, f.summary, f.task_description, f.evidence]) {
+    if (!field) continue;
+    const h = parseHostFromCandidate(field);
+    if (h) return h;
+  }
+  return "Unassigned / General";
+}
+
+const SEVERITY_RANK: Record<string, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+  info: 0,
+};
 
 // 行内编辑缓冲:当前展开行的名称/类别/严重等级。
 export interface FindingEdit {
@@ -128,6 +182,7 @@ interface FindingsTableProps {
   onRetest: (finding: Finding) => void;
   activeRetests: Record<string, ActiveFindingRetest>;
   onDeepen: (finding: Finding) => void;
+  onContinueChat?: (finding: Finding) => void;
   onDelete: (finding: Finding) => void;
   /** 全选框的无障碍标签,平铺视图与分组视图措辞不同。 */
   selectAllLabel?: string;
@@ -155,6 +210,7 @@ export function FindingsTable({
   onRetest,
   activeRetests,
   onDeepen,
+  onContinueChat,
   onDelete,
   selectAllLabel,
 }: FindingsTableProps) {
@@ -172,7 +228,41 @@ export function FindingsTable({
     headerChecked = "indeterminate";
   }
 
-  const rows: FindingCaseListRow[] = caseRows ?? items.map((finding) => ({ finding, matched_ids: [] }));
+  const [colSort, setColSort] = React.useState<"ts" | "severity" | "name" | "website" | "status">("ts");
+  const [colDir, setColDir] = React.useState<"asc" | "desc">("desc");
+
+  const toggleColSort = (col: "ts" | "severity" | "name" | "website" | "status") => {
+    if (colSort === col) {
+      setColDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setColSort(col);
+      setColDir(col === "name" || col === "website" ? "asc" : "desc");
+    }
+  };
+
+  const baseRows: FindingCaseListRow[] = caseRows ?? items.map((finding) => ({ finding, matched_ids: [] }));
+  const rows = React.useMemo(() => {
+    const copy = [...baseRows];
+    copy.sort((ra, rb) => {
+      const a = ra.finding;
+      const b = rb.finding;
+      if (!a || !b) return 0;
+      let cmp = 0;
+      if (colSort === "severity") {
+        cmp = (SEVERITY_RANK[a.severity] ?? 0) - (SEVERITY_RANK[b.severity] ?? 0);
+      } else if (colSort === "name") {
+        cmp = (a.name || a.vulnclass || "").localeCompare(b.name || b.vulnclass || "");
+      } else if (colSort === "website") {
+        cmp = extractFindingWebsite(a).localeCompare(extractFindingWebsite(b));
+      } else if (colSort === "status") {
+        cmp = (a.status || "").localeCompare(b.status || "");
+      } else {
+        cmp = new Date(a.ts || 0).getTime() - new Date(b.ts || 0).getTime();
+      }
+      return colDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [baseRows, colSort, colDir]);
 
   const shared: Omit<FindingsTableProps, "items" | "caseRows"> = {
     presentation,
@@ -190,6 +280,7 @@ export function FindingsTable({
     onRetest,
     activeRetests,
     onDeepen,
+    onContinueChat,
     onDelete,
   };
 
@@ -220,13 +311,78 @@ export function FindingsTable({
               />
             </TableHead>
             <TableHead className="w-8" />
-            <TableHead className="w-20">{ui("screen.367839ef9f8c2f")}</TableHead>
-            <TableHead>{ui("screen.f9d4d157ae40c7")}</TableHead>
-            <TableHead className="w-44">{ui("screen.5f45bb826b168f")}</TableHead>
-            <TableHead className="w-28">{ui("screen.6320b4a8722a85")}</TableHead>
+            <TableHead className="w-24">
+              <button
+                type="button"
+                onClick={() => toggleColSort("severity")}
+                className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+              >
+                <span>{ui("screen.367839ef9f8c2f")}</span>
+                {colSort === "severity" ? (
+                  colDir === "asc" ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />
+                ) : (
+                  <ArrowUpDownIcon className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
+            <TableHead>
+              <button
+                type="button"
+                onClick={() => toggleColSort("name")}
+                className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+              >
+                <span>{ui("screen.f9d4d157ae40c7")}</span>
+                {colSort === "name" ? (
+                  colDir === "asc" ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />
+                ) : (
+                  <ArrowUpDownIcon className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
+            <TableHead className="w-48">
+              <button
+                type="button"
+                onClick={() => toggleColSort("website")}
+                className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+              >
+                <span>Website / {ui("screen.5f45bb826b168f")}</span>
+                {colSort === "website" ? (
+                  colDir === "asc" ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />
+                ) : (
+                  <ArrowUpDownIcon className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
+            <TableHead className="w-28">
+              <button
+                type="button"
+                onClick={() => toggleColSort("status")}
+                className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+              >
+                <span>{ui("screen.6320b4a8722a85")}</span>
+                {colSort === "status" ? (
+                  colDir === "asc" ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />
+                ) : (
+                  <ArrowUpDownIcon className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
             <TableHead className="w-32">{ui("screen.9f232c4d19886f")}</TableHead>
-            <TableHead className="w-24">{ui("screen.8b6ff498515bcc")}</TableHead>
-            <TableHead className="w-48">{ui("screen.ed31fbb483ee1b")}</TableHead>
+            <TableHead className="w-28">
+              <button
+                type="button"
+                onClick={() => toggleColSort("ts")}
+                className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+              >
+                <span>{ui("screen.8b6ff498515bcc")}</span>
+                {colSort === "ts" ? (
+                  colDir === "asc" ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />
+                ) : (
+                  <ArrowUpDownIcon className="size-3 opacity-40" />
+                )}
+              </button>
+            </TableHead>
+            <TableHead className="w-52">{ui("screen.ed31fbb483ee1b")}</TableHead>
           </TableRow>
         </TableHeader>
       ) : null}
@@ -301,7 +457,7 @@ export function FindingsTable({
                   </div>
                 </TableCell>
                 <TableCell>
-                  <FindingAssetLabels assets={f.assets} />
+                  <FindingAssetLabels assets={f.assets} fallbackWebsite={extractFindingWebsite(f)} />
                 </TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   {f.finding_id ? (
@@ -353,6 +509,17 @@ export function FindingsTable({
                         {ui("screen.d95315ddeb80c2")}
                       </Button>
                     ) : null}
+                    {f.finding_id && onContinueChat && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onContinueChat(f)}
+                        title="Continue exploiting or escalating this finding in Chat"
+                      >
+                        <PlayIcon data-icon="inline-start" className="text-emerald-500" />
+                        Exploit
+                      </Button>
+                    )}
                     {f.finding_id && f.task_id && (
                       <Button size="sm" variant="ghost" onClick={() => onDeepen(f)}>
                         <FlaskConicalIcon data-icon="inline-start" />
@@ -527,11 +694,23 @@ export function FindingsTable({
 function FindingAssetLabels({
   assets = [],
   totalCount = assets.length,
+  fallbackWebsite,
 }: {
   assets?: FindingAsset[];
   totalCount?: number;
+  fallbackWebsite?: string;
 }) {
-  if (assets.length === 0) return <span className="text-muted-foreground">—</span>;
+  if (assets.length === 0) {
+    if (fallbackWebsite && fallbackWebsite !== "Unassigned / General") {
+      return (
+        <span className="inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs truncate" title={fallbackWebsite}>
+          <GlobeIcon className="size-3 shrink-0 text-emerald-500" />
+          <span className="truncate">{fallbackWebsite}</span>
+        </span>
+      );
+    }
+    return <span className="text-muted-foreground">—</span>;
+  }
   const visibleAssets = assets.slice(0, 3);
   const remaining = Math.max(totalCount, assets.length) - visibleAssets.length;
   return (

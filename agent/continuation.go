@@ -34,7 +34,7 @@ const (
 
 	continuationMissingAssetSyncNudge = "[System Continuation — Mandatory Asset Synchronization] Before concluding your assessment, you must call insert_assets to persist the genuinely discovered target domain, IP address(es), open ports, and web services into the ARTEX Assets database (and call report_finding if any real vulnerability was verified). Invoke insert_assets now, then continue."
 
-	continuationMissingSpawnTaskNudge = "[System Continuation — Create Engagement Task] The user requested a full target/website vulnerability scan or penetration test. Register the target scope (`add_company_scope` / `insert_assets`) and call `spawn_task` now so this engagement is also tracked and executed by the multi-worker Task engine in `/function/tasks`, while continuing your active exploitation in Chat."
+	continuationMissingSpawnTaskNudge = "[System Continuation — Create Engagement Task] The user requested a full target/website vulnerability scan or penetration test. First check `list_tasks` to see if an active task already exists for this target domain; if none exists yet, register scope (`add_company_scope` / `insert_assets`) and call `spawn_task` ONCE (never create duplicate tasks for the same target!), then continue your active exploitation in Chat."
 
 	continuationExploitDiscoveredFindingsNudge = "[System Continuation — Mandatory Post-Discovery Exploitation & Arsenal Loop] You recorded %d candidate finding(s) via `report_finding`, and attempted to stop at surface detection without driving each finding through active exploitation! Do NOT stop until all exploitation paths are genuinely exhausted: (1) call `search_patch_arsenal` to check if Patch Monitor already has CVEs, PoCs, or payloads for the discovered libraries/technologies/vulnerability classes and reuse them; (2) systematically go through EACH recorded finding and execute live PoCs (`Bash`, Playwright/browser MCP, `run_security_tool`) to prove maximum impact and test exploit chains; (3) whenever exploitation proves higher impact or confirms code/script execution, call `update_finding` to escalate `severity` (e.g. `low` -> `medium`/`high`/`critical`), set `status='confirmed'`, and append PoC output, plus `update_finding_report`; and (4) save any newly verified working exploit/payload back to Patch Monitor via `save_verified_exploit_to_patch_monitor`!"
 )
@@ -201,7 +201,7 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 			for _, b := range m.Content {
 				trimmed := strings.TrimSpace(b.Text)
 				if b.Type == llm.BlockText && trimmed != "" {
-					if strings.Contains(trimmed, "[System Continuation — Create Engagement Task]") {
+					if strings.Contains(trimmed, "[System Continuation — Create Engagement Task]") || strings.Contains(trimmed, "[System Continuation — Sync Engagement Task]") {
 						p.nudgedSpawnTask = true
 					}
 					if strings.Contains(trimmed, "[System Continuation — Mandatory Post-Discovery Exploitation") {
@@ -253,7 +253,7 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 				"generate_vuln_exploit", "generate_payload", "save_verified_exploit_to_patch_monitor":
 				p.calledAssetOrTaskSync = true
 			}
-			if u.Name == "spawn_task" && !toolCallFailedInNextTurn(messages, i, u.ID) {
+			if (u.Name == "spawn_task" || u.Name == "list_tasks" || u.Name == "add_task_hint") && !toolCallFailedInNextTurn(messages, i, u.ID) {
 				p.calledSpawnTask = true
 			}
 			if u.Name == "report_finding" && !toolCallFailedInNextTurn(messages, i, u.ID) {

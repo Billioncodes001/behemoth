@@ -4,11 +4,19 @@ import * as React from "react";
 import { useSearchParams } from "next/navigation";
 
 import {
+  ArrowDownIcon,
+  ArrowUpDownIcon,
+  ArrowUpIcon,
+  Code2Icon,
   DownloadIcon,
+  EyeIcon,
   FileIcon,
   FolderIcon,
   FolderPlusIcon,
+  GlobeIcon,
   HardDriveIcon,
+  KeyRoundIcon,
+  Maximize2Icon,
   RefreshCwIcon,
   SaveIcon,
   Trash2Icon,
@@ -16,12 +24,15 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Markdown } from "@/components/markdown";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type UITranslate, useUITranslation } from "@/i18n/use-ui-translation";
 import { api } from "@/lib/api";
@@ -60,9 +71,43 @@ function WorkspaceInner() {
   const [entries, setEntries] = React.useState<WorkspaceEntry[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [edit, setEdit] = React.useState<EditState | null>(null);
+  const [viewerTab, setViewerTab] = React.useState<"preview" | "source">("preview");
+  const [fullscreenSim, setFullscreenSim] = React.useState(false);
   const [mkdirOpen, setMkdirOpen] = React.useState(false);
   const [mkdirName, setMkdirName] = React.useState("");
+  const [sortCol, setSortCol] = React.useState<"name" | "kind" | "size" | "mtime">("mtime");
+  const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
   const uploadRef = React.useRef<HTMLInputElement>(null);
+
+  const handleSortCol = (col: "name" | "kind" | "size" | "mtime") => {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir(col === "name" || col === "kind" ? "asc" : "desc");
+    }
+  };
+
+  const sortedEntries = React.useMemo(() => {
+    const copy = [...entries];
+    copy.sort((a, b) => {
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      let cmp = 0;
+      if (sortCol === "name") {
+        const la = (a.display_name || a.name).toLowerCase();
+        const lb = (b.display_name || b.name).toLowerCase();
+        cmp = la.localeCompare(lb);
+      } else if (sortCol === "kind") {
+        cmp = (a.kind || "").localeCompare(b.kind || "");
+      } else if (sortCol === "size") {
+        cmp = a.size - b.size;
+      } else {
+        cmp = a.mtime - b.mtime;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [entries, sortCol, sortDir]);
 
   const load = React.useCallback(
     (p: string) => {
@@ -125,7 +170,12 @@ function WorkspaceInner() {
   const openFile = (e: WorkspaceEntry) => {
     api
       .workspaceRead(e.path)
-      .then((f) => setEdit({ file: f, content: f.content ?? "", dirty: false, saving: false }))
+      .then((f) => {
+        const lower = f.path.toLowerCase();
+        const hasRichPreview = lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".md");
+        setViewerTab(hasRichPreview ? "preview" : "source");
+        setEdit({ file: f, content: f.content ?? "", dirty: false, saving: false });
+      })
       .catch((err) => toast.error(ui("screen.076ee27586c9a7", { v0: (err as Error).message })));
   };
 
@@ -217,6 +267,11 @@ function WorkspaceInner() {
           ))}
         </div>
         <div className="flex items-center gap-2">
+          {path !== "domains" && (
+            <Button variant="secondary" size="sm" onClick={() => load("domains")}>
+              <GlobeIcon className="size-3.5" /> Domain Workspaces
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => setMkdirOpen(true)}>
             <FolderPlusIcon /> {ui("screen.84244abc71de03")}
           </Button>
@@ -241,128 +296,270 @@ function WorkspaceInner() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{ui("screen.d44e9b3d3b31d3")}</TableHead>
-                <TableHead className="w-28 text-right">{ui("screen.50db7447b966f5")}</TableHead>
-                <TableHead className="w-40">{ui("screen.257bbcc44c839d")}</TableHead>
+                <TableHead>
+                  <button
+                    type="button"
+                    onClick={() => handleSortCol("name")}
+                    className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+                  >
+                    <span>{ui("screen.d44e9b3d3b31d3")}</span>
+                    {sortCol === "name" ? (
+                      sortDir === "asc" ? <ArrowUpIcon className="size-3.5" /> : <ArrowDownIcon className="size-3.5" />
+                    ) : (
+                      <ArrowUpDownIcon className="size-3.5 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead className="w-32">
+                  <button
+                    type="button"
+                    onClick={() => handleSortCol("kind")}
+                    className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+                  >
+                    <span>Kind</span>
+                    {sortCol === "kind" ? (
+                      sortDir === "asc" ? <ArrowUpIcon className="size-3.5" /> : <ArrowDownIcon className="size-3.5" />
+                    ) : (
+                      <ArrowUpDownIcon className="size-3.5 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead className="w-28 text-right">
+                  <button
+                    type="button"
+                    onClick={() => handleSortCol("size")}
+                    className="inline-flex items-center justify-end gap-1 font-medium hover:text-foreground"
+                  >
+                    <span>{ui("screen.50db7447b966f5")}</span>
+                    {sortCol === "size" ? (
+                      sortDir === "asc" ? <ArrowUpIcon className="size-3.5" /> : <ArrowDownIcon className="size-3.5" />
+                    ) : (
+                      <ArrowUpDownIcon className="size-3.5 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead className="w-44">
+                  <button
+                    type="button"
+                    onClick={() => handleSortCol("mtime")}
+                    className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+                  >
+                    <span>{ui("screen.257bbcc44c839d")}</span>
+                    {sortCol === "mtime" ? (
+                      sortDir === "asc" ? <ArrowUpIcon className="size-3.5" /> : <ArrowDownIcon className="size-3.5" />
+                    ) : (
+                      <ArrowUpDownIcon className="size-3.5 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead className="w-24 text-right">{ui("screen.ed31fbb483ee1b")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {entries.length === 0 && (
+              {sortedEntries.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground py-10 text-center text-sm">
+                  <TableCell colSpan={5} className="text-muted-foreground py-10 text-center text-sm">
                     {loading ? ui("screen.4927a53bcc886a") : ui("screen.3ea0e6e41518ea")}
                   </TableCell>
                 </TableRow>
               )}
-              {entries.map((e) => (
-                <TableRow key={e.path}>
-                  <TableCell>
-                    <button
-                      type="button"
-                      onClick={() => (e.dir ? load(e.path) : openFile(e))}
-                      className="flex items-center gap-2 text-left hover:underline"
-                    >
-                      {e.dir ? (
-                        <FolderIcon className="size-4 shrink-0 text-blue-500" />
-                      ) : (
-                        <FileIcon className="text-muted-foreground size-4 shrink-0" />
-                      )}
-                      <span className="truncate font-mono text-sm">{e.name}</span>
-                    </button>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-right font-mono text-xs">
-                    {e.dir ? "—" : fmtSize(e.size)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-xs">{fmtTime(e.mtime, ui)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1">
-                      {!e.dir && (
+              {sortedEntries.map((e) => {
+                const isCreds = e.name.toLowerCase().includes("credential");
+                const isPortalHTML = e.name.toLowerCase().endsWith(".html") || e.name.toLowerCase().endsWith(".htm");
+                const isDomainDir = e.dir && (path === "domains" || e.name === "domains");
+                return (
+                  <TableRow key={e.path}>
+                    <TableCell>
+                      <button
+                        type="button"
+                        onClick={() => (e.dir ? load(e.path) : openFile(e))}
+                        className="flex items-center gap-2 text-left hover:underline"
+                      >
+                        {isDomainDir ? (
+                          <GlobeIcon className="size-4 shrink-0 text-emerald-500" />
+                        ) : e.dir ? (
+                          <FolderIcon className="size-4 shrink-0 text-blue-500" />
+                        ) : isCreds ? (
+                          <KeyRoundIcon className="size-4 shrink-0 text-amber-500" />
+                        ) : isPortalHTML ? (
+                          <EyeIcon className="size-4 shrink-0 text-purple-500" />
+                        ) : (
+                          <FileIcon className="text-muted-foreground size-4 shrink-0" />
+                        )}
+                        <span className="truncate font-mono text-sm">
+                          {e.display_name || e.name}
+                        </span>
+                      </button>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="text-[11px] font-normal">
+                        {e.kind || (e.dir ? "Folder" : "File")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-right font-mono text-xs">
+                      {e.dir ? "—" : fmtSize(e.size)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{fmtTime(e.mtime, ui)}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-1">
+                        {!e.dir && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title={ui("screen.4673a230616561")}
+                            onClick={() =>
+                              api
+                                .workspaceDownload(e.path)
+                                .catch((err) => toast.error(ui("screen.0c40112af71437", { v0: (err as Error).message })))
+                            }
+                          >
+                            <DownloadIcon className="size-3.5" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="size-7"
-                          title={ui("screen.4673a230616561")}
-                          onClick={() =>
-                            api
-                              .workspaceDownload(e.path)
-                              .catch((err) => toast.error(ui("screen.0c40112af71437", { v0: (err as Error).message })))
-                          }
+                          className="text-destructive size-7"
+                          title={ui("screen.2f9daa828907b9")}
+                          onClick={() => del(e)}
                         >
-                          <DownloadIcon className="size-3.5" />
+                          <Trash2Icon className="size-3.5" />
                         </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive size-7"
-                        title={ui("screen.2f9daa828907b9")}
-                        onClick={() => del(e)}
-                      >
-                        <Trash2Icon className="size-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
-      {/* 文件查看 / 编辑 */}
+      {/* 文件查看 / 编辑 / 模拟门户 */}
       <Sheet open={edit !== null} onOpenChange={(o) => !o && setEdit(null)}>
-        <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl">
-          {edit && (
-            <>
-              <SheetHeader className="border-b p-4">
-                <SheetTitle className="flex items-center gap-2 truncate font-mono text-sm">
-                  <FileIcon className="size-4 shrink-0" />
-                  <span className="truncate" title={edit.file.path}>
-                    {edit.file.path}
-                  </span>
-                </SheetTitle>
-                <span className="text-muted-foreground text-xs">{fmtSize(edit.file.size)}</span>
-              </SheetHeader>
-
-              {edit.file.binary || edit.file.too_large ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-                  <p className="text-muted-foreground text-sm">
-                    {edit.file.too_large ? ui("screen.15678c48f7988d") : ui("screen.c54a32ff99392f")}
-                  </p>
-                  <Button variant="outline" onClick={() => api.workspaceDownload(edit.file.path)}>
-                    <DownloadIcon /> {ui("screen.3926d1bb98be84")}
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="min-h-0 flex-1 p-3">
-                    <Textarea
-                      value={edit.content}
-                      onChange={(ev) => setEdit({ ...edit, content: ev.target.value, dirty: true })}
-                      spellCheck={false}
-                      className="h-full min-h-[50vh] resize-none font-mono text-xs leading-relaxed"
-                    />
-                  </div>
-                  <SheetFooter className="flex-row items-center justify-between border-t p-3">
-                    <span className="text-muted-foreground text-xs">
-                      {edit.dirty ? ui("screen.5e531ad8243728") : ui("screen.04062edb583b7c")}
-                    </span>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={() => api.workspaceDownload(edit.file.path)}>
-                        <DownloadIcon /> {ui("screen.4673a230616561")}
-                      </Button>
-                      <Button onClick={saveFile} disabled={!edit.dirty || edit.saving}>
-                        <SaveIcon /> {edit.saving ? ui("screen.ff509c9ba052a2") : ui("screen.a3030bf8f16dc6")}
-                      </Button>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl">
+          {edit && (() => {
+            const lowerPath = edit.file.path.toLowerCase();
+            const isHTML = lowerPath.endsWith(".html") || lowerPath.endsWith(".htm");
+            const isMarkdown = lowerPath.endsWith(".md");
+            const hasPreview = isHTML || isMarkdown;
+            return (
+              <>
+                <SheetHeader className="border-b p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+                    <SheetTitle className="flex items-center gap-2 truncate font-mono text-sm">
+                      <FileIcon className="size-4 shrink-0" />
+                      <span className="truncate" title={edit.file.path}>
+                        {edit.file.path}
+                      </span>
+                    </SheetTitle>
+                    <div className="flex items-center gap-2">
+                      {hasPreview && !edit.file.binary && !edit.file.too_large && (
+                        <Tabs value={viewerTab} onValueChange={(v) => setViewerTab(v as "preview" | "source")}>
+                          <TabsList className="h-7">
+                            <TabsTrigger value="preview" className="text-xs px-2.5 gap-1">
+                              <EyeIcon className="size-3" />
+                              <span>{isHTML ? "Simulate Portal" : "Formatted View"}</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="source" className="text-xs px-2.5 gap-1">
+                              <Code2Icon className="size-3" />
+                              <span>Source / Edit</span>
+                            </TabsTrigger>
+                          </TabsList>
+                        </Tabs>
+                      )}
+                      {isHTML && !edit.file.binary && !edit.file.too_large && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setFullscreenSim(true)}>
+                          <Maximize2Icon className="size-3 mr-1" /> Fullscreen
+                        </Button>
+                      )}
                     </div>
-                  </SheetFooter>
-                </>
-              )}
-            </>
-          )}
+                  </div>
+                  <span className="text-muted-foreground text-xs">{fmtSize(edit.file.size)}</span>
+                </SheetHeader>
+
+                {edit.file.binary || edit.file.too_large ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+                    <p className="text-muted-foreground text-sm">
+                      {edit.file.too_large ? ui("screen.15678c48f7988d") : ui("screen.c54a32ff99392f")}
+                    </p>
+                    <Button variant="outline" onClick={() => api.workspaceDownload(edit.file.path)}>
+                      <DownloadIcon /> {ui("screen.3926d1bb98be84")}
+                    </Button>
+                  </div>
+                ) : hasPreview && viewerTab === "preview" ? (
+                  <div className="min-h-0 flex-1 overflow-auto p-3">
+                    {isHTML ? (
+                      <div className="flex h-full min-h-[65vh] flex-col rounded-lg border overflow-hidden bg-white">
+                        <div className="flex items-center justify-between border-b bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300">
+                          <span className="font-mono truncate">Simulated Portal Snapshot — {edit.file.path}</span>
+                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px]">
+                            Sandboxed Preview
+                          </Badge>
+                        </div>
+                        <iframe
+                          title={edit.file.path}
+                          srcDoc={edit.content}
+                          sandbox="allow-forms"
+                          className="w-full flex-1 border-0 bg-white"
+                        />
+                      </div>
+                    ) : (
+                      <div className="prose dark:prose-invert max-w-none rounded-lg border p-4 text-sm">
+                        <Markdown text={edit.content} />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="min-h-0 flex-1 p-3">
+                      <Textarea
+                        value={edit.content}
+                        onChange={(ev) => setEdit({ ...edit, content: ev.target.value, dirty: true })}
+                        spellCheck={false}
+                        className="h-full min-h-[50vh] resize-none font-mono text-xs leading-relaxed"
+                      />
+                    </div>
+                    <SheetFooter className="flex-row items-center justify-between border-t p-3">
+                      <span className="text-muted-foreground text-xs">
+                        {edit.dirty ? ui("screen.5e531ad8243728") : ui("screen.04062edb583b7c")}
+                      </span>
+                      <div className="flex gap-2">
+                        <Button variant="outline" onClick={() => api.workspaceDownload(edit.file.path)}>
+                          <DownloadIcon /> {ui("screen.4673a230616561")}
+                        </Button>
+                        <Button onClick={saveFile} disabled={!edit.dirty || edit.saving}>
+                          <SaveIcon /> {edit.saving ? ui("screen.ff509c9ba052a2") : ui("screen.a3030bf8f16dc6")}
+                        </Button>
+                      </div>
+                    </SheetFooter>
+                  </>
+                )}
+              </>
+            );
+          })()}
         </SheetContent>
       </Sheet>
+
+      {/* Fullscreen Simulated Portal Dialog */}
+      <Dialog open={fullscreenSim && edit !== null} onOpenChange={setFullscreenSim}>
+        <DialogContent className="max-w-[95vw] w-[95vw] h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="border-b px-4 py-2.5 shrink-0">
+            <DialogTitle className="font-mono text-sm truncate">
+              Portal Access Simulation — {edit?.file.path}
+            </DialogTitle>
+          </DialogHeader>
+          {edit && (
+            <iframe
+              title="Fullscreen Portal Simulation"
+              srcDoc={edit.content}
+              sandbox="allow-forms"
+              className="w-full flex-1 border-0 bg-white"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* 新建文件夹 */}
       <Dialog open={mkdirOpen} onOpenChange={setMkdirOpen}>

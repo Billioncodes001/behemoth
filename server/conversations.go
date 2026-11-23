@@ -661,6 +661,15 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		webSearch = a.WebSearch
 	}
 	sessionID := s.convBusyKey(c.ID) // "conv-<id>" transcript session
+	if dom := extractPrimaryTargetDomain(c.Title + " " + msg); dom != "" {
+		s.ensureDomainWorkspaceStructure(dom, sessionID)
+		// If the conversation still has a generic default title, promote it to the target domain!
+		trimmedTitle := strings.TrimSpace(c.Title)
+		if trimmedTitle == "" || strings.EqualFold(trimmedTitle, "New Chat") || strings.EqualFold(trimmedTitle, "New conversation") || strings.HasPrefix(strings.ToLower(trimmedTitle), "conv-") {
+			_ = pg.RenameConversation(c.ID, dom)
+			c.Title = dom
+		}
+	}
 	log.Printf("[chat] Conversation #%d (%s) started turn: %s", c.ID, c.AgentKey, firstLine(msg, 120))
 	emittedErrorResult := false
 	emit := func(rec db.Activity) {

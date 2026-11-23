@@ -2219,18 +2219,24 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	switch provider {
 	case "openai", "openai-responses":
 		// Responses API shares the OpenAI model list at /v1/models; tolerate a full
-		// endpoint URL of either format.
+		// endpoint URL of either format as well as bare roots without /v1.
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
 		b := strings.TrimRight(strings.TrimSuffix(strings.TrimSuffix(baseURL, "/chat/completions"), "/responses"), "/")
 		candidates = append(candidates, candidate{b + "/models", bearerHdr()})
+		if !strings.HasSuffix(b, "/v1") && !strings.Contains(b, "/openai") {
+			candidates = append(candidates, candidate{b + "/v1/models", bearerHdr()})
+		}
 	default: // anthropic
 		if baseURL == "" {
 			baseURL = "https://api.anthropic.com"
 		}
 		b := strings.TrimRight(strings.TrimSuffix(baseURL, "/v1/messages"), "/")
 		candidates = append(candidates, candidate{b + "/v1/models", anthropicHdr()})
+		if strings.HasSuffix(b, "/v1") {
+			candidates = append(candidates, candidate{b + "/models", anthropicHdr()})
+		}
 		// Fallback for Anthropic-compatible third parties whose model list lives on
 		// the OpenAI path: strip a trailing /anthropic and try the OpenAI endpoint.
 		if root := strings.TrimRight(strings.TrimSuffix(b, "/anthropic"), "/"); root != b {
@@ -2255,37 +2261,22 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 	for _, c := range candidates {
 		httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, c.url, nil)
 		if err != nil {
-			lastErr = "构建请求失败: " + err.Error()
+			lastErr = "Failed to build request: " + err.Error()
 			continue
 		}
 		httpReq.Header = c.hdr
 		resp, err := client.Do(httpReq)
 		if err != nil {
-			lastErr = "请求失败: " + err.Error()
+			lastErr = "Request failed: " + err.Error()
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Sprintf("API 返回 %d: %s", resp.StatusCode, string(body[:min(len(body), 512)]))
+			lastErr = fmt.Sprintf("Provider returned HTTP %d: %s", resp.StatusCode, string(body[:min(len(body), 512)]))
 			continue
 		}
-		// Both OpenAI and Anthropic return {"data": [{"id": "..."},...]}.
-		var parsed struct {
-			Data []struct {
-				ID string `json:"id"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(body, &parsed); err != nil {
-			lastErr = "解析响应失败: " + err.Error()
-			continue
-		}
-		models := make([]string, 0, len(parsed.Data))
-		for _, m := range parsed.Data {
-			if m.ID != "" {
-				models = append(models, m.ID)
-			}
-		}
+		models := parseProviderModelListJSON(body)
 		if len(models) > 0 {
 			writeJSON(w, 200, map[string]any{"ok": true, "models": models})
 			return
@@ -2297,9 +2288,63 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if lastErr == "" {
-		lastErr = "未获取到模型列表"
+		lastErr = "No models returned by provider endpoint"
 	}
 	writeJSON(w, 200, map[string]any{"ok": false, "error": lastErr})
+}
+
+func parseProviderModelListJSON(body []byte) []string {
+	var flex struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		id = strings.TrimSpace(strings.TrimPrefix(id, "models/"))
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if json.Unmarshal(body, &flex) == nil {
+		for _, m := range flex.Data {
+			if m.ID != "" {
+				add(m.ID)
+			} else {
+				add(m.Name)
+			}
+		}
+		for _, m := range flex.Models {
+			if m.ID != "" {
+				add(m.ID)
+			} else {
+				add(m.Name)
+			}
+		}
+	}
+	if len(out) == 0 {
+		var arr []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(body, &arr) == nil {
+			for _, m := range arr {
+				if m.ID != "" {
+					add(m.ID)
+				} else {
+					add(m.Name)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // --- prompt template helpers (Go text/template + catalog 白名单) ---

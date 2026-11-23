@@ -252,6 +252,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"timeout_seconds":        map[string]any{"type": "integer", "description": "Optional: task-level timeout in seconds. Triggers graceful wrap-up and enters timeout terminal state when reached; leave empty or 0 = unlimited"},
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "Optional: planner heartbeat interval in seconds. Triggers a planning round when this time elapses without other triggers since task start or last round end; leave empty or 0 = default 600 (10min)"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "Optional: for simple tasks, dispatch an initial seed intent (description + goal) immediately on creation so a worker starts testing without waiting for round-0 planner; default false (plan first, then execute)"},
+			"force_new":              map[string]any{"type": "boolean", "description": "Optional: set true only when explicitly asked by the operator to create a brand-new separate task even if an active task already exists for the same target domain"},
 		}, "description", "goal"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
@@ -266,6 +267,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 				TimeoutSeconds       int             `json:"timeout_seconds"`
 				PlanHeartbeatSeconds int             `json:"plan_heartbeat_seconds"`
 				SeedFirstIntent      bool            `json:"seed_first_intent"`
+				ForceNew             bool            `json:"force_new"`
 			}
 			_ = json.Unmarshal(in, &a)
 			if strings.TrimSpace(a.Description) == "" {
@@ -273,6 +275,27 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			}
 			if strings.TrimSpace(a.Goal) == "" {
 				return actool.Errorf("goal is required"), nil
+			}
+			// Prevent duplicate top-level tasks for the same target domain/host when an
+			// active (non-terminal) task already exists for that target.
+			if strings.TrimSpace(a.ParentRef) == "" && !a.ForceNew && s.m != nil {
+				if targetDom := extractPrimaryTargetDomain(a.Description + " " + a.Goal); targetDom != "" {
+					for _, existing := range s.m.List() {
+						st := existing.lifecycleSnapshot()
+						if isTerminalStatus(st.Status) {
+							continue
+						}
+						hay := strings.ToLower(existing.Name + " " + existing.Description + " " + existing.Goal)
+						if strings.Contains(hay, targetDom) {
+							hintJSON, _ := json.Marshal(map[string]any{
+								"task_id": existing.ID,
+								"text":    "Additional objective from Chat: " + strings.TrimSpace(a.Goal),
+							})
+							_, _ = s.delegateToTask(ctx, hintJSON, (*agent.ToolSet).AddHintTool)
+							return actool.Text(fmt.Sprintf("reused existing active task: %s (target %s already has an active task; objective appended as hint instead of creating a duplicate task)", existing.ID, targetDom)), nil
+						}
+					}
+				}
 			}
 			if a.TimeoutSeconds < 0 {
 				a.TimeoutSeconds = 0

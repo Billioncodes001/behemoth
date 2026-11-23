@@ -410,6 +410,8 @@ export interface CoverageAssetRefs {
 // ---- Workspace file manager (workDir) ----
 export interface WorkspaceEntry {
   name: string;
+  display_name?: string;
+  kind?: string;
   path: string; // workspace-relative, forward slashes
   dir: boolean;
   size: number;

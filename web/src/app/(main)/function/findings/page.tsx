@@ -2,6 +2,7 @@
 import * as React from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import {
   ArrowUpRightIcon,
@@ -9,7 +10,10 @@ import {
   ChevronRightIcon,
   ClockIcon,
   DownloadIcon,
+  FolderOpenIcon,
+  GlobeIcon,
   InfoIcon,
+  PlayIcon,
   SearchIcon,
   ShieldAlertIcon,
   TriangleAlertIcon,
@@ -59,6 +63,7 @@ import { cn } from "@/lib/utils";
 
 import { AssetTree, assetPathOf } from "./_components/asset-tree";
 import {
+  extractFindingWebsite,
   FINDING_STATUSES,
   type FindingEdit,
   type FindingReport,
@@ -70,13 +75,13 @@ import {
   UNASSIGNED_TASK,
 } from "./_components/findings-table";
 
-const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences";
+const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences_v2";
 
-// 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
-// asset = 左侧资产树 + 右侧该子树下的发现。
-type FindingView = "cases" | "flat" | "grouped" | "asset";
+// Views: website = grouped by target website/domain dropdowns (default, latest first);
+// cases = consolidated cases; flat = flat sortable table; grouped = by task; asset = asset tree.
+type FindingView = "website" | "cases" | "flat" | "grouped" | "asset";
 
-const FINDING_VIEWS: FindingView[] = ["cases", "flat", "grouped", "asset"];
+const FINDING_VIEWS: FindingView[] = ["website", "cases", "flat", "grouped", "asset"];
 
 // 资产树的一次性快照。与另外两个视图不同,资产视图不轮询:进入视图、改筛选、
 // 或本页改动了发现之后才重新查询。
@@ -136,15 +141,19 @@ const EMPTY_STATS: FindingStats = {
 };
 
 export default function FindingsPage() {
+  const router = useRouter();
   const { ui, liveUI } = useUITranslation();
 
   const { t } = useTranslation();
-  const [view, setView] = React.useState<FindingView>("cases");
+  const [view, setView] = React.useState<FindingView>("website");
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
   const [status, setStatus] = React.useState<"all" | FindingStatus>("all");
   const [vulnclass, setVulnclass] = React.useState<string>("all");
   const [task, setTask] = React.useState<string>("all");
-  const [sort, setSort] = React.useState<"severity" | "time">("severity");
+  const [sort, setSort] = React.useState<"severity" | "time">("time");
+  const [expandedWebsites, setExpandedWebsites] = React.useState<Set<string>>(() => new Set());
+  const [launchingChat, setLaunchingChat] = React.useState<string | null>(null);
+  const autoExpandedInitialRef = React.useRef(false);
   const [search, setSearch] = React.useState("");
   const [query, setQuery] = React.useState("");
   const [dateRange, setDateRange] = React.useState<FindingDateRange>({});
@@ -373,10 +382,11 @@ export default function FindingsPage() {
     const request = ++flatRequest.current;
     setFlat((current) => ({ ...current, loading: true }));
     try {
+      const effectivePageSize = view === "website" ? Math.max(flatPageSize, 100) : flatPageSize;
       const result = await api.findingCases(
         {
           page: flatPage,
-          pageSize: flatPageSize,
+          pageSize: effectivePageSize,
           severity,
           status,
           vulnclass,
@@ -413,6 +423,7 @@ export default function FindingsPage() {
     task,
     query,
     sort,
+    view,
   ]);
 
   // loadAssetTree 取整棵资产树。树不随选中节点变化(否则选一下就塌成一条链),
@@ -564,7 +575,7 @@ export default function FindingsPage() {
         void loadAssetTree();
         return;
       }
-      if (view === "flat") {
+      if (view === "flat" || view === "website") {
         // 删空最后一页时,页码由越界修正 effect 回退并连带重新加载。
         void loadFlat();
         return;
@@ -616,7 +627,7 @@ export default function FindingsPage() {
     if (!preferencesHydrated) return;
     void activeRetestFingerprint; // 包括不定时轮询的资产视图，也在复测结束后刷新处置状态。
     const refresh = () => {
-      if (view === "flat" || view === "asset") {
+      if (view === "flat" || view === "asset" || view === "website") {
         if (!flatStateRef.current.loading) void loadFlat();
         return;
       }
@@ -806,6 +817,133 @@ export default function FindingsPage() {
     setDeepenDescription("");
   }, []);
 
+  const continueExploitingFinding = React.useCallback(
+    async (f: Finding) => {
+      if (!f.finding_id || launchingChat) return;
+      const site = extractFindingWebsite(f);
+      const lockKey = `finding-${f.finding_id}`;
+      setLaunchingChat(lockKey);
+      try {
+        const title =
+          site !== "Unassigned / General"
+            ? `${site} — Exploit #${f.finding_id}`
+            : `Exploit Finding #${f.finding_id}`;
+        const conv = await api.createConversation("auto", title);
+        const prompt =
+          `Continue penetration testing and active exploitation on @[finding#${f.finding_id}:${f.name || f.vulnclass || "Finding"}]` +
+          (site !== "Unassigned / General" ? ` (Target website: https://${site})` : "") +
+          (f.task_id ? ` (Existing Task #${f.task_id} — reuse this task, do NOT create a duplicate task)` : "") +
+          `.\n\n1. Check \`check_proxy_status\` and \`search_patch_arsenal\` first.\n` +
+          `2. Actively attempt to exploit, chain, and prove maximum impact for this finding.\n` +
+          `3. Call \`update_finding\` and \`update_finding_report\` if higher severity/impact is verified, save any working PoC via \`save_verified_exploit_to_patch_monitor\`, and document any credentials or accessed portal HTML snapshots under \`domains/${site !== "Unassigned / General" ? site : "target"}/\`.`;
+        await api.sendConversationMessage(Number(conv.id), prompt);
+        router.push(`/chat?c=${conv.id}`);
+      } catch (err) {
+        toast.error((err as Error).message);
+      } finally {
+        setLaunchingChat(null);
+      }
+    },
+    [launchingChat, router],
+  );
+
+  const continueWebsitePentest = React.useCallback(
+    async (website: string, siteFindings: Finding[]) => {
+      if (launchingChat) return;
+      setLaunchingChat(`site-${website}`);
+      try {
+        const taskId = siteFindings.find((x) => x.task_id)?.task_id;
+        const topRefs = siteFindings
+          .filter((x) => x.finding_id)
+          .slice(0, 8)
+          .map((x) => `- @[finding#${x.finding_id}:${x.name || x.vulnclass || "Finding"}] (${x.severity}, ${x.status})`)
+          .join("\n");
+        const conv = await api.createConversation("auto", website);
+        const prompt =
+          `Continue comprehensive penetration testing and post-discovery exploitation on target website **https://${website}**` +
+          (taskId ? ` (attached to existing Task #${taskId} — reuse Task #${taskId} via \`add_task_hint\`, do NOT spawn a duplicate task)` : "") +
+          `.\n\nDiscovered findings so far on ${website}:\n${topRefs || "- None yet"}\n\n` +
+          `Systematically test and exploit every finding above, hunt for deeper attack chains (auth bypass, SQLi, XSS, SSRF, BOLA/IDOR, exposed portals), update confirmed severities via \`update_finding\`, tabularize all created/found portal credentials in \`domains/${website}/CREDENTIALS.md\`, and save offline HTML snapshots of any accessed portals in \`domains/${website}/portal-simulation/\`.`;
+        await api.sendConversationMessage(Number(conv.id), prompt);
+        router.push(`/chat?c=${conv.id}`);
+      } catch (err) {
+        toast.error((err as Error).message);
+      } finally {
+        setLaunchingChat(null);
+      }
+    },
+    [launchingChat, router],
+  );
+
+  const websiteGroups = React.useMemo(() => {
+    const bySite = new Map<
+      string,
+      {
+        website: string;
+        items: Finding[];
+        latestTs: number;
+        latestIso: string;
+        critical: number;
+        high: number;
+        medium: number;
+        low: number;
+        taskId?: string;
+      }
+    >();
+    for (const f of flat.items) {
+      const website = extractFindingWebsite(f);
+      let g = bySite.get(website);
+      const tms = new Date(f.ts || 0).getTime() || 0;
+      if (!g) {
+        g = {
+          website,
+          items: [],
+          latestTs: tms,
+          latestIso: f.ts,
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+          taskId: f.task_id ? String(f.task_id) : undefined,
+        };
+        bySite.set(website, g);
+      }
+      g.items.push(f);
+      if (tms > g.latestTs) {
+        g.latestTs = tms;
+        g.latestIso = f.ts;
+      }
+      if (!g.taskId && f.task_id) g.taskId = String(f.task_id);
+      if (f.severity === "critical") g.critical++;
+      else if (f.severity === "high") g.high++;
+      else if (f.severity === "medium") g.medium++;
+      else if (f.severity === "low") g.low++;
+    }
+    const list = Array.from(bySite.values());
+    // Order websites with the latest finding at the very top!
+    list.sort((a, b) => b.latestTs - a.latestTs);
+    for (const g of list) {
+      g.items.sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime());
+    }
+    return list;
+  }, [flat.items]);
+
+  React.useEffect(() => {
+    if (!autoExpandedInitialRef.current && websiteGroups.length > 0) {
+      autoExpandedInitialRef.current = true;
+      setExpandedWebsites(new Set(websiteGroups.slice(0, 3).map((g) => g.website)));
+    }
+  }, [websiteGroups]);
+
+  const toggleWebsiteGroup = (website: string) => {
+    setExpandedWebsites((prev) => {
+      const next = new Set(prev);
+      if (next.has(website)) next.delete(website);
+      else next.add(website);
+      return next;
+    });
+  };
+
   async function submitDeepen() {
     if (!deepenFinding?.finding_id || !deepenDescription.trim() || deepening) return;
     setDeepening(true);
@@ -859,6 +997,7 @@ export default function FindingsPage() {
     onRetest: setRetestFinding,
     activeRetests,
     onDeepen: openDeepen,
+    onContinueChat: (f: Finding) => void continueExploitingFinding(f),
     onDelete: deleteFinding,
   };
 
@@ -905,6 +1044,7 @@ export default function FindingsPage() {
         </div>
         <Tabs value={view} onValueChange={(v) => setView(v as FindingView)}>
           <TabsList>
+            <TabsTrigger value="website">By Website</TabsTrigger>
             <TabsTrigger value="cases">{ui("screen.f8524eae6e2203")}</TabsTrigger>
             <TabsTrigger value="flat">{ui("screen.69c04c96fe6017")}</TabsTrigger>
             <TabsTrigger value="grouped">{ui("screen.db5e08278bfd13")}</TabsTrigger>
@@ -1065,6 +1205,144 @@ export default function FindingsPage() {
             </Button>
           </div>
         </div>
+
+        {view === "website" && (
+          <div className="flex flex-col gap-3">
+            {websiteGroups.length > 1 && (
+              <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+                <span>
+                  Grouped across <strong className="text-foreground">{websiteGroups.length}</strong> target websites (latest findings at top)
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="hover:text-foreground underline underline-offset-4"
+                    onClick={() => setExpandedWebsites(new Set(websiteGroups.map((g) => g.website)))}
+                  >
+                    Expand all
+                  </button>
+                  <span>·</span>
+                  <button
+                    type="button"
+                    className="hover:text-foreground underline underline-offset-4"
+                    onClick={() => setExpandedWebsites(new Set())}
+                  >
+                    Collapse all
+                  </button>
+                </div>
+              </div>
+            )}
+            {flat.loading && !flat.loaded ? (
+              <Card className="py-12">
+                <CardContent className="flex items-center justify-center">
+                  <Spinner />
+                </CardContent>
+              </Card>
+            ) : websiteGroups.length === 0 ? (
+              <Card className="py-12">
+                <CardContent className="text-center text-sm text-muted-foreground">
+                  {ui("screen.839ae9d1758f4a")}
+                </CardContent>
+              </Card>
+            ) : (
+              websiteGroups.map((wg) => {
+                const isOpen = expandedWebsites.has(wg.website);
+                const isRealDomain = wg.website !== "Unassigned / General";
+                const busySite = launchingChat === `site-${wg.website}`;
+                return (
+                  <Card key={wg.website} className="gap-0 py-0 overflow-hidden">
+                    <CardHeader className="px-4 py-3 bg-muted/15">
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleWebsiteGroup(wg.website)}
+                          aria-expanded={isOpen}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                        >
+                          <ChevronRightIcon
+                            className={cn(
+                              "size-4 shrink-0 text-muted-foreground transition-transform",
+                              isOpen && "rotate-90",
+                            )}
+                          />
+                          <GlobeIcon className="size-4 shrink-0 text-emerald-500" />
+                          <div className="flex min-w-0 flex-col">
+                            <div className="flex items-center gap-2">
+                              <CardTitle className="truncate font-mono text-sm">
+                                {wg.website}
+                              </CardTitle>
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
+                                {wg.items.length} {wg.items.length === 1 ? "finding" : "findings"}
+                              </span>
+                            </div>
+                            <CardDescription className="text-xs">
+                              Latest activity: {wg.latestIso ? fmtTime(wg.latestIso, ui) : "—"}
+                              {wg.taskId ? ` · Task #${wg.taskId}` : ""}
+                            </CardDescription>
+                          </div>
+                        </button>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {SEVERITIES.map((level) => {
+                            const count = wg[level];
+                            if (!count) return null;
+                            return (
+                              <span key={level} className="inline-flex items-center gap-1">
+                                <StatusBadge domain="severity" value={level} dot />
+                                <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+                              </span>
+                            );
+                          })}
+                          {isRealDomain && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={Boolean(launchingChat)}
+                                onClick={() => void continueWebsitePentest(wg.website, wg.items)}
+                                title="Continue scanning and exploiting this website in Chat"
+                              >
+                                {busySite ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" className="text-emerald-500" />}
+                                Continue Pentest
+                              </Button>
+                              <Button size="sm" variant="outline" asChild title="Open domain credentials & portal simulations">
+                                <Link href={`/function/workspace?path=${encodeURIComponent(`domains/${wg.website}`)}`}>
+                                  <FolderOpenIcon data-icon="inline-start" />
+                                  Workspace
+                                </Link>
+                              </Button>
+                            </>
+                          )}
+                          {wg.taskId && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => api.openDeliverableReport({ taskId: wg.taskId })}
+                              title="Open executive HTML/PDF report for this target"
+                            >
+                              <DownloadIcon data-icon="inline-start" />
+                              Report
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </CardHeader>
+                    {isOpen && (
+                      <CardContent className="px-0 border-t">
+                        <FindingsTable
+                          items={wg.items}
+                          presentation="records"
+                          selectAllLabel={ui("screen.bc039dd5faffdd")}
+                          {...rowProps}
+                        />
+                      </CardContent>
+                    )}
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        )}
 
         {view === "flat" && flatListCard}
 

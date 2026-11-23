@@ -215,3 +215,46 @@ func TestProxiedTCPRelayAndPostureVerifiers(t *testing.T) {
 		t.Fatalf("unexpected audit_source_routes output: err=%v out=%s", err, srcRes.Flatten())
 	}
 }
+
+func TestTaskDeduplicationDomainWorkspaceAndModelParser(t *testing.T) {
+	s, _, _ := trafficEvidenceServer(t)
+	ctx := context.Background()
+
+	// 1. Verify spawn_task deduplicates active tasks targeting the same domain
+	spawn := s.toolSpawnTask()
+	firstRes, err := spawn.Call(ctx, json.RawMessage(`{"description":"Pentest portal.acme-corp.example","goal":"Scan https://portal.acme-corp.example for vulnerabilities"}`), nil)
+	if err != nil || firstRes.IsError || !strings.Contains(firstRes.Flatten(), "task created:") {
+		t.Fatalf("first spawn_task failed: err=%v out=%s", err, firstRes.Flatten())
+	}
+	secondRes, err := spawn.Call(ctx, json.RawMessage(`{"description":"Follow-up on portal.acme-corp.example","goal":"Exploit XSS on portal.acme-corp.example"}`), nil)
+	if err != nil || secondRes.IsError || !strings.Contains(secondRes.Flatten(), "reused existing active task:") {
+		t.Fatalf("expected second spawn_task on same domain to reuse existing active task, got err=%v out=%s", err, secondRes.Flatten())
+	}
+
+	// 2. Verify domain workspace structure + session display_name enrichment
+	conv, err := s.m.pg.CreateConversation("auto", "portal.acme-corp.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessID := s.convBusyKey(conv.ID)
+	s.ensureDomainWorkspaceStructure("portal.acme-corp.example", sessID)
+
+	w := httptest.NewRecorder()
+	s.wsList(w, httptest.NewRequest(http.MethodGet, "/api/workspace/list?path=sessions", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "portal.acme-corp.example ("+sessID+")") {
+		t.Fatalf("expected domain-named session display_name, got status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	w2 := httptest.NewRecorder()
+	s.wsList(w2, httptest.NewRequest(http.MethodGet, "/api/workspace/list?path=domains/portal.acme-corp.example", nil))
+	if w2.Code != http.StatusOK || !strings.Contains(w2.Body.String(), "CREDENTIALS.md") || !strings.Contains(w2.Body.String(), "portal-simulation") {
+		t.Fatalf("expected CREDENTIALS.md and portal-simulation in domain workspace, got status=%d body=%s", w2.Code, w2.Body.String())
+	}
+
+	// 3. Verify multi-provider model catalog parser (OpenAI, Gemini models/ prefix, Ollama)
+	models := parseProviderModelListJSON([]byte(`{"models":[{"name":"models/gemini-2.5-pro"},{"id":"deepseek-r1"}],"data":[{"id":"gpt-4o"}]}`))
+	if len(models) != 3 || models[0] != "gpt-4o" || models[1] != "gemini-2.5-pro" || models[2] != "deepseek-r1" {
+		t.Fatalf("unexpected parsed model list: %+v", models)
+	}
+}
+

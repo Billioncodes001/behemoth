@@ -5,9 +5,12 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,12 +49,126 @@ func (s *Server) wsRel(abs string) string {
 	return filepath.ToSlash(rel)
 }
 
+var (
+	reURLDomainExtract  = regexp.MustCompile(`(?i)https?://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+|\d{1,3}(?:\.\d{1,3}){3})`)
+	reBareDomainExtract = regexp.MustCompile(`(?i)\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)\b`)
+	nonDomainExts       = map[string]bool{
+		"html": true, "htm": true, "json": true, "txt": true, "md": true, "py": true,
+		"js": true, "ts": true, "tsx": true, "css": true, "php": true, "sql": true,
+		"sh": true, "yaml": true, "yml": true, "xml": true, "csv": true, "zip": true,
+		"png": true, "jpg": true, "jpeg": true, "svg": true, "pdf": true, "log": true,
+	}
+)
+
+// extractPrimaryTargetDomain pulls a clean target domain/host (e.g. "tax-database.oirs.ng")
+// out of a prompt, task description, or conversation title.
+func extractPrimaryTargetDomain(text string) string {
+	if m := reURLDomainExtract.FindStringSubmatch(text); len(m) >= 2 {
+		h := strings.ToLower(strings.TrimSpace(m[1]))
+		if u, err := url.Parse("http://" + h); err == nil && u.Hostname() != "" {
+			h = u.Hostname()
+		}
+		if h != "localhost" && h != "127.0.0.1" && h != "github.com" {
+			return h
+		}
+	}
+	for _, m := range reBareDomainExtract.FindAllStringSubmatch(text, 10) {
+		cand := strings.ToLower(strings.TrimSpace(m[1]))
+		parts := strings.Split(cand, ".")
+		tld := parts[len(parts)-1]
+		if len(tld) < 2 || nonDomainExts[tld] {
+			continue
+		}
+		if cand == "localhost" || strings.HasSuffix(cand, ".internal") || cand == "github.com" {
+			continue
+		}
+		return cand
+	}
+	return ""
+}
+
+// ensureDomainWorkspaceStructure creates `<workDir>/domains/<domain>/` with standard
+// subfolders (`portal-simulation`, `evidence`) and optionally links it inside sessionDir
+// so target artifacts, CREDENTIALS.md, and simulated HTML portals are organized by domain!
+func (s *Server) ensureDomainWorkspaceStructure(domain, sessionID string) {
+	if s == nil || s.m == nil || strings.TrimSpace(s.m.dir) == "" || domain == "" {
+		return
+	}
+	safeDom := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			return r
+		}
+		return -1
+	}, strings.ToLower(strings.TrimSpace(domain)))
+	if safeDom == "" || strings.HasPrefix(safeDom, ".") {
+		return
+	}
+	domDir := filepath.Join(s.m.dir, "domains", safeDom)
+	_ = os.MkdirAll(filepath.Join(domDir, "portal-simulation"), 0o755)
+	_ = os.MkdirAll(filepath.Join(domDir, "evidence"), 0o755)
+	credPath := filepath.Join(domDir, "CREDENTIALS.md")
+	if _, err := os.Stat(credPath); os.IsNotExist(err) {
+		header := fmt.Sprintf("# Portal & Account Credentials — `%s`\n\n| Portal Login URL | Username / Email | Password / Token | Role / Access Level | Source (Created / Found) | Login Steps & Verification |\n|---|---|---|---|---|---|\n", safeDom)
+		_ = os.WriteFile(credPath, []byte(header), 0o644)
+	}
+	if sessionID != "" {
+		sessDir := filepath.Join(s.m.dir, "sessions", sessionID)
+		_ = os.MkdirAll(sessDir, 0o755)
+		linkPath := filepath.Join(sessDir, safeDom)
+		if _, err := os.Lstat(linkPath); os.IsNotExist(err) {
+			_ = os.Symlink(domDir, linkPath)
+		}
+	}
+}
+
+func classifyWorkspaceKind(name string, isDir bool) string {
+	if isDir {
+		return "Folder"
+	}
+	lower := strings.ToLower(name)
+	if strings.Contains(lower, "credential") {
+		return "Credentials"
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	switch ext {
+	case "html", "htm":
+		return "Portal HTML"
+	case "md":
+		return "Markdown"
+	case "json":
+		return "JSON"
+	case "py":
+		return "Python"
+	case "js", "mjs", "ts":
+		return "Script"
+	case "sql":
+		return "SQL"
+	case "txt", "log":
+		return "Text"
+	case "csv":
+		return "CSV"
+	case "png", "jpg", "jpeg", "webp", "svg":
+		return "Image"
+	case "pdf":
+		return "PDF"
+	case "yaml", "yml":
+		return "YAML"
+	default:
+		if ext != "" {
+			return strings.ToUpper(ext)
+		}
+		return "File"
+	}
+}
+
 type wsEntry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	Dir   bool   `json:"dir"`
-	Size  int64  `json:"size"`
-	MTime int64  `json:"mtime"` // unix millis
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Kind        string `json:"kind"`
+	Path        string `json:"path"`
+	Dir         bool   `json:"dir"`
+	Size        int64  `json:"size"`
+	MTime       int64  `json:"mtime"` // unix millis
 }
 
 // GET /api/workspace/list?path=<rel>
@@ -63,6 +180,7 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 	}
 	if abs == filepath.Clean(s.m.dir) {
 		_ = os.MkdirAll(abs, 0o755)
+		_ = os.MkdirAll(filepath.Join(abs, "domains"), 0o755)
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
@@ -78,28 +196,60 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	relDir := s.wsRel(abs)
 	out := make([]wsEntry, 0, len(ents))
 	for _, e := range ents {
-		info, err := e.Info()
+		fullEntryPath := filepath.Join(abs, e.Name())
+		info, err := os.Stat(fullEntryPath) // follow symlinks (e.g. session -> domains/<domain>)
 		if err != nil {
-			continue
+			info, err = e.Info()
+			if err != nil {
+				continue
+			}
 		}
+		isDir := info.IsDir()
+		displayName := ""
+		if isDir && relDir == "sessions" && strings.HasPrefix(e.Name(), "conv-") && s.m != nil && s.m.pg != nil {
+			if cid, perr := strconv.ParseInt(strings.TrimPrefix(e.Name(), "conv-"), 10, 64); perr == nil {
+				if conv, cerr := s.m.pg.GetConversation(cid); cerr == nil && conv != nil {
+					dom := extractPrimaryTargetDomain(conv.Title)
+					if dom != "" {
+						displayName = fmt.Sprintf("%s (%s)", dom, e.Name())
+					} else if strings.TrimSpace(conv.Title) != "" {
+						displayName = fmt.Sprintf("%s (%s)", strings.TrimSpace(conv.Title), e.Name())
+					}
+				}
+			}
+		} else if isDir && relDir == "tasks" && s.m != nil {
+			if t, ok := s.m.Task(e.Name()); ok && t != nil {
+				dom := extractPrimaryTargetDomain(t.Name + " " + t.Description + " " + t.Goal)
+				label := strings.TrimSpace(t.Name)
+				if dom != "" {
+					displayName = fmt.Sprintf("%s (Task #%s)", dom, e.Name())
+				} else if label != "" {
+					displayName = fmt.Sprintf("%s (Task #%s)", label, e.Name())
+				}
+			}
+		}
+
 		out = append(out, wsEntry{
-			Name:  e.Name(),
-			Path:  s.wsRel(filepath.Join(abs, e.Name())),
-			Dir:   e.IsDir(),
-			Size:  info.Size(),
-			MTime: info.ModTime().UnixMilli(),
+			Name:        e.Name(),
+			DisplayName: displayName,
+			Kind:        classifyWorkspaceKind(e.Name(), isDir),
+			Path:        s.wsRel(fullEntryPath),
+			Dir:         isDir,
+			Size:        info.Size(),
+			MTime:       info.ModTime().UnixMilli(),
 		})
 	}
-	// Directories first, then sorted alphabetically.
+	// Default server order: directories first, then newest modified first!
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Dir != out[j].Dir {
 			return out[i].Dir
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return out[i].MTime > out[j].MTime
 	})
-	writeJSON(w, 200, map[string]any{"path": s.wsRel(abs), "entries": out})
+	writeJSON(w, 200, map[string]any{"path": relDir, "entries": out})
 }
 
 // GET /api/workspace/read?path=<rel> — inline text for view/edit. Binary or oversize
