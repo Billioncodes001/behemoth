@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -76,29 +78,56 @@ func (s *Server) ensureDefaultWordlists() {
 			_ = os.MkdirAll("/usr/share/wordlists/dirb", 0o755)
 			_ = os.Symlink("/usr/share/wordlists/artex/common.txt", "/usr/share/wordlists/dirb/common.txt")
 		}
-		if runtime.GOOS == "linux" {
-			go s.autoProvisionLinuxArsenal()
-		}
+	}
+	if runtime.GOOS == "linux" {
+		go s.autoProvisionLinuxArsenal()
 	}
 }
 
 func (s *Server) autoProvisionLinuxArsenal() {
-	marker := "/usr/share/wordlists/artex/.arsenal_v2"
-	if _, err := os.Stat(marker); err == nil {
+	setupBytes, err := os.ReadFile("./setup.sh")
+	if err != nil {
 		return
 	}
-	if _, err := os.Stat("./setup.sh"); err != nil {
+	isRoot := os.Geteuid() == 0
+	canSudo := !isRoot && exec.Command("sudo", "-n", "true").Run() == nil
+	if !isRoot && !canSudo {
 		return
 	}
-	log.Printf("[arsenal] Auto-provisioning missing Linux security CLI binaries in background...")
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Minute)
+
+	sum := sha256.Sum256(setupBytes)
+	wantHash := hex.EncodeToString(sum[:])
+	stateFile := filepath.Join(s.dataDir, "wordlists", ".arsenal_setup_sha256")
+	prevHashBytes, _ := os.ReadFile(stateFile)
+	prevHash := strings.TrimSpace(string(prevHashBytes))
+
+	coreExpected := []string{"tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql"}
+	missingCore := false
+	for _, bin := range coreExpected {
+		if _, lookErr := exec.LookPath(bin); lookErr != nil {
+			missingCore = true
+			break
+		}
+	}
+	if prevHash == wantHash && !missingCore {
+		return
+	}
+
+	log.Printf("[arsenal] Auto-provisioning Linux security CLI, OCR & client dependencies in background...")
+	ctx, cancel := context.WithTimeout(s.ctx, 20*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "./setup.sh", "arsenal")
+
+	var cmd *exec.Cmd
+	if isRoot {
+		cmd = exec.CommandContext(ctx, "bash", "./setup.sh", "arsenal")
+	} else {
+		cmd = exec.CommandContext(ctx, "sudo", "-n", "bash", "./setup.sh", "arsenal")
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[arsenal] Background provisioning finished with warning: %v (%s)", err, firstLine(string(out), 200))
 	} else {
-		_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
-		log.Printf("[arsenal] Linux security CLI arsenal provisioned successfully")
+		_ = os.WriteFile(stateFile, []byte(wantHash+"\n"), 0o644)
+		log.Printf("[arsenal] Linux security CLI & OCR dependencies provisioned successfully")
 	}
 }
 
@@ -163,7 +192,7 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				"nmap", "nuclei", "subfinder", "httpx-pd", "httpx", "dnsx",
 				"ffuf", "gobuster", "dirb", "sqlmap", "nikto", "whatweb",
 				"wafw00f", "hydra", "sslscan", "dig", "whois", "nc",
-				"socat", "openssl", "curl", "python3", "rg", "jq",
+				"socat", "openssl", "curl", "python3", "rg", "jq", "tesseract", "mysql", "psql",
 				"rustscan", "masscan", "smtp-user-enum", "onesixtyone", "snmpwalk",
 				"impacket-secretsdump", "impacket-GetNPUsers", "bloodhound-python",
 				"msfvenom", "trivy", "grype", "semgrep",

@@ -98,13 +98,13 @@ install_gh_release_tool() {
 import json, sys, urllib.request
 repo, os_tag, arch_tag = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
 os_aliases = ["macos", "darwin"] if os_tag == "macos" else ["linux"]
-arch_aliases = ["arm64", "aarch64"] if arch_tag == "arm64" else ["amd64", "x86_64", "64-bit"]
+arch_aliases = ["arm64", "aarch64"] if arch_tag == "arm64" else ["amd64", "x86_64", "64-bit", "64bit"]
 req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers={"User-Agent": "artex-setup"})
 with urllib.request.urlopen(req, timeout=15) as r:
     data = json.load(r)
 for a in data.get("assets", []):
     n = a.get("name", "").lower()
-    if n.endswith((".zip", ".tar.gz", ".tgz")) and "checksum" not in n:
+    if n.endswith((".zip", ".tar.gz", ".tgz")) and not any(skip in n for skip in ("checksum", "sbom", "sigstore", ".1.zip")):
         if any(o in n for o in os_aliases) and any(ar in n for ar in arch_aliases):
             print(a["browser_download_url"])
             break
@@ -116,6 +116,10 @@ PY
   if curl -fsSL "$dl_url" -o "$tmpd/pkg" 2>/dev/null; then
     if [[ "$dl_url" == *.zip ]]; then
       unzip -qo "$tmpd/pkg" -d "$tmpd" >/dev/null 2>&1 || true
+      # Handle nested .tar.gz inside .zip (e.g. RustScan's x86_64-linux-rustscan.tar.gz.zip)
+      for nested_tar in "$tmpd"/*.tar.gz "$tmpd"/*.tgz; do
+        [[ -f "$nested_tar" ]] && tar -xzf "$nested_tar" -C "$tmpd" >/dev/null 2>&1 || true
+      done
     else
       tar -xzf "$tmpd/pkg" -C "$tmpd" >/dev/null 2>&1 || true
     fi
@@ -130,14 +134,22 @@ PY
 }
 
 install_security_arsenal() {
-  info "Provisioning offensive & reconnaissance CLI arsenal..."
+  info "Provisioning offensive, OCR & reconnaissance CLI arsenal..."
   if command -v apt-get >/dev/null 2>&1 && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y -qq 2>/dev/null || true
-    for pkg in nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-pip python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists; do
+    for pkg in tesseract-ocr tesseract-ocr-eng nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-pip pipx python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists; do
       apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
     done
-    python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets impacket bloodhound semgrep awscli >/dev/null 2>&1 || true
+    python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets >/dev/null 2>&1 || true
+    for py_cli in impacket bloodhound semgrep awscli; do
+      if command -v pipx >/dev/null 2>&1; then
+        PIPX_BIN_DIR=/usr/local/bin PIPX_HOME=/opt/pipx pipx install "$py_cli" >/dev/null 2>&1 || \
+          python3 -m pip install --quiet --break-system-packages "$py_cli" >/dev/null 2>&1 || true
+      else
+        python3 -m pip install --quiet --break-system-packages "$py_cli" >/dev/null 2>&1 || true
+      fi
+    done
   fi
 
   install_gh_release_tool "projectdiscovery/nuclei" "nuclei" "nuclei"
