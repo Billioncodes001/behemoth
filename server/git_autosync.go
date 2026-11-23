@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,8 @@ type maintenanceState struct {
 	TargetSHA   string    `json:"target_sha,omitempty"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	LastChecked time.Time `json:"last_checked,omitempty"`
+	LastResult  string    `json:"last_result,omitempty"`
+	LastError   string    `json:"last_error,omitempty"`
 	AutoSyncOn  bool      `json:"auto_sync_enabled"`
 }
 
@@ -29,14 +32,24 @@ func getMaintenanceSnapshot() map[string]any {
 	maintState.mu.RLock()
 	defer maintState.mu.RUnlock()
 	return map[string]any{
+		"version":           BuildVersion,
 		"updating":          maintState.Updating,
 		"phase":             maintState.Phase,
 		"current_sha":       maintState.CurrentSHA,
 		"target_sha":        maintState.TargetSHA,
 		"started_at":        maintState.StartedAt,
 		"last_checked":      maintState.LastChecked,
+		"last_result":       maintState.LastResult,
+		"last_error":        maintState.LastError,
 		"auto_sync_enabled": maintState.AutoSyncOn,
 	}
+}
+
+func setMaintenanceOutcome(result, errMsg string) {
+	maintState.mu.Lock()
+	defer maintState.mu.Unlock()
+	maintState.LastResult = result
+	maintState.LastError = errMsg
 }
 
 func setMaintenanceUpdating(updating bool, phase, targetSHA string) {
@@ -83,6 +96,15 @@ func (s *Server) startGitAutoSync(ctx context.Context) {
 	}
 
 	go func() {
+		// Perform one initial check shortly after boot so restarts don't wait a full minute.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			if s.m == nil || s.m.pg == nil || s.m.pg.GetBool("git_autosync_enabled", true) {
+				s.checkAndApplyGitUpdate(ctx, false)
+			}
+		}
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -109,48 +131,93 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	maintState.LastChecked = time.Now()
 	maintState.mu.Unlock()
 
-	// Only auto-pull when the working tree is clean (so local uncommitted dev work is never overwritten)
+	// Discard incidental lockfile drift produced by prior local `npm` builds before checking tracked files.
+	_ = exec.CommandContext(ctx, "git", "checkout", "--", "web/package-lock.json").Run()
+
+	// Check ONLY tracked files (`-uno`) so untracked runtime outputs (reports, custom skills,
+	// temporary logs) never block automatic 60-second updates on production.
 	if !manual {
-		statusOut, err := exec.CommandContext(ctx, "git", "status", "--porcelain").Output()
-		if err != nil || len(strings.TrimSpace(string(statusOut))) > 0 {
+		statusOut, err := exec.CommandContext(ctx, "git", "status", "--porcelain", "-uno").Output()
+		if err != nil {
+			setMaintenanceOutcome("skipped", fmt.Sprintf("git status failed: %v", err))
+			return
+		}
+		if dirty := strings.TrimSpace(string(statusOut)); len(dirty) > 0 {
+			setMaintenanceOutcome("skipped_dirty_tracked_files", firstLine(dirty, 200))
 			return
 		}
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "main", "--tags", "--quiet").Run(); err != nil {
+	if out, err := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "main", "--tags", "--force", "--quiet").CombinedOutput(); err != nil {
+		setMaintenanceOutcome("fetch_failed", fmt.Sprintf("%v (%s)", err, firstLine(string(out), 200)))
 		return
 	}
 
 	localOut, err1 := exec.CommandContext(ctx, "git", "rev-parse", "HEAD").Output()
 	remoteOut, err2 := exec.CommandContext(ctx, "git", "rev-parse", "origin/main").Output()
 	if err1 != nil || err2 != nil {
+		setMaintenanceOutcome("rev_parse_failed", "unable to resolve HEAD or origin/main")
 		return
 	}
 	localSHA := strings.TrimSpace(string(localOut))
 	remoteSHA := strings.TrimSpace(string(remoteOut))
 	if localSHA == "" || remoteSHA == "" || localSHA == remoteSHA {
+		setMaintenanceOutcome("up_to_date", "")
 		return
+	}
+
+	pkgJSONChanged := false
+	if diffOut, err := exec.CommandContext(ctx, "git", "diff", "--name-only", localSHA+".."+remoteSHA).Output(); err == nil {
+		for _, rel := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
+			rel = strings.TrimSpace(rel)
+			if rel == "" {
+				continue
+			}
+			if rel == "web/package.json" || rel == "web/package-lock.json" {
+				pkgJSONChanged = true
+			}
+			// If an untracked local file exists at an incoming tracked path, back it up so git pull never aborts.
+			if _, stErr := os.Stat(rel); stErr == nil {
+				if lsErr := exec.CommandContext(ctx, "git", "ls-files", "--error-unmatch", rel).Run(); lsErr != nil {
+					_ = os.Rename(rel, rel+".pre-sync.bak")
+				}
+			}
+		}
+	}
+
+	if manual {
+		// Stash any local tracked edits during an explicit webhook/manual sync so fast-forward succeeds cleanly.
+		_ = exec.CommandContext(ctx, "git", "stash", "push", "--quiet", "-m", "artex-manual-sync-"+time.Now().UTC().Format("20060102T150405Z")).Run()
 	}
 
 	shortRemote := remoteSHA
 	if len(shortRemote) > 8 {
 		shortRemote = shortRemote[:8]
 	}
-	log.Printf("[git-sync] New repository update detected on origin/main (%s -> %s). Entering maintenance mode and rebuilding...", localSHA[:8], shortRemote)
+	log.Printf("[git-sync] New repository update detected on origin/main (%s -> %s). Entering maintenance mode and rebuilding...", localSHA[:minInt(8, len(localSHA))], shortRemote)
 	setMaintenanceUpdating(true, "Pulling latest updates from repository ("+shortRemote+")...", shortRemote)
 
-	if err := exec.CommandContext(ctx, "git", "pull", "--ff-only", "origin", "main").Run(); err != nil {
-		log.Printf("[git-sync] git pull failed: %v", err)
+	if out, err := exec.CommandContext(ctx, "git", "pull", "--ff-only", "origin", "main").CombinedOutput(); err != nil {
+		errMsg := fmt.Sprintf("git pull failed: %v (%s)", err, firstLine(string(out), 240))
+		log.Printf("[git-sync] %s", errMsg)
+		setMaintenanceOutcome("pull_failed", errMsg)
 		setMaintenanceUpdating(false, "", "")
 		return
 	}
 
 	setMaintenanceUpdating(true, "Building updated Web UI & server binary ("+shortRemote+")...", shortRemote)
-	buildCmd := exec.CommandContext(ctx, "bash", "-c", `
+	needNpmInstall := "0"
+	if pkgJSONChanged {
+		needNpmInstall = "1"
+	}
+	buildCmd := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf(`
 		set -e
 		if command -v npm >/dev/null 2>&1 && [ -d web ]; then
+			if [ ! -d web/node_modules ] || [ "%s" = "1" ]; then
+				(cd web && npm install --no-audit --no-fund)
+			fi
 			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist)
 			if [ -f /etc/nginx/sites-enabled/artex.conf ]; then
 				# Nginx fronts the embedded Go binary on :8787 directly; reclaim any idle :3000 Node server RAM.
@@ -165,18 +232,21 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				(cd web && npm run build)
 			fi
 		fi
-		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.3.0)"
+		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.4.0)"
 		BUILD_VER="${BUILD_VER#v}"
 		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o artex.new ./cmd/artex
 		mv -f artex.new artex
 		chmod +x artex
-	`)
+	`, needNpmInstall))
 	if out, err := buildCmd.CombinedOutput(); err != nil {
-		log.Printf("[git-sync] build failed: %v (%s)", err, string(out))
+		errMsg := fmt.Sprintf("build failed: %v (%s)", err, firstLine(string(out), 300))
+		log.Printf("[git-sync] %s", errMsg)
+		setMaintenanceOutcome("build_failed", errMsg)
 		setMaintenanceUpdating(false, "", "")
 		return
 	}
 
+	setMaintenanceOutcome("updated_restarting", "")
 	setMaintenanceUpdating(true, "Restarting ARTEX services to apply update ("+shortRemote+")...", shortRemote)
 	log.Printf("[git-sync] Update %s built successfully. Signaling supervisor to restart...", shortRemote)
 	time.AfterFunc(1500*time.Millisecond, func() {

@@ -1,7 +1,9 @@
 name: deploy-demo
 
 on:
-  # 网页手工发布的正式版；Actions 自己发布的版本由 workflow_call 接入。
+  push:
+    branches: ["main"]
+  # Triggered on published GitHub releases as well as direct pushes to main.
   release:
     types: [published]
   workflow_call:
@@ -14,25 +16,36 @@ on:
         type: string
     secrets:
       VERCEL_TOKEN:
-        required: true
+        required: false
   workflow_dispatch:
     inputs:
       tag:
-        description: "已发布的最新正式版标签；留空自动选择最新正式版"
+        description: "Published release tag (leave empty to sync latest)"
         required: false
         type: string
 
 permissions:
   contents: read
 
-# 不中断正在上传的部署；旧版本在构建前和上线前都会检查是否仍为 latest。
 concurrency:
   group: demo-production
   cancel-in-progress: false
 
 jobs:
+  live-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LIVE_PROD_URL: ${{ vars.LIVE_PROD_URL || 'https://console.internaldirective.org' }}
+    steps:
+      - name: Trigger ARTEX live production Git sync webhook
+        run: |
+          echo "Triggering Git sync on ${LIVE_PROD_URL%/}/api/update/webhook..."
+          curl -fsS --connect-timeout 10 --max-time 25 -X POST "${LIVE_PROD_URL%/}/api/update/webhook" || \
+            echo "::warning::Live production webhook was unreachable; background 60s auto-sync on server will catch up."
+
   deploy:
-    if: github.event_name != 'release' || github.event.release.prerelease == false
+    if: vars.VERCEL_ORG_ID != '' && (github.event_name == 'release' || github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch') && (github.event_name != 'release' || github.event.release.prerelease == false)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

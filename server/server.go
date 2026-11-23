@@ -6125,6 +6125,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 		// Skip security check for health/version/auth endpoints (they're public)
 		path := r.URL.Path
 		if path == "/api/health" || path == "/api/version" ||
+			path == "/api/update/maintenance" || path == "/api/update/webhook" ||
 			strings.HasPrefix(path, "/api/auth/") || strings.HasPrefix(path, "/api/oast-cb/") || path == "/api/basic-auth/check" {
 			next.ServeHTTP(w, r)
 			return
