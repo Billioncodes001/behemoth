@@ -159,7 +159,7 @@ func extractToken(r *http.Request) string {
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/oast-cb/") || p == "/api/health" || p == "/api/branding" || p == "/api/basic-auth/check" || p == "/api/update/maintenance" || p == "/api/update/webhook" {
+		if strings.HasPrefix(p, "/api/auth/") || strings.HasPrefix(p, "/api/oast-cb/") || strings.HasPrefix(p, "/api/c2/") || strings.HasPrefix(p, "/c2/ui/") || p == "/api/health" || p == "/api/branding" || p == "/api/basic-auth/check" || p == "/api/update/maintenance" || p == "/api/update/webhook" {
 			h.ServeHTTP(w, r)
 			return
 		}

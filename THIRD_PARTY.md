@@ -38,6 +38,18 @@ Table — MIT; CodeMirror — MIT; AntV G6 — MIT).
 - **Docker images** used by `sandbox_exec` (default `kalilinux/kali-last-release`)
   are pulled at runtime and carry the licenses of the packages they contain.
 
+## Design references
+
+- **Mamba RMM** (`rmm/`, reference-only, not linked or imported) — the ARTEX
+  C2 capability (`c2/` package) models its semantics (implant registry,
+  pending→sent→done task lifecycle, malleable profile paths, per-implant
+  secrets, operator console) but is implemented from scratch; no Mamba
+  source is redistributed.
+- **ProfGinx** (`ProfGinx_custom/`, reference-only, BSD-3-Clause) and
+  **Gophish** (MIT) are consulted as design references for the deferred
+  proxy-capture and tracked-mail campaign features; neither is imported
+  or redistributed yet.
+
 ## Adding a dependency
 
 When a new direct dependency is added, update this file in the same change and

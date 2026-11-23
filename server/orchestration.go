@@ -86,6 +86,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 	}, s.findingCaseTools()...)
 	out = append(out, s.patchMonitorTools()...)
 	out = append(out, s.arsenalTools()...)
+	out = append(out, s.c2Tools()...)
 	out = append(out, s.artifactTools()...)
 	out = append(out, s.captchaTools()...)
 	out = append(out, s.agentRequestTools()...)
@@ -675,6 +676,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedSelfImprovingScannerToolsV1()
 	s.seedLootAndCaptchaToolsV1()
 	s.seedAgentRequestToolsV1()
+	s.seedC2ToolsV1()
 	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把

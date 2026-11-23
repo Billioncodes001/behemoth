@@ -12,6 +12,7 @@
 - 新增 mock / scenario 提供方（`ARTEX_LLM_PROVIDER=mock` + `ARTEX_MOCK_SCENARIO`/`ARTEX_MOCK_RESPONSES`）：无网络、无密钥即可跑完整 Agent 循环，用于离线演示与 CI。
 - 证据链：每次 worker run 追加哈希链 JSONL（`<run>/evidence/run.jsonl`，含每条明细的 SHA-256 与上一条哈希），收尾活动记录链头；新增 `./artex evidence verify <file>` 逐条重放校验，篡改/乱序/缺失即报错并非零退出。
 - 日语界面（覆盖导航、通用操作、登录与 Agent 预算等相关文案，未覆盖项回退英文）；`persistence-setup` Skill 增补 phantom DLL 搜索顺序劫持（签名宿主、导出触发、trampoline、VHDX 投递与验证）；新增 `CITATION.cff` 与 `THIRD_PARTY.md`。
+- 新增自包含 C2 能力：生成植入体脚本（bash/python3/powershell，含可定制 beacon/回传路径、睡眠抖动、可选 AES-256-CBC 加密与 systemd/cron/schtasks 持久化安装脚本），beacon/结果端点可挂主端口或独立监听（`ARTEX_C2_ADDR`，可选 TLS），SSH 一键部署（`c2_deploy`），任务队列与结果留存（JSONL 事件日志重启恢复），Agent 工具 `c2_build_implant`/`c2_deploy`/`c2_agents`/`c2_task`/`c2_results`/`c2_kill`，以及令牌鉴权的操作员控制台 `/c2/ui/`。语义参照 Mamba RMM，实现为原创代码（见 `THIRD_PARTY.md`）。
 
 
 ## [0.3.30] - 2026-11-14

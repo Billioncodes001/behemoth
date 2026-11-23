@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/c2"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/intercept/jev"
@@ -170,6 +171,14 @@ type Server struct {
 	toolExecutor *tools.ToolExecutor
 
 	// Target connectors for remote execution
+	// C2 (self-contained command & control): lazily initialized manager,
+	// implant-facing HTTP handlers, operator console, optional listener.
+	c2Mu      sync.Mutex
+	c2mgr     *c2.Manager
+	c2Handler *c2.Handler
+	c2Console *c2.Console
+	c2srv     *http.Server
+
 	targetMu sync.Mutex
 	targets  map[string]targets.TargetConnector // keyed by target ID
 
@@ -570,6 +579,14 @@ func (s *Server) Close() {
 		s.chatMu.Unlock()
 		s.engine.Shutdown()
 		s.proxyPoolWG.Wait()
+		if s.c2srv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = s.c2srv.Shutdown(ctx)
+			cancel()
+		}
+		if s.c2mgr != nil {
+			_ = s.c2mgr.Close()
+		}
 	}
 }
 
@@ -1110,6 +1127,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("/api/oast-cb/", s.handleCallbackReceipt)
+	if mgr := s.c2Manager(); mgr != nil {
+		c2.RegisterHandler(mux, s.c2Handler)
+		c2.RegisterConsole(mux, s.c2Console)
+	}
 	mux.HandleFunc("GET /api/version", s.version)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/system/metrics", s.systemMetrics)
@@ -6222,7 +6243,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 		if path == "/api/health" || path == "/api/version" ||
 			path == "/api/update/maintenance" || path == "/api/update/webhook" ||
-			strings.HasPrefix(path, "/api/auth/") || strings.HasPrefix(path, "/api/oast-cb/") || path == "/api/basic-auth/check" {
+			strings.HasPrefix(path, "/api/auth/") || strings.HasPrefix(path, "/api/oast-cb/") || strings.HasPrefix(path, "/api/c2/") || strings.HasPrefix(path, "/c2/ui/") || path == "/api/basic-auth/check" {
 			next.ServeHTTP(w, r)
 			return
 		}
