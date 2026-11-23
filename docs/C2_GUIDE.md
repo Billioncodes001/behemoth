@@ -65,10 +65,50 @@ persisted in the state log, and surfaced by `c2_agents` /
 | `c2_task` | write | Queue a shell command for an implant (timeout default 120 s, max 3600 s). |
 | `c2_results` | read | Read recent task results and task states. |
 | `c2_kill` | write | Queue a `kill` command; the implant removes persistence (systemd unit / cron entry / scheduled task) and exits on its next check-in. |
+| `c2_proxy_open` | write | Open a loopback SOCKS5 pivot tunnel through an implant (`socks5://user:pass@127.0.0.1:<port>`), optionally repointing the capture layer at it. |
+| `c2_proxy_close` | write | Close one tunnel or every tunnel of an implant, optionally restoring direct egress. |
+| `c2_proxy_list` | read | List live tunnels with usage, connections and expiry. |
 
 The tools are seeded into the tools table and bound to the
 `auto`/`pentest`/`worker`/`planner`/`mainagent`/`reporter` agents
-(one-shot, settings flag `c2_tools_v1`).
+(one-shots, settings flags `c2_tools_v1` and `c2_proxy_tools_v1`).
+
+## Pivot tunnels
+
+The last rung of the egress ladder — use it only when the target is
+reachable from the implant and not from this host:
+
+1. direct fetch
+2. client-side proxy pool
+3. **C2 pivot tunnel**
+4. lure capture layer
+
+`c2_proxy_open` starts a listener on `127.0.0.1` (ephemeral port) that
+speaks SOCKS5 (CONNECT only) and relays every connection through the
+implant over the existing beacon channel:
+
+- Downlink frames are queued as internal `tunnel` tasks that are dequeued
+  ahead of shell tasks; uplink frames ride the normal result endpoint with
+  `task_id=tun`. No new endpoints or headers, so the malleable profile is
+  untouched.
+- The allowlist defaults to exactly the requested `host:port` — the
+  implant never becomes an open relay. Add more with `allow`.
+- Guards: 15 min TTL (max 240), 90 s idle, 5 min stall, 32 MB byte cap
+  (max 512), 16 KB frames, 16 connections per tunnel, 128 queued frames
+  per implant, 8 tunnels per process.
+- Random per-tunnel SOCKS credentials (`auth` defaults to true).
+- While a tunnel is open the implant's loop polls fast (~1 s bash,
+  300 ms python/powershell) instead of its beacon interval.
+
+Typical use: `c2_proxy_open{implant_id, target, use_for_capture}` then
+drive tools through the returned proxy, and `c2_proxy_close` when done
+(it also clears the global egress proxy if it still points there).
+
+Expectations: throughput is bounded by the beacon round trip, so the
+tunnel suits small request/response work (API calls, admin panels,
+internal HTTP), not bulk file transfer. Implants relay with `bash`
+`/dev/tcp` + FIFOs, `python3` sockets + threads, or `powershell`
+`TcpClient` polling; binary-safe, but only TCP.
 
 ## Persistence helpers
 

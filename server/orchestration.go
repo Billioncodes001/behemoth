@@ -677,6 +677,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedLootAndCaptchaToolsV1()
 	s.seedAgentRequestToolsV1()
 	s.seedC2ToolsV1()
+	s.seedC2ProxyToolsV1()
 	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把

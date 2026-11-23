@@ -98,6 +98,9 @@ func (s *Server) c2Tools() []actool.CoreTool {
 		s.toolC2Task(),
 		s.toolC2Results(),
 		s.toolC2Kill(),
+		s.toolC2ProxyOpen(),
+		s.toolC2ProxyClose(),
+		s.toolC2ProxyList(),
 	}
 }
 
@@ -117,6 +120,28 @@ func (s *Server) seedC2ToolsV1() {
 	}
 	keys := make([]string, 0, len(tools))
 	for _, t := range tools {
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "reporter"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedC2ProxyToolsV1 seeds the pivot tools for installs that already ran the
+// c2_tools_v1 seed (separate flag so existing databases get them too).
+func (s *Server) seedC2ProxyToolsV1() {
+	const flag = "c2_proxy_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	tools := []actool.CoreTool{s.toolC2ProxyOpen(), s.toolC2ProxyClose(), s.toolC2ProxyList()}
+	keys := make([]string, 0, len(tools))
+	for _, t := range tools {
+		schema, _ := json.Marshal(t.InputSchema())
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "reporter"})
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 		keys = append(keys, t.Name())
 	}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "reporter"} {

