@@ -13,12 +13,12 @@ import (
 )
 
 func (s *Server) proxyPoolAgentTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	return append([]actool.CoreTool{
 		s.toolCheckProxyStatus(),
 		s.toolImportAndTestProxies(),
 		s.toolGetProxyPoolStatus(),
 		s.toolManageProxyPool(),
-	}
+	}, s.proxyScraperAgentTools()...)
 }
 
 func (s *Server) syncProxyPoolNow() {
@@ -205,7 +205,12 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	}
 	instruction := "NO outbound proxy is enabled (Proxy Pool is OFF and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
 	if routingMode == "proxy_pool" {
-		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy. In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY (e.g. always pass --proxy \"$HTTP_PROXY\" to sqlmap/gobuster, -sT -Pn --proxies \"$HTTP_PROXY\" to nmap, and -proxy \"${HTTP_PROXY#http://}\" to openssl s_client). If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate', 'tor_newnym', or 'disable_proxy')."
+		torSnap := s.torStatusSnapshot()
+		if hyb, _ := torSnap["hybrid_pool_active"].(bool); hyb {
+			instruction = "HYBRID TOR + PROXY POOL MODE ACTIVE: Both free Tor SOCKS5 circuits (tor-circuit-*) and non-Tor pool proxies are enabled! Running agents automatically pick up pool changes on every request without restarting. Use free Tor circuits for bulk scanning/fuzzing ($0 bandwidth); if a target WAF/Cloudflare challenges Tor exit IPs (403/429/Captcha), call manage_proxy_pool(action='activate', proxy_id='<non-tor-proxy-id>') or manage_proxy_pool(action='tor_newnym')."
+		} else {
+			instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy (picking up Tor/pool switches live mid-run). In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY. If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate', 'tor_newnym', or 'disable_proxy') or scrape_online_proxies."
+		}
 	} else if routingMode == "proxy_pool_exhausted_fail_closed" {
 		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! ARTEX has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Immediately stop and inform the user that all proxies in the Proxy Pool are down/exhausted, and let them know they can click 'Enable Free Tor Network' in System -> Proxy Pool (or ask you to call manage_proxy_pool(action='enable_tor')) or import working proxies."
 	} else if routingMode == "static_global_proxy" {

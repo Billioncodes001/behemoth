@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   RefreshCw, Upload, Trash2, Play, CheckCircle2, XCircle,
   Loader2, Globe, Activity, Zap, Settings, MapPin, Clock, FileUp, ShieldCheck, ShieldAlert,
+  Sparkles, Terminal, Square, ExternalLink, Radar,
 } from "lucide-react";
 
 type ProxyStatus = "healthy" | "unhealthy" | "untested" | "unknown" | "in_use" | "disabled";
@@ -65,27 +66,63 @@ export default function ProxyPoolPage() {
   const [torStatus, setTorStatus] = React.useState<{
     installed: boolean;
     daemon_running: boolean;
+    mode?: "exclusive" | "hybrid";
     enabled_in_pool: boolean;
+    hybrid_pool_active?: boolean;
+    suspended_pool_count?: number;
     circuits_total: number;
     circuits_healthy: number;
     exit_ips?: string[];
   } | null>(null);
   const [torCircuits, setTorCircuits] = React.useState<string>("5");
+  const [torMode, setTorMode] = React.useState<"exclusive" | "hybrid">("exclusive");
   const [torBusy, setTorBusy] = React.useState(false);
+
+  const [scraper, setScraper] = React.useState<Awaited<ReturnType<typeof api.proxyV2.getScraperStatus>> | null>(null);
+  const [scraperEnabled, setScraperEnabled] = React.useState(false);
+  const [scraperAIEnabled, setScraperAIEnabled] = React.useState(true);
+  const [scraperAutoEnablePool, setScraperAutoEnablePool] = React.useState(true);
+  const [scraperInterval, setScraperInterval] = React.useState("30");
+  const [scraperMaxProxies, setScraperMaxProxies] = React.useState("25");
+  const [scraperMaxLatency, setScraperMaxLatency] = React.useState("4500");
+  const [scraperProtoMode, setScraperProtoMode] = React.useState<"both" | "socks5" | "http">("both");
+  const [scraperBusy, setScraperBusy] = React.useState(false);
+  const scraperConfigHydratedRef = React.useRef(false);
+  const logEndRef = React.useRef<HTMLDivElement | null>(null);
 
 
   const fetchData = React.useCallback(async () => {
     try {
-      const [proxyList, poolStats, switchLogs, poolConfig, torSnap] = await Promise.all([
+      const [proxyList, poolStats, switchLogs, poolConfig, torSnap, scraperSnap] = await Promise.all([
         api.proxyV2.listProxies().catch(() => []),
         api.proxyV2.getStats().catch(() => null),
         api.proxyV2.getLogs().catch(() => []),
         api.proxyV2.getConfig().catch(() => null),
         api.proxyV2.getTorStatus().catch(() => null),
+        api.proxyV2.getScraperStatus().catch(() => null),
       ]);
       setProxies(Array.isArray(proxyList) ? proxyList : []);
       if (torSnap) {
         setTorStatus(torSnap);
+        if (torSnap.mode === "exclusive" || torSnap.mode === "hybrid") {
+          setTorMode(torSnap.mode);
+        }
+      }
+      if (scraperSnap) {
+        setScraper(scraperSnap);
+        if (!scraperConfigHydratedRef.current && scraperSnap.config) {
+          scraperConfigHydratedRef.current = true;
+          setScraperEnabled(Boolean(scraperSnap.config.enabled));
+          setScraperAIEnabled(scraperSnap.config.ai_agent_enabled !== false);
+          setScraperAutoEnablePool(scraperSnap.config.auto_enable_pool !== false);
+          setScraperInterval(String(scraperSnap.config.interval_minutes ?? 30));
+          setScraperMaxProxies(String(scraperSnap.config.max_proxies ?? 25));
+          setScraperMaxLatency(String(scraperSnap.config.max_latency_ms ?? 4500));
+          const protos = scraperSnap.config.protocols || ["socks5", "http"];
+          if (protos.includes("socks5") && protos.includes("http")) setScraperProtoMode("both");
+          else if (protos.includes("socks5")) setScraperProtoMode("socks5");
+          else setScraperProtoMode("http");
+        }
       }
       if (poolStats) {
         setStats({
@@ -121,6 +158,15 @@ export default function ProxyPoolPage() {
   }, []);
 
   React.useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-poll live scraping log & pool state while Online Scraper or AI Harvester is running
+  React.useEffect(() => {
+    if (!scraper?.running && !scraper?.ai_running) return;
+    const tmr = setInterval(() => {
+      void fetchData();
+    }, 1800);
+    return () => clearInterval(tmr);
+  }, [scraper?.running, scraper?.ai_running, fetchData]);
 
   const handleFilesChosen = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -364,19 +410,123 @@ export default function ProxyPoolPage() {
     }
   };
 
-  const handleEnableTor = async () => {
+  const handleEnableTor = async (overrideMode?: "exclusive" | "hybrid") => {
     setTorBusy(true);
     try {
       const count = Math.max(1, Math.min(10, parseInt(torCircuits) || 5));
-      const res = await api.proxyV2.enableTor(count);
+      const useMode = overrideMode || torMode;
+      const res = await api.proxyV2.enableTor(count, useMode);
       toast.success(
-        `Tor Anonymity Network enabled (${res.circuits_healthy}/${res.circuits_total} isolated SOCKS5 circuits ready)`,
+        useMode === "exclusive"
+          ? `Exclusive Tor enabled (${res.circuits_healthy}/${res.circuits_total} circuits) — running agents switched immediately & paid proxies paused`
+          : `Hybrid Tor + Pool enabled (${res.circuits_healthy}/${res.circuits_total} Tor circuits + active pool proxies)`,
       );
       await fetchData();
     } catch (e: any) {
       toast.error("Enable Tor failed: " + (e?.message || String(e)));
     } finally {
       setTorBusy(false);
+    }
+  };
+
+  const handleTorModeChange = async (nextMode: "exclusive" | "hybrid") => {
+    setTorMode(nextMode);
+    if (torStatus?.enabled_in_pool) {
+      await handleEnableTor(nextMode);
+    }
+  };
+
+  const buildScraperConfigPayload = (overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean }>) => {
+    const protocols =
+      scraperProtoMode === "socks5" ? ["socks5"] : scraperProtoMode === "http" ? ["http"] : ["socks5", "http"];
+    return {
+      enabled: overrides?.enabled !== undefined ? overrides.enabled : scraperEnabled,
+      ai_agent_enabled: overrides?.ai_agent_enabled !== undefined ? overrides.ai_agent_enabled : scraperAIEnabled,
+      auto_enable_pool: scraperAutoEnablePool,
+      interval_minutes: Math.max(5, parseInt(scraperInterval) || 30),
+      max_proxies: Math.max(3, Math.min(100, parseInt(scraperMaxProxies) || 25)),
+      max_latency_ms: Math.max(500, Math.min(15000, parseInt(scraperMaxLatency) || 4500)),
+      protocols,
+    };
+  };
+
+  const handleSaveScraperConfig = async (
+    overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean }>,
+    silent = false,
+  ) => {
+    setScraperBusy(true);
+    try {
+      const payload = buildScraperConfigPayload(overrides);
+      const snap = await api.proxyV2.saveScraperConfig(payload);
+      setScraper(snap);
+      if (!silent) {
+        toast.success(
+          payload.enabled
+            ? "Online Proxy Scraper enabled — scraping & verifying proxies automatically"
+            : "Online Proxy Scraper settings saved",
+        );
+      }
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Save scraper settings failed: " + (e?.message || String(e)));
+    } finally {
+      setScraperBusy(false);
+    }
+  };
+
+  const handleRunScraperNow = async () => {
+    setScraperBusy(true);
+    try {
+      await api.proxyV2.saveScraperConfig(buildScraperConfigPayload());
+      const snap = await api.proxyV2.runScraperNow();
+      setScraper(snap);
+      toast.success("Started online proxy scraping & 2-stage HTTPS/Elite verification");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Start scraper failed: " + (e?.message || String(e)));
+    } finally {
+      setScraperBusy(false);
+    }
+  };
+
+  const handleRunHarvesterAgent = async () => {
+    setScraperBusy(true);
+    try {
+      const res = await api.proxyV2.runScraperAgentNow();
+      toast.success(
+        res.conversation_id
+          ? `Launched autonomous Proxy Harvester agent (Conversation #${res.conversation_id})`
+          : "Proxy Harvester agent started",
+      );
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Launch AI Harvester failed: " + (e?.message || String(e)));
+    } finally {
+      setScraperBusy(false);
+    }
+  };
+
+  const handleStopScraper = async () => {
+    try {
+      const snap = await api.proxyV2.stopScraper();
+      setScraper(snap);
+      toast.info("Stopped active proxy scrape");
+    } catch (e: any) {
+      toast.error("Stop failed: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleClearScraped = async () => {
+    setScraperBusy(true);
+    try {
+      const snap = await api.proxyV2.clearScrapedProxies();
+      setScraper(snap);
+      toast.success("Removed scraped proxies from pool and cleared scrape log");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Clear scraped failed: " + (e?.message || String(e)));
+    } finally {
+      setScraperBusy(false);
     }
   };
 
@@ -507,17 +657,31 @@ export default function ProxyPoolPage() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Routes scanning &amp; agent traffic over isolated SOCKS5 Tor exit circuits (<code className="bg-muted px-1 rounded">IsolateSOCKSAuth</code> + <code className="bg-muted px-1 rounded">SIGNAL NEWNYM</code>) with zero bandwidth charges.
+              Routes scanning &amp; agent traffic over isolated SOCKS5 Tor exit circuits (<code className="bg-muted px-1 rounded">IsolateSOCKSAuth</code> + <code className="bg-muted px-1 rounded">SIGNAL NEWNYM</code>) with zero bandwidth charges. Running agents automatically pick up Tor mid-task without restarting.
+              {torStatus?.enabled_in_pool && torStatus.mode === "exclusive" && (torStatus.suspended_pool_count ?? 0) > 0 && (
+                <span className="ml-1 text-amber-500">
+                  ({torStatus.suspended_pool_count} non-Tor pool proxies paused to save bandwidth — restored automatically when Tor is disabled)
+                </span>
+              )}
               {torStatus?.exit_ips && torStatus.exit_ips.length > 0 && (
                 <span className="ml-1 text-foreground/80">
-                  Current Exit IPs: <code className="bg-muted px-1 rounded">{torStatus.exit_ips.slice(0, 4).join(", ")}</code>
+                  Exit IPs: <code className="bg-muted px-1 rounded">{torStatus.exit_ips.slice(0, 4).join(", ")}</code>
                 </span>
               )}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Select value={torMode} onValueChange={(v) => void handleTorModeChange(v as "exclusive" | "hybrid")} disabled={torBusy}>
+              <SelectTrigger className="w-[195px] h-8 text-xs">
+                <SelectValue placeholder="Tor Mode" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="exclusive">Exclusive Tor (Pause Pool)</SelectItem>
+                <SelectItem value="hybrid">Hybrid (Tor + Pool Together)</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={torCircuits} onValueChange={setTorCircuits} disabled={torBusy}>
-              <SelectTrigger className="w-[130px] h-8 text-xs">
+              <SelectTrigger className="w-[120px] h-8 text-xs">
                 <SelectValue placeholder="Circuits" />
               </SelectTrigger>
               <SelectContent>
@@ -549,6 +713,13 @@ export default function ProxyPoolPage() {
       <Tabs defaultValue="proxies">
         <TabsList>
           <TabsTrigger value="proxies">Proxies ({stats.total})</TabsTrigger>
+          <TabsTrigger value="scraper" className="gap-1.5">
+            <Radar className="w-3.5 h-3.5" />
+            <span>Online Scraper</span>
+            {(scraper?.running || scraper?.ai_running) && (
+              <Loader2 className="w-3 h-3 animate-spin text-emerald-500" />
+            )}
+          </TabsTrigger>
           <TabsTrigger value="config">Configuration</TabsTrigger>
           <TabsTrigger value="logs">Switch Logs ({logs.length})</TabsTrigger>
         </TabsList>
@@ -795,6 +966,263 @@ export default function ProxyPoolPage() {
                   })}</TableBody>
                 </Table>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="scraper" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Radar className="w-5 h-5 text-primary" />
+                  <span>Online Proxy Scraper &amp; Self-Improving AI Harvester</span>
+                  {scraper?.running && (
+                    <Badge variant="default" className="gap-1 text-xs">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Scraping
+                    </Badge>
+                  )}
+                  {scraper?.ai_running && (
+                    <Badge variant="secondary" className="gap-1 text-xs border-primary/40">
+                      <Sparkles className="w-3 h-3 text-primary animate-pulse" /> AI Harvester Active
+                    </Badge>
+                  )}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Combines 16+ live GitHub &amp; API proxy feeds (<code className="bg-muted px-1 rounded">monosans</code>, <code className="bg-muted px-1 rounded">proxifly</code>, <code className="bg-muted px-1 rounded">TheSpeedX</code>, <code className="bg-muted px-1 rounded">ProxyScrape Elite SSL</code>, <code className="bg-muted px-1 rounded">jetkai</code>, <code className="bg-muted px-1 rounded">hideip.me</code>) with 2-stage TCP + strict HTTPS TLS certificate &amp; Elite non-transparent verification, plus the autonomous <strong>Proxy Harvester</strong> AI agent that continuously discovers new feeds.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {scraper?.running ? (
+                  <Button size="sm" variant="destructive" onClick={() => void handleStopScraper()}>
+                    <Square className="w-3.5 h-3.5 mr-1" />
+                    <span>Stop Scrape</span>
+                  </Button>
+                ) : (
+                  <Button size="sm" disabled={scraperBusy} onClick={() => void handleRunScraperNow()}>
+                    {scraperBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Play className="w-3.5 h-3.5 mr-1" />}
+                    <span>Scrape &amp; Verify Now</span>
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={scraperBusy || scraper?.ai_running}
+                  onClick={() => void handleRunHarvesterAgent()}
+                >
+                  {scraper?.ai_running ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Sparkles className="w-3.5 h-3.5 mr-1" />}
+                  <span>Run AI Harvester</span>
+                </Button>
+                {scraper?.last_agent_conv_id ? (
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={`/chat?id=${scraper.last_agent_conv_id}`}>
+                      <ExternalLink className="w-3.5 h-3.5 mr-1" />
+                      <span>Agent Run #{scraper.last_agent_conv_id}</span>
+                    </a>
+                  </Button>
+                ) : null}
+                <Button size="sm" variant="outline" disabled={scraperBusy} onClick={() => void handleClearScraped()}>
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                  <span>Clear Scraped</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {[
+                  { label: "Sources Polled", val: scraper?.sources_polled ?? 0 },
+                  { label: "Raw Candidates", val: scraper?.candidates_found ?? 0 },
+                  { label: "Stage-1 TCP Alive", val: scraper?.tcp_alive ?? 0 },
+                  { label: "Stage-2 HTTPS Elite", val: scraper?.https_verified ?? 0 },
+                  { label: "Active in Pool", val: scraper?.added_to_pool ?? 0 },
+                ].map((m) => (
+                  <div key={m.label} className="rounded-lg border bg-muted/20 p-3">
+                    <p className="text-xl font-bold">{m.val}</p>
+                    <p className="text-[11px] text-muted-foreground">{m.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5 pr-3">
+                    <Label htmlFor="auto-scrape-switch" className="cursor-pointer font-medium">
+                      Automatic Scheduled Scraping
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically scrape, 2-stage verify, prune dead scraped proxies, and top up Proxy Pool on schedule.
+                    </p>
+                  </div>
+                  <Switch
+                    id="auto-scrape-switch"
+                    checked={scraperEnabled}
+                    disabled={scraperBusy}
+                    onCheckedChange={(checked) => {
+                      setScraperEnabled(checked);
+                      void handleSaveScraperConfig({ enabled: checked });
+                    }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5 pr-3">
+                    <Label htmlFor="ai-harvester-switch" className="cursor-pointer font-medium flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-primary" />
+                      <span>Self-Improving AI Harvester Agent (<code className="text-[11px]">proxy_harvester</code>)</span>
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically hunts fresh GitHub repos &amp; APIs, registers new feeds, prunes dead feeds, and evolves harvesting skills.
+                    </p>
+                  </div>
+                  <Switch
+                    id="ai-harvester-switch"
+                    checked={scraperAIEnabled}
+                    disabled={scraperBusy}
+                    onCheckedChange={(checked) => {
+                      setScraperAIEnabled(checked);
+                      void handleSaveScraperConfig({ ai_agent_enabled: checked }, true);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Protocols</Label>
+                  <Select value={scraperProtoMode} onValueChange={(v) => setScraperProtoMode(v as any)}>
+                    <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="both">SOCKS5 + HTTPS</SelectItem>
+                      <SelectItem value="socks5">SOCKS5 Only</SelectItem>
+                      <SelectItem value="http">HTTPS Only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Max Verified to Keep</Label>
+                  <Input
+                    type="number"
+                    min={3}
+                    max={100}
+                    className="h-9 text-xs"
+                    value={scraperMaxProxies}
+                    onChange={(e) => setScraperMaxProxies(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Max Latency (ms)</Label>
+                  <Input
+                    type="number"
+                    min={500}
+                    max={15000}
+                    className="h-9 text-xs"
+                    value={scraperMaxLatency}
+                    onChange={(e) => setScraperMaxLatency(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Refresh Every (mins)</Label>
+                  <Input
+                    type="number"
+                    min={5}
+                    max={1440}
+                    className="h-9 text-xs"
+                    value={scraperInterval}
+                    onChange={(e) => setScraperInterval(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="scraper-auto-enable"
+                      checked={scraperAutoEnablePool}
+                      onCheckedChange={setScraperAutoEnablePool}
+                    />
+                    <Label htmlFor="scraper-auto-enable" className="text-xs cursor-pointer">Auto-Enable Pool</Label>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={scraperBusy} onClick={() => void handleSaveScraperConfig()}>
+                    Save
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Live Scraping &amp; Verification Log {scraper?.phase && scraper.phase !== "Idle" ? `— ${scraper.phase}` : ""}</span>
+                  </h4>
+                  {scraper?.last_run_at && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Last run: {new Date(scraper.last_run_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                <div className="rounded-lg border bg-zinc-950 text-zinc-200 font-mono text-xs p-3 h-72 overflow-y-auto space-y-1">
+                  {!scraper?.logs?.length ? (
+                    <p className="text-zinc-500">
+                      No scrape events yet. Click &quot;Scrape &amp; Verify Now&quot; or enable &quot;Automatic Scheduled Scraping&quot; to begin live harvesting.
+                    </p>
+                  ) : (
+                    scraper.logs.map((entry, idx) => {
+                      const color =
+                        entry.level === "verified"
+                          ? "text-emerald-400"
+                          : entry.level === "ai"
+                            ? "text-purple-400"
+                            : entry.level === "summary"
+                              ? "text-cyan-300 font-semibold"
+                              : entry.level === "warn"
+                                ? "text-amber-400"
+                                : entry.level === "source"
+                                  ? "text-blue-300"
+                                  : "text-zinc-300";
+                      return (
+                        <div key={idx} className="leading-relaxed break-all">
+                          <span className="text-zinc-500 mr-2">[{entry.timestamp}]</span>
+                          <span className={color}>{entry.message}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Registered Scrape Feeds ({scraper?.sources?.length ?? 0} total)
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                  {(scraper?.sources || []).map((src) => (
+                    <div key={src.id} className="flex items-center justify-between rounded border px-3 py-2 text-xs">
+                      <div className="min-w-0 pr-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium truncate">{src.name}</span>
+                          <Badge variant="outline" className="text-[10px] uppercase">{src.protocol}</Badge>
+                          {src.added_by_agent && (
+                            <Badge variant="secondary" className="text-[10px] gap-0.5">
+                              <Sparkles className="w-2.5 h-2.5" /> AI Discovered
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground truncate">{src.url}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {src.last_error ? (
+                          <span className="text-destructive text-[11px]">{src.last_error}</span>
+                        ) : src.last_polled_at ? (
+                          <span className="text-muted-foreground text-[11px]">
+                            {src.last_candidates} raw · <strong className="text-emerald-500">{src.last_verified} verified</strong>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground text-[11px]">Ready</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

@@ -205,3 +205,86 @@ func TestProxyPoolFailClosedBlocksDirectAndAbortsChatsWhenAllUnhealthy(t *testin
 	}
 }
 
+func TestTorCoexistenceModesScraperToolsAndSkillAutoDiscovery(t *testing.T) {
+	s, _, _ := trafficEvidenceServer(t)
+	ctx := context.Background()
+
+	// 1. Verify proxy_harvester built-in agent is seeded and newly shipped skills
+	//    (captcha-solving, cloud-and-container-audit, proxy-harvesting) are auto-visible!
+	s.skillDir = filepath.Join("..", "skills")
+	s.syncDiscoveredSkillsVisibility()
+
+	harvester, err := s.m.pg.GetAgentByKey("proxy_harvester")
+	if err != nil || harvester == nil {
+		t.Fatalf("expected proxy_harvester built-in agent to be seeded, got err=%v", err)
+	}
+	autoAg, _ := s.m.pg.GetAgentByKey("auto")
+	autoSkills, _ := s.m.pg.AgentSkillNames(autoAg.ID)
+	skillSet := map[string]bool{}
+	for _, sk := range autoSkills {
+		skillSet[sk] = true
+	}
+	for _, wantSkill := range []string{"captcha-solving", "cloud-and-container-audit", "deception-and-honeypot-detection", "proxy-harvesting"} {
+		if !skillSet[wantSkill] {
+			t.Fatalf("expected skill %q to be auto-visible to auto agent, got %v", wantSkill, autoSkills)
+		}
+	}
+
+	// 2. Verify Tor Exclusive suspend/restore coexistence with existing non-Tor pool proxies
+	pool := proxyv2.NewPool(nil)
+	if _, err := pool.ImportProxies("198.51.100.10:8080:u:p\n198.51.100.11:8080:u:p", proxyv2.ProxyTypeHTTP); err != nil {
+		t.Fatal(err)
+	}
+	initial := pool.GetProxies()
+	if err := pool.ActivateProxy(initial[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	suspended, err := pool.SuspendNonPrefixProxies("tor-circuit-")
+	if err != nil || len(suspended) != 2 {
+		t.Fatalf("expected 2 non-Tor proxies suspended in Exclusive Tor mode, got %d (err=%v)", len(suspended), err)
+	}
+	torEntries := buildTorCircuitEntries(19050, 3, "nonce-1")
+	if err := pool.ReplaceManagedPrefixProxies("tor-circuit-", torEntries, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(pool.GetStats().ActiveProxyID, "tor-circuit-") {
+		t.Fatalf("expected active proxy to switch immediately to Tor circuit, got %q", pool.GetStats().ActiveProxyID)
+	}
+	// Restore non-Tor proxies and remove Tor circuits -> original proxies active again!
+	if err := pool.RestoreProxyIDs(suspended); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.ReplaceManagedPrefixProxies("tor-circuit-", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if pool.GetStats().ActiveProxyID == "" || strings.HasPrefix(pool.GetStats().ActiveProxyID, "tor-circuit-") {
+		t.Fatalf("expected non-Tor proxy restored after disabling Tor, got %q", pool.GetStats().ActiveProxyID)
+	}
+
+	// 3. Verify Online Proxy Scraper candidate extractor & custom feed CRUD tools
+	cands := extractProxiesFromBody("socks5://8.8.4.4:1080\n1.1.1.1:8080\n127.0.0.1:9050\n10.0.0.5:3128", "http", "test-src", true)
+	if len(cands) != 2 || cands[0].Protocol != "socks5" || cands[1].Host != "1.1.1.1" {
+		t.Fatalf("expected private/loopback filtered and 2 public proxies extracted, got %+v", cands)
+	}
+
+	addRes, err := s.toolAddProxyScrapeSource().Call(ctx, json.RawMessage(`{"name":"AI Discovered SOCKS5","url":"https://example.org/proxies.txt","protocol":"socks5","priority":true,"test_immediately":false}`), nil)
+	if err != nil || addRes.IsError || !strings.Contains(addRes.Flatten(), `"added":true`) {
+		t.Fatalf("add_proxy_scrape_source failed: err=%v out=%s", err, addRes.Flatten())
+	}
+	var addedPayload struct {
+		Source ProxyScrapeSource `json:"source"`
+	}
+	_ = json.Unmarshal([]byte(addRes.Flatten()), &addedPayload)
+
+	listRes, err := s.toolListProxyScrapeSources().Call(ctx, json.RawMessage(`{}`), nil)
+	if err != nil || listRes.IsError || !strings.Contains(listRes.Flatten(), "AI Discovered SOCKS5") {
+		t.Fatalf("list_proxy_scrape_sources missing added source: err=%v out=%s", err, listRes.Flatten())
+	}
+
+	remRes, err := s.toolRemoveProxyScrapeSource().Call(ctx, json.RawMessage(`{"source_id":"`+addedPayload.Source.ID+`"}`), nil)
+	if err != nil || remRes.IsError || !strings.Contains(remRes.Flatten(), `"removed":true`) {
+		t.Fatalf("remove_proxy_scrape_source failed: err=%v out=%s", err, remRes.Flatten())
+	}
+}
+
+

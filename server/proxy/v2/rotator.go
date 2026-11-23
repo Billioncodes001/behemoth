@@ -626,8 +626,8 @@ func (p *Pool) MarkRecoveredAndActive(id string) error {
 }
 
 // ReplaceManagedPrefixProxies atomically replaces proxies whose ID begins with prefix
-// (used by the built-in Tor Network controller to add/refresh isolated Tor circuits)
-// while preserving any non-Tor user proxies in the pool.
+// (used by the built-in Tor Network controller and Online Scraper) while preserving
+// unrelated user proxies in the pool.
 func (p *Pool) ReplaceManagedPrefixProxies(prefix string, replacements []ProxyInfo, activateFirst bool) error {
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
@@ -641,12 +641,66 @@ func (p *Pool) ReplaceManagedPrefixProxies(prefix string, replacements []ProxyIn
 	p.state.proxies = kept
 	if len(replacements) > 0 && activateFirst {
 		p.state.config.Enabled = true
-		p.state.activeID = replacements[0].ID
+		if p.state.activeID == "" || strings.HasPrefix(p.state.activeID, prefix) || prefix == "tor-circuit-" {
+			p.state.activeID = replacements[0].ID
+		}
 	} else if len(replacements) == 0 && strings.HasPrefix(p.state.activeID, prefix) {
 		p.state.activeID = p.pickBestHealthyOrActiveLocked()
 		if p.state.activeID == "" {
 			p.state.config.Enabled = false
 		}
+	}
+	return p.persistLocked()
+}
+
+// SuspendNonPrefixProxies temporarily disables active proxies that do NOT start with
+// prefix (returning their IDs so they can be restored later when Exclusive Tor mode ends).
+func (p *Pool) SuspendNonPrefixProxies(prefix string) ([]string, error) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	var suspended []string
+	for i := range p.state.proxies {
+		if !strings.HasPrefix(p.state.proxies[i].ID, prefix) && p.state.proxies[i].Active && p.state.proxies[i].Status != StatusDisabled {
+			suspended = append(suspended, p.state.proxies[i].ID)
+			p.state.proxies[i].Active = false
+			p.state.proxies[i].InUse = false
+			p.state.proxies[i].Status = StatusDisabled
+		}
+	}
+	if len(suspended) == 0 {
+		return nil, nil
+	}
+	return suspended, p.persistLocked()
+}
+
+// RestoreProxyIDs re-enables previously suspended proxy IDs.
+func (p *Pool) RestoreProxyIDs(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	changed := false
+	for i := range p.state.proxies {
+		if idSet[p.state.proxies[i].ID] {
+			p.state.proxies[i].Active = true
+			if p.state.proxies[i].ResponseIP != "" {
+				p.state.proxies[i].Status = StatusHealthy
+			} else {
+				p.state.proxies[i].Status = StatusUntested
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if p.state.config != nil && p.state.config.Enabled && p.state.activeID == "" {
+		p.state.activeID = p.pickBestHealthyOrActiveLocked()
 	}
 	return p.persistLocked()
 }

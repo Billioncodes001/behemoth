@@ -528,6 +528,7 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 	s.ensureProxySupervisor()
 	s.proxyPoolWG.Add(1)
 	go func() { defer s.proxyPoolWG.Done(); s.runProxyPoolSupervisor(s.ctx) }()
+	s.startProxyScraperSupervisor(s.ctx)
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
 	if m.pg != nil {
@@ -5543,20 +5544,31 @@ func (s *Server) syncV1ToProxyPoolV2() {
 }
 
 // stopActiveChatsOnProxyExhausted aborts in-flight interactive/task chat runs
-// with AbortPausedByProxy whenever Proxy Pool is enabled and all proxies go down.
+// with AbortPausedByProxy whenever Proxy Pool is enabled and all proxies go down,
+// EXCEPT proxy_harvester runs so the harvester can discover/verify replacement proxies!
 func (s *Server) stopActiveChatsOnProxyExhausted() {
 	if s == nil {
 		return
 	}
 	s.chatMu.Lock()
+	keys := make([]string, 0, len(s.chatCancel))
 	cancels := make([]context.CancelCauseFunc, 0, len(s.chatCancel))
-	for _, cancel := range s.chatCancel {
+	for k, cancel := range s.chatCancel {
 		if cancel != nil {
+			keys = append(keys, k)
 			cancels = append(cancels, cancel)
 		}
 	}
 	s.chatMu.Unlock()
-	for _, cancel := range cancels {
+	for i, cancel := range cancels {
+		k := keys[i]
+		if strings.HasPrefix(k, "conv-") && s.m != nil && s.m.pg != nil {
+			if cid, err := strconv.ParseInt(strings.TrimPrefix(k, "conv-"), 10, 64); err == nil {
+				if conv, gerr := s.m.pg.GetConversation(cid); gerr == nil && conv != nil && conv.AgentKey == "proxy_harvester" {
+					continue
+				}
+			}
+		}
 		cancel(agent.AbortPausedByProxy)
 	}
 }
@@ -5571,6 +5583,12 @@ func (s *Server) registerProxyPoolV2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v2/proxy-pool/tor/enable", s.handleTorEnable)
 	mux.HandleFunc("POST /api/v2/proxy-pool/tor/disable", s.handleTorDisable)
 	mux.HandleFunc("POST /api/v2/proxy-pool/tor/newnym", s.handleTorNewnym)
+	mux.HandleFunc("GET /api/v2/proxy-pool/scraper/status", s.handleScraperStatus)
+	mux.HandleFunc("PUT /api/v2/proxy-pool/scraper/config", s.handleScraperSaveConfig)
+	mux.HandleFunc("POST /api/v2/proxy-pool/scraper/run", s.handleScraperRunNow)
+	mux.HandleFunc("POST /api/v2/proxy-pool/scraper/run-agent", s.handleScraperRunAgent)
+	mux.HandleFunc("POST /api/v2/proxy-pool/scraper/stop", s.handleScraperStop)
+	mux.HandleFunc("POST /api/v2/proxy-pool/scraper/clear", s.handleScraperClear)
 	log.Printf("[proxy-v2] Registered API endpoints under /api/v2/proxy-pool/")
 }
 

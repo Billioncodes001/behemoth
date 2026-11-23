@@ -209,6 +209,7 @@ var builtinAgents = []builtinAgent{
 	{"asset_mapper", "Asset Mapper", "assistant", "Asset mapping assistant: summarizes relationships among public, boundary, and internal assets, explaining inbound paths based on authentic asset data without unfounded inference.", nil, false, nil},
 	{"pentest", "Solo Pentest", "assistant", "Solo pentest agent: runs the full chain end-to-end from recon -> attack surface mapping -> deep exploitation -> verification -> wrap-up, planning, executing, and adversarially verifying on its own.", nil, true, intp(0)},
 	{"patch_watch", "Patch Watch", "assistant", "Autonomous Security Patch & Advisory Watcher: continuously monitors OS & tech-giant security feeds (Windows MSRC, macOS/iOS, CISA KEV, Chrome, Linux Kernel, RHEL, Ubuntu, Cisco, Fortinet, Palo Alto, AWS), analyzes patch diffs/CVEs, and automatically generates PoC exploits and client-side payloads.", nil, true, intp(0)},
+	{"proxy_harvester", "Proxy Harvester", "assistant", "Autonomous Self-Improving Proxy Harvester: discovers new free SOCKS5/HTTPS proxy repositories and APIs online, prunes dead feeds, verifies Elite TLS-capable proxies, and replenishes the Proxy Pool automatically.", nil, true, intp(0)},
 }
 
 // seedBuiltins inserts the fixed built-in agents and their variable catalog (idempotent).
@@ -342,7 +343,14 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // that MCP is enabled/configured.
 var builtinSkillVisibility = map[string][]string{
 	"api-recon":                        {"auto", "pentest", "worker"},
+	"auth-and-jwt-attacks":             {"auto", "pentest", "worker"},
+	"captcha-solving":                  {"auto", "pentest", "worker"},
+	"cloud-and-container-audit":        {"auto", "pentest", "worker"},
 	"deception-and-honeypot-detection": {"auto", "pentest", "worker", "planner", "mainagent"},
+	"network-and-service-pentest":      {"auto", "pentest", "worker"},
+	"osint-and-surface-mapping":        {"auto", "pentest", "worker", "proxy_harvester"},
+	"waf-and-filter-bypass":            {"auto", "pentest", "worker"},
+	"web-vuln-exploitation":            {"auto", "pentest", "worker"},
 }
 
 // seedBuiltinSkillVisibility binds the shipped built-in skills to their default

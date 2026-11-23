@@ -1473,18 +1473,23 @@ export const api = {
         daemon_running: boolean;
         managed_control: boolean;
         socks_port: number;
+        mode?: "exclusive" | "hybrid";
         enabled_in_pool: boolean;
+        hybrid_pool_active?: boolean;
+        suspended_pool_count?: number;
         circuits_total: number;
         circuits_healthy: number;
         exit_ips?: string[];
       }>(`/v2/proxy-pool/tor/status`),
-    enableTor: (circuits = 5) =>
+    enableTor: (circuits = 5, mode: "exclusive" | "hybrid" = "exclusive") =>
       post<{
+        mode?: "exclusive" | "hybrid";
         enabled_in_pool: boolean;
+        hybrid_pool_active?: boolean;
         circuits_total: number;
         circuits_healthy: number;
         exit_ips?: string[];
-      }>(`/v2/proxy-pool/tor/enable`, { circuits }),
+      }>(`/v2/proxy-pool/tor/enable`, { circuits, mode }),
     disableTor: () => post<{ enabled_in_pool: boolean }>(`/v2/proxy-pool/tor/disable`, {}),
     rotateTorIdentity: () =>
       post<{
@@ -1493,6 +1498,62 @@ export const api = {
         exit_ips?: string[];
         signal_newnym_sent?: boolean;
       }>(`/v2/proxy-pool/tor/newnym`, {}),
+    getScraperStatus: () =>
+      get<{
+        config: {
+          enabled: boolean;
+          ai_agent_enabled: boolean;
+          auto_enable_pool: boolean;
+          interval_minutes: number;
+          max_proxies: number;
+          max_latency_ms: number;
+          protocols: string[];
+        };
+        running: boolean;
+        ai_running: boolean;
+        phase: string;
+        sources_polled: number;
+        candidates_found: number;
+        tcp_alive: number;
+        https_verified: number;
+        added_to_pool: number;
+        last_run_at?: string;
+        next_run_at?: string;
+        last_agent_conv_id?: number;
+        sources: Array<{
+          id: string;
+          name: string;
+          url: string;
+          protocol: string;
+          priority: boolean;
+          builtin: boolean;
+          added_by_agent?: boolean;
+          enabled: boolean;
+          last_candidates: number;
+          last_verified: number;
+          last_error?: string;
+          last_polled_at?: string;
+        }>;
+        logs: Array<{
+          timestamp: string;
+          level: string;
+          message: string;
+        }>;
+      }>(`/v2/proxy-pool/scraper/status`),
+    saveScraperConfig: (cfg: {
+      enabled: boolean;
+      ai_agent_enabled: boolean;
+      auto_enable_pool: boolean;
+      interval_minutes: number;
+      max_proxies: number;
+      max_latency_ms: number;
+      protocols: string[];
+    }) => put<any>(`/v2/proxy-pool/scraper/config`, cfg),
+    runScraperNow: () => post<any>(`/v2/proxy-pool/scraper/run`, {}),
+    runScraperAgentNow: () =>
+      post<{ ok: boolean; conversation_id?: number; status?: any }>(`/v2/proxy-pool/scraper/run-agent`, {}),
+    stopScraper: () => post<any>(`/v2/proxy-pool/scraper/stop`, {}),
+    clearScrapedProxies: () => post<any>(`/v2/proxy-pool/scraper/clear`, {}),
   },
 
   commercial: {

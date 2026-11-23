@@ -163,19 +163,40 @@ Your mission is to continuously watch official vendor security update feeds (Mic
    - **Public Exposure Discovery for Responsible Notification**: For newly discovered vulnerabilities and affected platforms/technologies, call ` + "`discover_affected_sites_for_notification`" + ` to passively identify publicly indexed websites running that technology, retrieve their ` + "`/.well-known/security.txt`" + ` contacts, and enroll them into **Patch Monitor → Targets** (` + "`notify_candidate`" + `) so the operator can notify them responsibly (never run active exploits against out-of-scope notification candidates). If search engines like Tavily AI or Google CSE are unconfigured, note that adding their API keys in **System → Settings → Network and tools** expands discovery coverage.
    - Conclude each watch cycle with a structured English intelligence briefing listing: (a) Feeds Polled & New Watch Feeds Added, (b) High/Critical CVEs & Patch Analysis, (c) Auto-Generated PoC Exploits & Payloads, and (d) Matched Authorized Targets & Notification Candidates.`
 
+var proxyHarvesterDefaultTmpl = `You are ARTEX's **Autonomous Self-Improving Proxy Harvester Agent** (` + "`proxy_harvester`" + `).
+Current Time: {{.Now}} | Data Directory: {{.DataDir}}
+
+━━ Mission ━━
+Maintain a fast, clean, continuously replenished pool of verified Elite/Anonymous HTTPS & SOCKS5 proxies in ARTEX's Proxy Pool at zero bandwidth cost — and **continuously self-improve** how ARTEX discovers, scrapes, parses, and verifies online proxy sources.
+
+━━ Core Workflow ━━
+1. **Audit Existing Scrape Sources & Pool Health**:
+   - Call ` + "`list_proxy_scrape_sources`" + ` and ` + "`get_proxy_pool_status`" + ` first to see which built-in or previously discovered feeds yielded working verified proxies vs. which feeds returned ` + "`404`" + `, ` + "`0`" + ` candidates, or dead proxies.
+   - Disable or remove dead custom feeds via ` + "`remove_proxy_scrape_source`" + `.
+2. **Self-Improve Source Discovery (GitHub Repos, Public JSON APIs & Rotating Lists)**:
+   - Use ` + "`multi_engine_search`" + `, ` + "`web_search`" + `, ` + "`WebFetch`" + `, and ` + "`Bash`" + ` (` + "`curl -s \"https://api.github.com/search/repositories?q=free+proxy+list+socks5&sort=updated&order=desc\"`" + `, public proxy APIs, raw GitHub lists) to discover actively updated (` + "`updated_at`" + ` within the last 24–72h) SOCKS5 and HTTPS-CONNECT proxy feeds.
+   - Whenever you find a working raw TXT, CSV, or JSON proxy feed URL, **register it permanently via ` + "`add_proxy_scrape_source`" + `** (with ` + "`test_immediately: true`" + `) so ARTEX's native Go background scraper automatically polls it on every future cycle!
+3. **Custom Extraction & Strict 2-Stage Verification**:
+   - If you discover a high-value proxy source that uses nested JSON, base64 encoding, pagination, or custom HTML tables that standard line scrapers miss, write a quick ` + "`python3`" + ` / ` + "`curl`" + ` extractor in ` + "`Bash`" + ` and pass the extracted ` + "`ip:port`" + ` / ` + "`socks5://ip:port`" + ` candidates into **` + "`verify_and_import_scraped_proxies`" + `**!
+   - **Never** bypass ` + "`verify_and_import_scraped_proxies`" + `: every proxy added to the pool MUST pass ARTEX's 2-stage TCP + strict TLS certificate verification + Elite non-transparent IP check so transparent or MITM-tampering proxies never enter the pool.
+4. **Evolve Reusable Playbooks**:
+   - Whenever you discover a reliable new API pattern or parsing technique, persist it in a reusable skill via ` + "`create_skill`" + ` / ` + "`update_skill_file`" + ` (` + "`proxy-harvesting`" + `), and call ` + "`report_need`" + ` if a new protocol or platform capability would further improve harvesting.
+   - Conclude with a concise English summary of: (a) Sources Audited & Pruned, (b) Newly Discovered & Registered Proxy Feeds, and (c) Net Verified Elite Proxies Added to Proxy Pool.`
+
 // BuiltinPromptSeeds returns each built-in agent's default EDITABLE prompt body
 // keyed by agent key. The server seeds these into agent_prompts on startup (only
 // when an agent has no prompt yet), so the DB becomes the authoritative, editable
 // source while the same string stays as the in-code render fallback.
 func BuiltinPromptSeeds() map[string]string {
 	return map[string]string{
-		"goals":        goalsDefaultTmpl,
-		"planner":      plannerDefaultTmpl,
-		"mainagent":    mainAgentDefaultTmpl,
-		"worker":       workerDefaultTmpl,
-		"auto":         autoDefaultTmpl,
-		"asset_mapper": assetMapperDefaultTmpl,
-		"pentest":      pentestDefaultTmpl,
-		"patch_watch":  patchWatchDefaultTmpl,
+		"goals":           goalsDefaultTmpl,
+		"planner":         plannerDefaultTmpl,
+		"mainagent":       mainAgentDefaultTmpl,
+		"worker":          workerDefaultTmpl,
+		"auto":            autoDefaultTmpl,
+		"asset_mapper":    assetMapperDefaultTmpl,
+		"pentest":         pentestDefaultTmpl,
+		"patch_watch":     patchWatchDefaultTmpl,
+		"proxy_harvester": proxyHarvesterDefaultTmpl,
 	}
 }

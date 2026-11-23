@@ -136,6 +136,11 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	system, boundary := deferredSystem(chatSystem(agentKey, c.model, c.workDir, sessionWorkDir), def)
 
 	resolveLiveProxy := func() string {
+		// proxy_harvester discovers & verifies public proxy feeds to replenish an empty or
+		// exhausted Proxy Pool; it must never be deadlocked by the fail-closed target guard.
+		if strings.EqualFold(strings.TrimSpace(agentKey), "proxy_harvester") {
+			return ""
+		}
 		// When an external outbound proxy (Proxy Pool or Global Proxy) is enabled, EVERY
 		// agent role routes through the proxy so the server's real IP is NEVER exposed.
 		// Only when NO outbound proxy is enabled do non-probing roles skip local 127.0.0.1:8788 capture.

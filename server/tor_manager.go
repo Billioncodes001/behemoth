@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	torManagedPrefix = "tor-circuit-"
-	torManagedHost   = "127.0.0.1"
-	torManagedSocks  = 19050
-	torManagedCtrl   = 19051
-	torSystemSocks   = 9050
+	torManagedPrefix        = "tor-circuit-"
+	torManagedHost          = "127.0.0.1"
+	torManagedSocks         = 19050
+	torManagedCtrl          = 19051
+	torSystemSocks          = 9050
+	settingTorMode          = "tor_pool_mode_v1"
+	settingTorSuspendedIDs  = "tor_suspended_proxy_ids_v1"
 )
 
 var (
@@ -240,6 +242,7 @@ func (s *Server) torStatusSnapshot() map[string]any {
 
 	torInPool := 0
 	torHealthy := 0
+	nonTorActive := 0
 	var exitIPs []string
 	poolEnabled := false
 	if ppV2 != nil && ppV2.Pool != nil {
@@ -254,20 +257,35 @@ func (s *Server) torStatusSnapshot() map[string]any {
 						exitIPs = append(exitIPs, px.ResponseIP)
 					}
 				}
+			} else if px.Active && px.Status != proxyv2.StatusDisabled {
+				nonTorActive++
 			}
+		}
+	}
+	mode := "exclusive"
+	var suspendedIDs []string
+	if s != nil && s.m != nil && s.m.pg != nil {
+		if v, ok, _ := s.m.pg.GetSetting(settingTorMode); ok && (v == "exclusive" || v == "hybrid") {
+			mode = v
+		}
+		if raw, ok, _ := s.m.pg.GetSetting(settingTorSuspendedIDs); ok && strings.TrimSpace(raw) != "" {
+			_ = json.Unmarshal([]byte(raw), &suspendedIDs)
 		}
 	}
 
 	return map[string]any{
-		"installed":       bin != "",
-		"binary_path":     bin,
-		"daemon_running":  managedRunning || systemRunning,
-		"managed_control": managedRunning,
-		"socks_port":      activePort,
-		"enabled_in_pool": poolEnabled && torInPool > 0,
-		"circuits_total":  torInPool,
-		"circuits_healthy": torHealthy,
-		"exit_ips":        exitIPs,
+		"installed":            bin != "",
+		"binary_path":          bin,
+		"daemon_running":       managedRunning || systemRunning,
+		"managed_control":      managedRunning,
+		"socks_port":           activePort,
+		"mode":                 mode,
+		"enabled_in_pool":      poolEnabled && torInPool > 0,
+		"hybrid_pool_active":   poolEnabled && torInPool > 0 && nonTorActive > 0,
+		"suspended_pool_count": len(suspendedIDs),
+		"circuits_total":       torInPool,
+		"circuits_healthy":     torHealthy,
+		"exit_ips":             exitIPs,
 	}
 }
 
@@ -300,10 +318,26 @@ func buildTorCircuitEntries(socksPort, count int, nonce string) []proxyv2.ProxyI
 	return entries
 }
 
-func (s *Server) enableTorInPool(ctx context.Context, circuits int) (map[string]any, error) {
+func (s *Server) enableTorInPool(ctx context.Context, circuits int, requestedMode ...string) (map[string]any, error) {
 	if ppV2 == nil || ppV2.Pool == nil {
 		return nil, fmt.Errorf("Proxy Pool v2 is not initialized")
 	}
+	mode := "exclusive"
+	if s != nil && s.m != nil && s.m.pg != nil {
+		if saved, ok, _ := s.m.pg.GetSetting(settingTorMode); ok && (saved == "exclusive" || saved == "hybrid") {
+			mode = saved
+		}
+	}
+	if len(requestedMode) > 0 {
+		m := strings.ToLower(strings.TrimSpace(requestedMode[0]))
+		if m == "exclusive" || m == "hybrid" {
+			mode = m
+		}
+	}
+	if s != nil && s.m != nil && s.m.pg != nil {
+		_ = s.m.pg.SetSetting(settingTorMode, mode)
+	}
+
 	if circuits <= 0 {
 		circuits = 5
 	}
@@ -313,6 +347,32 @@ func (s *Server) enableTorInPool(ctx context.Context, circuits int) (map[string]
 	socksPort, err := s.ensureManagedTorDaemon(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle coexistence cleanly:
+	// - "exclusive" (default): temporarily pause non-Tor proxies (remembering their IDs)
+	//   so 100% of scanning bandwidth routes through free Tor circuits ($0 cost) and running
+	//   agents switch to Tor immediately on their very next request!
+	// - "hybrid": restore any previously Tor-suspended proxies so both Tor circuits and
+	//   pool proxies coexist in rotation / smart failover!
+	if mode == "exclusive" {
+		if suspended, _ := ppV2.Pool.SuspendNonPrefixProxies(torManagedPrefix); len(suspended) > 0 && s != nil && s.m != nil && s.m.pg != nil {
+			var prev []string
+			if raw, ok, _ := s.m.pg.GetSetting(settingTorSuspendedIDs); ok && raw != "" {
+				_ = json.Unmarshal([]byte(raw), &prev)
+			}
+			merged := append(prev, suspended...)
+			b, _ := json.Marshal(merged)
+			_ = s.m.pg.SetSetting(settingTorSuspendedIDs, string(b))
+		}
+	} else if mode == "hybrid" && s != nil && s.m != nil && s.m.pg != nil {
+		if raw, ok, _ := s.m.pg.GetSetting(settingTorSuspendedIDs); ok && strings.TrimSpace(raw) != "" {
+			var prev []string
+			if json.Unmarshal([]byte(raw), &prev) == nil && len(prev) > 0 {
+				_ = ppV2.Pool.RestoreProxyIDs(prev)
+			}
+			_ = s.m.pg.SetSetting(settingTorSuspendedIDs, "")
+		}
 	}
 
 	torMu.Lock()
@@ -397,6 +457,16 @@ func (s *Server) disableTorInPool() (map[string]any, error) {
 	if ppV2 == nil || ppV2.Pool == nil {
 		return nil, fmt.Errorf("Proxy Pool v2 is not initialized")
 	}
+	// Restore any non-Tor proxies that were temporarily suspended by Exclusive Tor mode!
+	if s != nil && s.m != nil && s.m.pg != nil {
+		if raw, ok, _ := s.m.pg.GetSetting(settingTorSuspendedIDs); ok && strings.TrimSpace(raw) != "" {
+			var prev []string
+			if json.Unmarshal([]byte(raw), &prev) == nil && len(prev) > 0 {
+				_ = ppV2.Pool.RestoreProxyIDs(prev)
+			}
+			_ = s.m.pg.SetSetting(settingTorSuspendedIDs, "")
+		}
+	}
 	if err := ppV2.Pool.ReplaceManagedPrefixProxies(torManagedPrefix, nil, false); err != nil {
 		return nil, err
 	}
@@ -421,10 +491,11 @@ func (s *Server) handleTorStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTorEnable(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Circuits int `json:"circuits"`
+		Circuits int    `json:"circuits"`
+		Mode     string `json:"mode"` // "exclusive" (default: pause non-Tor proxies) | "hybrid" (use Tor + Pool proxies together)
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	out, err := s.enableTorInPool(r.Context(), req.Circuits)
+	out, err := s.enableTorInPool(r.Context(), req.Circuits, req.Mode)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

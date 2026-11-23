@@ -652,6 +652,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedSelfImprovingScannerToolsV1()
 	s.seedLootAndCaptchaToolsV1()
 	s.seedAgentRequestToolsV1()
+	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
@@ -1371,27 +1372,36 @@ func (s *Server) seedAgentRequestToolsV1() {
 }
 
 func (s *Server) seedProxyPoolAgentToolsV1() {
-	const flag = "proxy_pool_agent_tools_v7_posture_verifiers"
+	const flag = "proxy_pool_agent_tools_v8_scraper_and_harvester"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
+	_, _ = s.m.pg.Exec(`UPDATE agents SET web_search=true WHERE key IN ('auto','pentest','patch_watch','proxy_harvester','worker','planner','mainagent')`)
+
 	for _, t := range append(append(append(s.proxyPoolAgentTools(), s.patchMonitorTools()...), s.arsenalTools()...), s.toolUpdateFinding(), s.toolUpdateFindingReport()) {
 		schema, _ := json.Marshal(t.InputSchema())
-		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"})
+		binds, _ := json.Marshal([]string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "proxy_harvester", "retester"})
 		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
 	}
-	proxyFullKeys := []string{"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool", "proxied_tcp_relay"}
+	proxyFullKeys := []string{
+		"check_proxy_status", "import_and_test_proxies", "get_proxy_pool_status", "manage_proxy_pool", "proxied_tcp_relay",
+		"scrape_online_proxies", "list_proxy_scrape_sources", "add_proxy_scrape_source", "remove_proxy_scrape_source", "verify_and_import_scraped_proxies",
+	}
 	arsenalSynergyKeys := []string{
 		"search_patch_arsenal", "save_verified_exploit_to_patch_monitor", "update_finding", "update_finding_report",
 		"detect_deception_and_honeypot", "create_callback_listener", "poll_callback_events",
 		"manage_auth_sessions", "verify_access_control_matrix", "audit_frontend_api_surface",
 		"verify_endpoint_idempotency", "audit_source_routes",
 	}
-	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"} {
+	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "proxy_harvester", "retester"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, proxyFullKeys)
 		_ = s.m.pg.AddAgentToToolBinding(agKey, arsenalSynergyKeys)
 	}
+	// Equip proxy_harvester with search, skill authoring, and capability-request tools so it can self-improve!
+	_ = s.m.pg.AddAgentToToolBinding("proxy_harvester", []string{
+		"multi_engine_search", "create_skill", "update_skill_file", "report_need",
+	})
 	// Read-only / reporting agents also receive check_proxy_status & get_proxy_pool_status so they never guess proxy state.
 	for _, agKey := range []string{"reporter", "asset_mapper"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, []string{"check_proxy_status", "get_proxy_pool_status"})
@@ -1405,7 +1415,7 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 	for _, agKey := range []string{"patch_watch", "auto", "pentest", "worker"} {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, patchTargetKeys)
 	}
-	for _, agKey := range []string{"auto", "pentest", "patch_watch", "planner", "worker"} {
+	for _, agKey := range []string{"auto", "pentest", "patch_watch", "proxy_harvester", "planner", "worker"} {
 		if a, err := s.m.pg.GetAgentByKey(agKey); err == nil && a != nil {
 			if tmpl := agent.BuiltinPromptSeeds()[agKey]; tmpl != "" {
 				if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
@@ -1438,4 +1448,71 @@ func (s *Server) seedProxyPoolAgentToolsV1() {
 	}
 
 	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// syncDiscoveredSkillsVisibility ensures every newly shipped or newly created
+// skill folder under s.skillDir (e.g. captcha-solving, cloud-and-container-audit,
+// deception-and-honeypot-detection, proxy-harvesting) is automatically made
+// visible to operational agents once upon first discovery, while preserving any
+// later manual toggle-off by the operator.
+func (s *Server) syncDiscoveredSkillsVisibility() {
+	if s == nil || s.m == nil || s.m.pg == nil || strings.TrimSpace(s.skillDir) == "" {
+		return
+	}
+	entries, err := os.ReadDir(s.skillDir)
+	if err != nil {
+		return
+	}
+	const settingKey = "auto_seeded_skill_dirs_v1"
+	seeded := map[string]bool{}
+	if raw, ok, _ := s.m.pg.GetSetting(settingKey); ok && strings.TrimSpace(raw) != "" {
+		var list []string
+		if json.Unmarshal([]byte(raw), &list) == nil {
+			for _, k := range list {
+				seeded[k] = true
+			}
+		}
+	}
+
+	targetAgents := []string{"auto", "pentest", "worker", "patch_watch", "mainagent"}
+	var agentIDs []int64
+	for _, ak := range targetAgents {
+		if a, aerr := s.m.pg.GetAgentByKey(ak); aerr == nil && a != nil {
+			agentIDs = append(agentIDs, a.ID)
+		}
+	}
+
+	changed := false
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		if name == "scopesentry" || seeded[name] {
+			continue
+		}
+		if _, stErr := os.Stat(filepath.Join(s.skillDir, name, "SKILL.md")); stErr != nil {
+			continue
+		}
+		for _, aid := range agentIDs {
+			_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, aid, name)
+		}
+		if name == "proxy-harvesting" || name == "osint-and-surface-mapping" {
+			if ph, perr := s.m.pg.GetAgentByKey("proxy_harvester"); perr == nil && ph != nil {
+				_, _ = s.m.pg.Exec(`INSERT INTO agent_skill_visibility(agent_id, skill_name, enabled) VALUES($1, $2, true) ON CONFLICT (agent_id, skill_name) DO UPDATE SET enabled=true`, ph.ID, name)
+			}
+		}
+		seeded[name] = true
+		changed = true
+	}
+
+	if changed {
+		out := make([]string, 0, len(seeded))
+		for k := range seeded {
+			out = append(out, k)
+		}
+		if b, merr := json.Marshal(out); merr == nil {
+			_ = s.m.pg.SetSetting(settingKey, string(b))
+		}
+	}
 }
