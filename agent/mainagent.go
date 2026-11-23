@@ -74,7 +74,7 @@ func (m *MainAgent) compactionWindow() int {
 
 // SetProxy points the main agent's WebFetch at the recording proxy plus the CA
 // cert it trusts to verify HTTPS through it (empty addr = direct).
-func (m *MainAgent) SetProxy(addr, caCert string)      { m.proxyAddr, m.proxyCACert = addr, caCert }
+func (m *MainAgent) SetProxy(addr, caCert string)              { m.proxyAddr, m.proxyCACert = addr, caCert }
 func (m *MainAgent) SetProxyProvider(fn func() string)         { m.proxyAddrFn = fn }
 func (m *MainAgent) SetWebFetchProxyProvider(fn func() string) { m.webFetchProxyFn = fn }
 

@@ -257,4 +257,3 @@ func TestTaskDeduplicationDomainWorkspaceAndModelParser(t *testing.T) {
 		t.Fatalf("unexpected parsed model list: %+v", models)
 	}
 }
-

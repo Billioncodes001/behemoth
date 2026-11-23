@@ -94,82 +94,82 @@ var scraperRT = &proxyScraperRuntime{
 var builtinProxyScrapeSources = []ProxyScrapeSource{
 	{
 		ID: "monosans-socks5", Name: "monosans/proxy-list (SOCKS5 · Hourly Speed-Sorted)",
-		URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+		URL:      "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "monosans-http", Name: "monosans/proxy-list (HTTP · Hourly Speed-Sorted)",
-		URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+		URL:      "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
 		Protocol: "http", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "proxifly-socks5", Name: "proxifly/free-proxy-list (SOCKS5 · 5m Live)",
-		URL: "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+		URL:      "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "proxifly-http", Name: "proxifly/free-proxy-list (HTTP · 5m Live)",
-		URL: "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
+		URL:      "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
 		Protocol: "http", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "proxyscrape-socks5", Name: "ProxyScrape API v2 (SOCKS5 · Fast)",
-		URL: "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=4500&country=all",
+		URL:      "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=4500&country=all",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "proxyscrape-https-elite", Name: "ProxyScrape API v2 (HTTPS · Elite/Anonymous)",
-		URL: "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=4500&ssl=yes&anonymity=elite,anonymous",
+		URL:      "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=4500&ssl=yes&anonymity=elite,anonymous",
 		Protocol: "http", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "jetkai-socks5", Name: "jetkai/proxy-list (Online SOCKS5)",
-		URL: "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
+		URL:      "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "jetkai-https", Name: "jetkai/proxy-list (Online HTTPS)",
-		URL: "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",
+		URL:      "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",
 		Protocol: "http", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "dinoz0rg-socks5", Name: "dinoz0rg/proxy-list (Checked SOCKS5)",
-		URL: "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt",
+		URL:      "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "elliottophellia-socks5", Name: "elliottophellia/proxylist (Checked SOCKS5)",
-		URL: "https://raw.githubusercontent.com/elliottophellia/proxylist/master/results/socks5/global/socks5_checked.txt",
+		URL:      "https://raw.githubusercontent.com/elliottophellia/proxylist/master/results/socks5/global/socks5_checked.txt",
 		Protocol: "socks5", Priority: true, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "hookzof-socks5", Name: "hookzof/socks5_list (SOCKS5)",
-		URL: "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+		URL:      "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
 		Protocol: "socks5", Priority: false, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "hideip-socks5", Name: "zloi-user/hideip.me (SOCKS5 · 10m)",
-		URL: "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
+		URL:      "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
 		Protocol: "socks5", Priority: false, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "hideip-connect", Name: "zloi-user/hideip.me (HTTPS CONNECT · 10m)",
-		URL: "https://raw.githubusercontent.com/zloi-user/hideip.me/main/connect.txt",
+		URL:      "https://raw.githubusercontent.com/zloi-user/hideip.me/main/connect.txt",
 		Protocol: "http", Priority: false, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "sunny9577-socks5", Name: "sunny9577/proxy-scraper (SOCKS5 · 3h)",
-		URL: "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/socks5_proxies.txt",
+		URL:      "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/socks5_proxies.txt",
 		Protocol: "socks5", Priority: false, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "thespeedx-socks5", Name: "TheSpeedX/PROXY-List (SOCKS5)",
-		URL: "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+		URL:      "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
 		Protocol: "socks5", Priority: false, Builtin: true, Enabled: true,
 	},
 	{
 		ID: "thespeedx-http", Name: "TheSpeedX/PROXY-List (HTTP)",
-		URL: "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+		URL:      "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
 		Protocol: "http", Priority: false, Builtin: true, Enabled: true,
 	},
 }
@@ -1210,10 +1210,10 @@ func (s *Server) toolAddProxyScrapeSource() actool.CoreTool {
 			}
 
 			return jsonResult(map[string]any{
-				"added":               true,
-				"source":              newSrc,
+				"added":                true,
+				"source":               newSrc,
 				"candidates_extracted": candCount,
-				"verified_imported":   verifiedCount,
+				"verified_imported":    verifiedCount,
 			})
 		})
 }

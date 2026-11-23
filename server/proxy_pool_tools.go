@@ -232,17 +232,22 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
 	return map[string]any{
-		"proxy_enabled":              anyOutbound,
-		"any_proxy_enabled":          anyOutbound,
-		"effective_routing_mode":     routingMode,
-		"local_proxy_env_url":        localForwarder,
-		"exclusive_tor_active":       exclusiveTor,
-		"proxy_pool_enabled":         poolEnabled,
-		"proxy_pool_active":          poolActive,
-		"proxy_pool_exhausted":       poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
-		"fail_closed":                poolEnabled || exclusiveTor,
-		"global_proxy_enabled":       globalActive,
-		"static_global_proxy":        maskSecrets(func() string { if s.m != nil { return s.m.StaticGlobalProxy() }; return "" }()),
+		"proxy_enabled":          anyOutbound,
+		"any_proxy_enabled":      anyOutbound,
+		"effective_routing_mode": routingMode,
+		"local_proxy_env_url":    localForwarder,
+		"exclusive_tor_active":   exclusiveTor,
+		"proxy_pool_enabled":     poolEnabled,
+		"proxy_pool_active":      poolActive,
+		"proxy_pool_exhausted":   poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
+		"fail_closed":            poolEnabled || exclusiveTor,
+		"global_proxy_enabled":   globalActive,
+		"static_global_proxy": maskSecrets(func() string {
+			if s.m != nil {
+				return s.m.StaticGlobalProxy()
+			}
+			return ""
+		}()),
 		"local_traffic_capture_only": trafficCapture && !anyOutbound,
 		"traffic_capture":            trafficCapture,
 		"active_proxy_id":            activeProxyID,

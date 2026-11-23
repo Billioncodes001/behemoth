@@ -386,6 +386,3 @@ func TestExclusiveTorAutoDisablesPoolAndPoolEnableShutsDownExclusiveTor(t *testi
 		t.Fatalf("expected running agent to switch back to pool proxy after Exclusive Tor auto-shutdown, got %q", string(b3))
 	}
 }
-
-
-
