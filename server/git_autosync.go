@@ -2,28 +2,37 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+const webhookMinCooldown = 20 * time.Second
+
 type maintenanceState struct {
-	mu          sync.RWMutex
-	Updating    bool      `json:"updating"`
-	Phase       string    `json:"phase,omitempty"`
-	CurrentSHA  string    `json:"current_sha,omitempty"`
-	TargetSHA   string    `json:"target_sha,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-	LastChecked time.Time `json:"last_checked,omitempty"`
-	LastResult  string    `json:"last_result,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
-	AutoSyncOn  bool      `json:"auto_sync_enabled"`
+	mu              sync.RWMutex
+	Updating        bool      `json:"updating"`
+	Phase           string    `json:"phase,omitempty"`
+	CurrentSHA      string    `json:"current_sha,omitempty"`
+	TargetSHA       string    `json:"target_sha,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	LastChecked     time.Time `json:"last_checked,omitempty"`
+	LastWebhookCall time.Time `json:"-"`
+	LastResult      string    `json:"last_result,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	AutoSyncOn      bool      `json:"auto_sync_enabled"`
 }
 
 var maintState = &maintenanceState{AutoSyncOn: true}
@@ -72,9 +81,77 @@ func (s *Server) handleMaintenanceStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, getMaintenanceSnapshot())
 }
 
+func (s *Server) configuredWebhookSecret() string {
+	if v := strings.TrimSpace(os.Getenv("ARTEX_WEBHOOK_SECRET")); v != "" {
+		return v
+	}
+	if s != nil && s.m != nil && s.m.pg != nil {
+		if v, ok, _ := s.m.pg.GetSetting("webhook_secret"); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func verifyGitWebhookAuth(r *http.Request, secret string, body []byte) bool {
+	if secret == "" {
+		return true
+	}
+	if tok := strings.TrimSpace(r.Header.Get("X-Artex-Webhook-Token")); tok != "" {
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(secret)) == 1 {
+			return true
+		}
+	}
+	if auth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(auth, "Bearer ") {
+		tok := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(secret)) == 1 {
+			return true
+		}
+	}
+	if sig := strings.TrimSpace(r.Header.Get("X-Hub-Signature-256")); strings.HasPrefix(sig, "sha256=") {
+		gotHex := strings.TrimPrefix(sig, "sha256=")
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write(body)
+		wantHex := hex.EncodeToString(mac.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(strings.ToLower(gotHex)), []byte(wantHex)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // POST /api/update/webhook & POST /api/update/git-sync — triggers an immediate git check & live update.
 func (s *Server) handleTriggerGitSync(w http.ResponseWriter, r *http.Request) {
-	go s.checkAndApplyGitUpdate(s.ctx, true)
+	isPublicWebhook := r.URL != nil && r.URL.Path == "/api/update/webhook"
+	if isPublicWebhook {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			writeErr(w, http.StatusRequestEntityTooLarge, "Webhook payload too large")
+			return
+		}
+		if secret := s.configuredWebhookSecret(); secret != "" && !verifyGitWebhookAuth(r, secret, body) {
+			writeErr(w, http.StatusUnauthorized, "Invalid or missing webhook signature/token")
+			return
+		}
+		now := time.Now()
+		maintState.mu.Lock()
+		if !maintState.LastWebhookCall.IsZero() && now.Sub(maintState.LastWebhookCall) < webhookMinCooldown {
+			retry := int((webhookMinCooldown - now.Sub(maintState.LastWebhookCall)).Seconds())
+			if retry < 1 {
+				retry = 1
+			}
+			maintState.mu.Unlock()
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			writeErr(w, http.StatusTooManyRequests, "Webhook sync rate-limited; retry shortly")
+			return
+		}
+		maintState.LastWebhookCall = now
+		maintState.mu.Unlock()
+	}
+
+	if s != nil && s.ctx != nil {
+		go s.checkAndApplyGitUpdate(s.ctx, true)
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"ok":      true,
 		"message": "Git repository sync check triggered",

@@ -28,7 +28,7 @@ func isProxyFailure(err error) bool {
 		return false
 	}
 	s := strings.ToLower(err.Error())
-	for _, part := range []string{"proxyconnect", "proxy connection", "proxy error", "proxy handshake", "socks handshake", "failed to connect to proxy", "connect to proxy"} {
+	for _, part := range []string{"proxyconnect", "proxy connection", "proxy error", "proxy handshake", "socks handshake", "failed to connect to proxy", "connect to proxy", "fail-closed proxy guard"} {
 		if strings.Contains(s, part) {
 			return true
 		}
@@ -45,7 +45,7 @@ func isGlobalProxyDialFailure(err error) bool {
 		return false
 	}
 	s := strings.ToLower(err.Error())
-	for _, part := range []string{"proxyconnect", "proxy connection", "proxy error", "proxy handshake", "socks", "connect to proxy", "upstream proxy", "connection refused", "connection reset", "network is unreachable", "broken pipe", "unexpected eof", "eof"} {
+	for _, part := range []string{"proxyconnect", "proxy connection", "proxy error", "proxy handshake", "socks", "connect to proxy", "upstream proxy", "fail-closed proxy guard", "connection refused", "connection reset", "network is unreachable", "broken pipe", "unexpected eof", "eof"} {
 		if strings.Contains(s, part) {
 			return true
 		}

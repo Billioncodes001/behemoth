@@ -129,10 +129,34 @@ func solveCaptchaRun(s *Server) func(context.Context, json.RawMessage) (actool.R
 			timeout = 15 * time.Minute
 		}
 
+		// Enforce Zero-IP-Leak & Fail-Closed Proxy Guard for target-facing CAPTCHA requests
+		// (mode=form and mode=ocr). When the caller omits `proxy`, automatically route through
+		// ARTEX's active OutboundProxyAddr (Exclusive Tor / Proxy Pool / Global Proxy), and
+		// abort immediately if the Proxy Pool is in Fail-Closed state with 0 healthy proxies.
+		effectiveProxy := strings.TrimSpace(a.Proxy)
+		usedManagedProxy := false
+		if effectiveProxy == "" && s != nil && s.m != nil {
+			if s.m.IsProxyPoolFailClosed() && strings.TrimSpace(s.m.GlobalProxy()) == "" && mode != "token" {
+				fcErr := fmt.Errorf("ARTEX Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct CAPTCHA request blocked")
+				s.handleProxyToolFailure(ctx, fcErr)
+				return jsonResult(map[string]any{"error": fcErr.Error()})
+			}
+			if out := strings.TrimSpace(s.m.OutboundProxyAddr()); out != "" {
+				effectiveProxy = out
+				usedManagedProxy = true
+			} else if gp := strings.TrimSpace(s.m.GlobalProxy()); gp != "" {
+				effectiveProxy = gp
+				usedManagedProxy = true
+			}
+		}
+
 		switch mode {
 		case "ocr":
-			img, err := s.captchaImageBytes(ctx, a.ImageURL, a.ImageBase64, a.Proxy)
+			img, err := s.captchaImageBytes(ctx, a.ImageURL, a.ImageBase64, effectiveProxy)
 			if err != nil {
+				if usedManagedProxy {
+					s.handleProxyToolFailure(ctx, err)
+				}
 				return jsonResult(map[string]any{"error": err.Error()})
 			}
 			res, err := captcha.SolveImageCaptcha(ctx, img, captcha.OCRRequest{CharWhitelist: a.CharWhitelist})
@@ -179,10 +203,13 @@ func solveCaptchaRun(s *Server) func(context.Context, json.RawMessage) (actool.R
 				MaxAttempts:      a.MaxAttempts,
 				Delay:            time.Duration(a.DelaySeconds * float64(time.Second)),
 				Timeout:          timeout,
-				ProxyURL:         a.Proxy,
+				ProxyURL:         effectiveProxy,
 				OCR:              captcha.OCRRequest{CharWhitelist: a.CharWhitelist},
 			}
 			res, err := captcha.SolveForm(ctx, req)
+			if err != nil && usedManagedProxy {
+				s.handleProxyToolFailure(ctx, err)
+			}
 			if err != nil && res.ElapsedMS == 0 {
 				return jsonResult(map[string]any{"error": err.Error()})
 			}

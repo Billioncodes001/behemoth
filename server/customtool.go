@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -460,7 +461,7 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if spec.UseRecordingProxy || strings.TrimSpace(spec.Proxy) == strings.TrimSpace(s.m.GlobalProxy()) {
+		if spec.UseRecordingProxy || (s.m != nil && s.m.HasOutboundProxy()) || (s.m != nil && strings.TrimSpace(spec.Proxy) == strings.TrimSpace(s.m.GlobalProxy())) {
 			s.handleProxyToolFailure(runCtx, err)
 		}
 		return actool.Errorf("request failed: " + maskSecrets(err.Error())), nil
@@ -472,12 +473,23 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	return actool.Text(actool.Capture(tc, string(b))), nil
 }
 
+func newFailClosedHTTPTransport() *http.Transport {
+	blockDial := func(_ context.Context, _, _ string) (net.Conn, error) {
+		return nil, fmt.Errorf("ARTEX Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct connection blocked")
+	}
+	return &http.Transport{
+		Proxy:          nil,
+		DialContext:    blockDial,
+		DialTLSContext: blockDial,
+	}
+}
+
 // httpProxyTransport builds a Transport for the http tool's proxy config, or nil
 // (direct). use_recording_proxy routes through the recording proxy + trusts its CA.
 func (s *Server) httpProxyTransport(spec httpExec) *http.Transport {
 	proxyStr := strings.TrimSpace(spec.Proxy)
 	var caFile string
-	if spec.UseRecordingProxy {
+	if spec.UseRecordingProxy && s != nil && s.m != nil {
 		// ProxyAddr is already a complete URL while capture is enabled, and
 		// returns the configured global proxy URL when capture is off. Keep both
 		// forms intact (including socks5:// and credentials).
@@ -488,9 +500,21 @@ func (s *Server) httpProxyTransport(spec httpExec) *http.Transport {
 			}
 		} else if global := strings.TrimSpace(s.m.GlobalProxy()); global != "" {
 			proxyStr = global
+		} else if s.m.HasOutboundProxy() {
+			proxyStr = strings.TrimSpace(s.m.OutboundProxyAddr())
+		}
+	} else if proxyStr == "" && s != nil && s.m != nil && s.m.HasOutboundProxy() {
+		// Enforce Zero-IP-Leak even when a custom HTTP tool omits UseRecordingProxy/Proxy.
+		if global := strings.TrimSpace(s.m.GlobalProxy()); global != "" {
+			proxyStr = global
+		} else {
+			proxyStr = strings.TrimSpace(s.m.OutboundProxyAddr())
 		}
 	}
 	if proxyStr == "" {
+		if s != nil && s.m != nil && s.m.IsProxyPoolFailClosed() {
+			return newFailClosedHTTPTransport()
+		}
 		return nil
 	}
 	pu, err := url.Parse(proxyStr)

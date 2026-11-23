@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
@@ -580,11 +581,8 @@ func (s *Server) runOnlineScrapeCycle(parentCtx context.Context, manual bool) ma
 		appendScraperLog("info", "Host IP leak-guard baseline initialized (transparent proxies echoing host IP will be rejected).")
 	}
 
-	// Fetch all sources concurrently using direct HTTP client (not target proxy)
-	fetchClient := &http.Client{
-		Timeout:   8 * time.Second,
-		Transport: &http.Transport{Proxy: nil},
-	}
+	// Fetch all sources concurrently using SSRF-guarded direct HTTP client
+	fetchClient := newSafePublicFeedClient(8 * time.Second)
 	var candMu sync.Mutex
 	var priorityCands, bulkCands []rawCandidateProxy
 	var fwg sync.WaitGroup
@@ -1055,6 +1053,81 @@ func (s *Server) toolListProxyScrapeSources() actool.CoreTool {
 		})
 }
 
+func isNonPublicScrapeIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+		// Block RFC 6598 CGNAT (100.64.0.0/10) as well as standard private/loopback/link-local ranges
+		if ip[0] == 100 && ip[1]&0xc0 == 64 {
+			return true
+		}
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast()
+}
+
+func validatePublicScrapeFeedURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Hostname() == "" {
+		return nil, fmt.Errorf("valid public http/https URL is required")
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(u.Hostname()), "."))
+	if zone := strings.IndexByte(host, '%'); zone >= 0 {
+		host = host[:zone]
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return nil, fmt.Errorf("private/local feed host %q is not allowed", host)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil && repeaterLooksNumericHost(host) {
+		var ok bool
+		ip, ok = repeaterParseLegacyIPv4(host)
+		if !ok {
+			return nil, fmt.Errorf("numeric host address %q rejected", host)
+		}
+	}
+	if ip != nil && isNonPublicScrapeIP(ip) {
+		return nil, fmt.Errorf("private, loopback, or metadata IP %s is not allowed for proxy scrape feeds", ip)
+	}
+	return u, nil
+}
+
+func scraperBlockNonPublicDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || isNonPublicScrapeIP(ip) {
+		return fmt.Errorf("blocked non-public dial address %s for proxy scrape feed", host)
+	}
+	return nil
+}
+
+func newSafePublicFeedClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   timeout,
+				KeepAlive: 15 * time.Second,
+				Control:   scraperBlockNonPublicDial,
+			}).DialContext,
+		},
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			_, err := validatePublicScrapeFeedURL(next.URL.String())
+			return err
+		},
+	}
+}
+
 func (s *Server) toolAddProxyScrapeSource() actool.CoreTool {
 	return wrTool("add_proxy_scrape_source",
 		"Register a newly discovered online proxy feed URL (raw GitHub TXT, CSV, JSON, or public proxy API) into ARTEX's persistent Online Proxy Scraper registry and optionally test & verify its proxies immediately.",
@@ -1076,9 +1149,9 @@ func (s *Server) toolAddProxyScrapeSource() actool.CoreTool {
 			if err := json.Unmarshal(in, &a); err != nil {
 				return actool.Errorf("invalid input JSON: " + err.Error()), nil
 			}
-			u, err := url.Parse(strings.TrimSpace(a.URL))
-			if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-				return actool.Errorf("valid http/https URL is required"), nil
+			u, err := validatePublicScrapeFeedURL(a.URL)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
 			}
 			proto := strings.ToLower(strings.TrimSpace(a.Protocol))
 			if proto != "socks5" && proto != "http" {
@@ -1118,7 +1191,7 @@ func (s *Server) toolAddProxyScrapeSource() actool.CoreTool {
 			verifiedCount := 0
 			candCount := 0
 			if testNow {
-				cl := &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{Proxy: nil}}
+				cl := newSafePublicFeedClient(8 * time.Second)
 				if resp, ferr := cl.Get(newSrc.URL); ferr == nil {
 					b, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 					_ = resp.Body.Close()

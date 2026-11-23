@@ -39,9 +39,15 @@ jobs:
       LIVE_PROD_URL: ${{ vars.LIVE_PROD_URL || 'https://console.internaldirective.org' }}
     steps:
       - name: Trigger ARTEX live production Git sync webhook
+        env:
+          ARTEX_WEBHOOK_SECRET: ${{ secrets.ARTEX_WEBHOOK_SECRET }}
         run: |
           echo "Triggering Git sync on ${LIVE_PROD_URL%/}/api/update/webhook..."
-          curl -fsS --connect-timeout 10 --max-time 25 -X POST "${LIVE_PROD_URL%/}/api/update/webhook" || \
+          AUTH_ARGS=()
+          if [ -n "${ARTEX_WEBHOOK_SECRET:-}" ]; then
+            AUTH_ARGS=(-H "X-Artex-Webhook-Token: ${ARTEX_WEBHOOK_SECRET}")
+          fi
+          curl -fsS --connect-timeout 10 --max-time 25 -X POST "${AUTH_ARGS[@]}" "${LIVE_PROD_URL%/}/api/update/webhook" || \
             echo "::warning::Live production webhook was unreachable; background 60s auto-sync on server will catch up."
 
   deploy:

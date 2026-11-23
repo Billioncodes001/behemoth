@@ -25,15 +25,56 @@ const (
 	maxWorkspaceUpload = 512 << 20 // 512 MiB per upload request
 )
 
+// wsCanonicalBase resolves symlinks on the workspace root itself (e.g. macOS /var -> /private/var)
+// so symlink containment checks compare canonical paths accurately.
+func (s *Server) wsCanonicalBase() string {
+	base := filepath.Clean(s.m.dir)
+	if realBase, err := filepath.EvalSymlinks(base); err == nil && realBase != "" {
+		return filepath.Clean(realBase)
+	}
+	return base
+}
+
+// wsContainsResolved verifies that p (and its deepest existing ancestor on disk)
+// resolves via EvalSymlinks to a location strictly inside the workspace root.
+// Internal workspace symlinks (such as sessions/conv-N/<domain> -> domains/<domain>)
+// remain allowed, while any symlink pointing outside s.m.dir is rejected.
+func (s *Server) wsContainsResolved(abs string) bool {
+	realBase := s.wsCanonicalBase()
+	cur := filepath.Clean(abs)
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			cand := filepath.Clean(resolved)
+			for i := len(suffix) - 1; i >= 0; i-- {
+				cand = filepath.Join(cand, suffix[i])
+			}
+			cand = filepath.Clean(cand)
+			return cand == realBase || strings.HasPrefix(cand, realBase+string(os.PathSeparator))
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+	}
+}
+
 // wsResolve maps a user-supplied relative path to an absolute path INSIDE the work
-// dir. It returns ok=false if the path would escape the root. filepath.Clean on a
-// rooted copy collapses any ".." so nothing can climb above the root.
+// dir. It returns ok=false if the path (or any symlink along it) would escape the root.
 func (s *Server) wsResolve(rel string) (string, bool) {
+	if s == nil || s.m == nil || strings.TrimSpace(s.m.dir) == "" {
+		return "", false
+	}
 	base := filepath.Clean(s.m.dir)
 	rel = strings.TrimPrefix(strings.TrimSpace(rel), "/")
 	clean := filepath.Clean("/" + rel) // e.g. "/a/../../etc" → "/etc" (still rooted at "/")
 	abs := filepath.Clean(filepath.Join(base, clean))
 	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
+		return "", false
+	}
+	if !s.wsContainsResolved(abs) {
 		return "", false
 	}
 	return abs, true
@@ -200,7 +241,10 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 	out := make([]wsEntry, 0, len(ents))
 	for _, e := range ents {
 		fullEntryPath := filepath.Join(abs, e.Name())
-		info, err := os.Stat(fullEntryPath) // follow symlinks (e.g. session -> domains/<domain>)
+		if !s.wsContainsResolved(fullEntryPath) {
+			continue
+		}
+		info, err := os.Stat(fullEntryPath) // follow internal symlinks (e.g. session -> domains/<domain>)
 		if err != nil {
 			info, err = e.Info()
 			if err != nil {
@@ -356,12 +400,12 @@ func (s *Server) wsDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wsDownload(w http.ResponseWriter, r *http.Request) {
 	abs, ok := s.wsResolve(r.URL.Query().Get("path"))
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
-		writeErr(w, 404, "文件不存在")
+		writeErr(w, 404, "File does not exist")
 		return
 	}
 	name := filepath.Base(abs)
@@ -379,13 +423,13 @@ func (s *Server) wsPreview(w http.ResponseWriter, r *http.Request) {
 	if filepath.IsAbs(rawPath) {
 		base := filepath.Clean(s.m.dir)
 		candidate := filepath.Clean(rawPath)
-		ok = candidate == base || strings.HasPrefix(candidate, base+string(os.PathSeparator))
+		ok = (candidate == base || strings.HasPrefix(candidate, base+string(os.PathSeparator))) && s.wsContainsResolved(candidate)
 		if ok {
 			abs = candidate
 		}
 	}
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	fi, err := os.Stat(abs)
@@ -400,12 +444,12 @@ func (s *Server) wsPreview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil || fi.IsDir() {
-		writeErr(w, 404, "文件不存在")
+		writeErr(w, 404, "File does not exist")
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(abs))
 	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" && ext != ".gif" {
-		writeErr(w, 415, "仅支持图片预览")
+		writeErr(w, 415, "Only image preview is supported")
 		return
 	}
 	if s.m.pg.GetBool(settingScreenshotTimestamp, false) {
@@ -441,6 +485,9 @@ func (s *Server) findSessionPreview(rawPath string) (string, bool) {
 	var newest string
 	var newestTime int64
 	for _, candidate := range matches {
+		if !s.wsContainsResolved(candidate) {
+			continue
+		}
 		info, statErr := os.Stat(candidate)
 		if statErr != nil || info.IsDir() {
 			continue
@@ -503,6 +550,9 @@ func (s *Server) resolveSessionScreenshot(rel string) (string, bool) {
 	var newest string
 	var newestTime int64
 	for _, candidate := range matches {
+		if !s.wsContainsResolved(candidate) {
+			continue
+		}
 		info, statErr := os.Stat(candidate)
 		if statErr != nil || info.IsDir() {
 			continue
@@ -518,21 +568,21 @@ func (s *Server) resolveSessionScreenshot(rel string) (string, bool) {
 func (s *Server) wsUpload(w http.ResponseWriter, r *http.Request) {
 	dirAbs, ok := s.wsResolve(r.URL.Query().Get("path"))
 	if !ok {
-		writeErr(w, 400, "非法路径")
+		writeErr(w, 400, "Invalid path")
 		return
 	}
 	if fi, err := os.Stat(dirAbs); err != nil || !fi.IsDir() {
-		writeErr(w, 400, "目标目录不存在")
+		writeErr(w, 400, "Target directory does not exist")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxWorkspaceUpload)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeErr(w, 400, "解析上传失败或超出大小限制："+err.Error())
+		writeErr(w, 400, "Failed to parse upload or size limit exceeded: "+err.Error())
 		return
 	}
 	files := r.MultipartForm.File["file"]
 	if len(files) == 0 {
-		writeErr(w, 400, "缺少上传文件(表单字段 file)")
+		writeErr(w, 400, "Missing upload file (form field 'file')")
 		return
 	}
 	saved := 0
