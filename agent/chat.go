@@ -197,6 +197,8 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		opts.Hooks = c.guard.Hooks()
 	}
 	opts.Hooks = WrapChatContinuationHooks(opts.Hooks, agentKey, boundToolMap, message, agentKey+"-"+sessionID, 8)
+	// Extra run budgets (tokens / tool calls). Unconfigured agents get no wrappers.
+	applyRunBudget(&opts, agentKey)
 	if c.tx != nil { // persist raw human↔AI conversation; one accumulating file per thread
 		opts.Transcript = c.tx
 		opts.SessionID = sessionID

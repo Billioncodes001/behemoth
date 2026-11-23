@@ -1,6 +1,7 @@
 "use client";
 
 import { enUS } from "date-fns/locale/en-US";
+import { ja } from "date-fns/locale/ja";
 import { zhCN } from "date-fns/locale/zh-CN";
 import { useTranslation } from "react-i18next";
 
@@ -11,7 +12,7 @@ export function useDateLocale() {
   const locale = resolveLocale(i18n.resolvedLanguage);
   return {
     locale,
-    dateLocale: locale === "zh-CN" ? zhCN : enUS,
-    datePattern: locale === "zh-CN" ? "yyyy年M月d日" : "MMM d, yyyy",
+    dateLocale: locale === "zh-CN" ? zhCN : locale === "ja" ? ja : enUS,
+    datePattern: locale === "zh-CN" ? "yyyy年M月d日" : locale === "ja" ? "yyyy年M月d日" : "MMM d, yyyy",
   };
 }

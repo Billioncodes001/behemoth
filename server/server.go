@@ -474,6 +474,15 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 			}
 			return a.WrapupMaxTurns, true
 		}
+		// Wire DB-stored extra run budgets (tokens / tool calls). 0 = unlimited.
+		agent.BudgetOverride = func(key string) (agent.BudgetLimits, bool) {
+			a, err := m.pg.GetAgentByKey(key)
+			if err != nil || a == nil {
+				return agent.BudgetLimits{}, false
+			}
+			limits := agent.BudgetLimits{MaxTokens: a.TokenBudget, MaxToolCalls: a.ToolCallBudget}
+			return limits, limits.Enabled()
+		}
 		// Wire DB-stored TASK-TIMEOUT wrap-up prompt/turns (worker/planner). Empty/0 → default.
 		agent.WrapupTaskTimeoutOverride = func(key string) (string, bool) {
 			a, err := m.pg.GetAgentByKey(key)

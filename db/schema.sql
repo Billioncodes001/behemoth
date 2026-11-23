@@ -804,6 +804,8 @@ CREATE TABLE IF NOT EXISTS agents (
     llm_profile_id    BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL,
     current_prompt_id BIGINT,
     max_turns         INTEGER NOT NULL DEFAULT 0,
+    token_budget      INTEGER NOT NULL DEFAULT 0,
+    tool_call_budget  INTEGER NOT NULL DEFAULT 0,
     run_seconds       INTEGER NOT NULL DEFAULT 1200,
     web_search        BOOLEAN NOT NULL DEFAULT false,
     interactive_shell BOOLEAN NOT NULL DEFAULT false,
@@ -826,6 +828,9 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS trigger_max_parallel INTEGER NOT NUL
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
 -- run_seconds 单次 run 墙钟默认 600→1200:只改列默认(影响将来新插入的行),不动旧库存量行。
 ALTER TABLE agents ALTER COLUMN run_seconds SET DEFAULT 1200;
+-- 额外的单次 run 预算维度(令牌数/工具调用数);0=不限制。已发版旧库由此补列。
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS token_budget     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS tool_call_budget INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_agents_llm_profile ON agents(llm_profile_id) WHERE llm_profile_id IS NOT NULL;
 DROP TRIGGER IF EXISTS trg_agents_upd ON agents;
 CREATE TRIGGER trg_agents_upd BEFORE UPDATE ON agents

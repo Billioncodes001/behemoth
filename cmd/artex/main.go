@@ -18,6 +18,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/evidence"
 	"github.com/Autumn-27/artex/selfupdate"
 	"github.com/Autumn-27/artex/server"
 )
@@ -42,6 +43,34 @@ func printBanner(addr string) {
 		version, runtime.GOOS, runtime.GOARCH, runtime.Version(), addr)
 }
 
+// runEvidenceVerify replays the tamper-evident JSONL chain of one or more agent
+// run logs and reports each verdict. Exit code 1 if any log fails verification
+// (or cannot be read), so it is usable from scripts/CI.
+func runEvidenceVerify(paths []string) int {
+	failed := false
+	for _, path := range paths {
+		v, err := evidence.VerifyRunLog(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL  %s: %v\n", path, err)
+			failed = true
+			continue
+		}
+		if v.Valid {
+			fmt.Printf("OK    %s  records=%d  head=%s\n", v.Path, v.Records, v.HeadHash)
+			continue
+		}
+		failed = true
+		fmt.Printf("FAIL  %s  records=%d  head=%s\n", v.Path, v.Records, v.HeadHash)
+		for _, problem := range v.Problems {
+			fmt.Printf("      - %s\n", problem)
+		}
+	}
+	if failed {
+		return 1
+	}
+	return 0
+}
+
 // main only maps run's result onto the process exit code. The exit code is part
 // of the update protocol — the supervising start script reads it to decide
 // whether to relaunch us (see selfupdate.ExitRestart) — so the body has to live
@@ -51,15 +80,20 @@ func main() {
 }
 
 func run() int {
+	// `artex evidence verify <file.jsonl> [...]` — replay a run log's hash chain.
+	// Intercepted before flag.Parse because it is a subcommand, not a flag.
+	if len(os.Args) >= 4 && os.Args[1] == "evidence" && os.Args[2] == "verify" {
+		return runEvidenceVerify(os.Args[3:])
+	}
 	var (
-		addr            = flag.String("addr", ":8787", "HTTP listen address")
-		dataDir         = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
-		proxy           = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
-		genLicense      = flag.Bool("generate-license", false, "generate a signed commercial ARTEX-LIC-* customer license key and exit")
-		licCustomer     = flag.String("license-customer", "", "customer / organization name for --generate-license")
-		licTier         = flag.String("license-tier", "Enterprise", "license tier for --generate-license (Starter | Professional | Enterprise)")
-		licDays         = flag.Int("license-days", 365, "validity in days for --generate-license")
-		licMaxWorkers   = flag.Int("license-max-workers", 20, "max concurrent workers for --generate-license")
+		addr          = flag.String("addr", ":8787", "HTTP listen address")
+		dataDir       = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
+		proxy         = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
+		genLicense    = flag.Bool("generate-license", false, "generate a signed commercial ARTEX-LIC-* customer license key and exit")
+		licCustomer   = flag.String("license-customer", "", "customer / organization name for --generate-license")
+		licTier       = flag.String("license-tier", "Enterprise", "license tier for --generate-license (Starter | Professional | Enterprise)")
+		licDays       = flag.Int("license-days", 365, "validity in days for --generate-license")
+		licMaxWorkers = flag.Int("license-max-workers", 20, "max concurrent workers for --generate-license")
 	)
 	flag.Parse()
 

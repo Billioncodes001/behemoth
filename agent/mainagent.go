@@ -193,6 +193,8 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		noaSession = fmt.Sprintf("exp%d-main-s%d", ts.ID(), mainSeg)
 	}
 	enableNoa(&opts, m.noaEnabledFn, m.workDir, noaSession, noaWarn(noaSession))
+	// Extra run budgets (tokens / tool calls). Unconfigured agents get no wrappers.
+	applyRunBudget(&opts, "mainagent")
 	ctx = attachSideCapture(ctx, &opts)
 	s := newAgentSession(opts)
 	defer s.Close()

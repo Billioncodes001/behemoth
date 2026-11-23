@@ -458,15 +458,20 @@ func (d *DB) SetActiveProfile(id int64) error {
 // ---------- Agents / prompts ----------
 
 type Agent struct {
-	ID               int64  `json:"id"`
-	Key              string `json:"key"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	Role             string `json:"role"`
-	Builtin          bool   `json:"builtin"`
-	Enabled          bool   `json:"enabled"`
-	LLMProfileID     *int64 `json:"llm_profile_id"`    // 绑定的 LLM 配置;nil=跟随任务/会话 pin,再回退全局激活
-	MaxTurns         int    `json:"max_turns"`         // 单次运行最大轮次;0=不限制
+	ID           int64  `json:"id"`
+	Key          string `json:"key"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Role         string `json:"role"`
+	Builtin      bool   `json:"builtin"`
+	Enabled      bool   `json:"enabled"`
+	LLMProfileID *int64 `json:"llm_profile_id"` // 绑定的 LLM 配置;nil=跟随任务/会话 pin,再回退全局激活
+	MaxTurns     int    `json:"max_turns"`      // 单次运行最大轮次;0=不限制
+	// TokenBudget / ToolCallBudget 是额外的单次 run 预算维度(agent/budget.go):
+	// 累计消耗的令牌数 / 工具调用数达到上限后,后续探测工具直接返回"预算耗尽"并
+	// 要求落库收尾;0=不限制。与 MaxTurns(轮次)、RunSecs(墙钟)相互独立。
+	TokenBudget      int    `json:"token_budget"`
+	ToolCallBudget   int    `json:"tool_call_budget"`
 	RunSecs          int    `json:"run_seconds"`       // worker 单次运行墙钟上限(秒);0=不限制
 	WebSearch        bool   `json:"web_search"`        // 是否启用网络搜索(受系统全局开关门控)
 	InteractiveShell bool   `json:"interactive_shell"` // 是否启用交互式 shell(持久 PTY 会话工具族)
@@ -484,12 +489,12 @@ type Agent struct {
 	TriggerMaxParallel int    `json:"trigger_max_parallel"`
 }
 
-const agentCols = `id,key,name,COALESCE(description,''),role,builtin,enabled,COALESCE(max_turns,0),COALESCE(run_seconds,600),COALESCE(web_search,false),COALESCE(interactive_shell,false),COALESCE(wrapup_prompt,''),COALESCE(wrapup_max_turns,0),COALESCE(task_timeout_wrapup_prompt,''),COALESCE(task_timeout_wrapup_max_turns,0),COALESCE(trigger_run_mode,'serial'),COALESCE(trigger_merge_mode,'all'),COALESCE(trigger_max_parallel,5),llm_profile_id`
+const agentCols = `id,key,name,COALESCE(description,''),role,builtin,enabled,COALESCE(max_turns,0),COALESCE(run_seconds,600),COALESCE(web_search,false),COALESCE(interactive_shell,false),COALESCE(wrapup_prompt,''),COALESCE(wrapup_max_turns,0),COALESCE(task_timeout_wrapup_prompt,''),COALESCE(task_timeout_wrapup_max_turns,0),COALESCE(trigger_run_mode,'serial'),COALESCE(trigger_merge_mode,'all'),COALESCE(trigger_max_parallel,5),COALESCE(token_budget,0),COALESCE(tool_call_budget,0),llm_profile_id`
 
 func scanAgent(sc interface{ Scan(...any) error }) (*Agent, error) {
 	var a Agent
 	var prof sql.NullInt64 // llm_profile_id 可空:未绑定时为 NULL
-	err := sc.Scan(&a.ID, &a.Key, &a.Name, &a.Description, &a.Role, &a.Builtin, &a.Enabled, &a.MaxTurns, &a.RunSecs, &a.WebSearch, &a.InteractiveShell, &a.WrapupPrompt, &a.WrapupMaxTurns, &a.TaskTimeoutWrapupPrompt, &a.TaskTimeoutWrapupMaxTurns, &a.TriggerRunMode, &a.TriggerMergeMode, &a.TriggerMaxParallel, &prof)
+	err := sc.Scan(&a.ID, &a.Key, &a.Name, &a.Description, &a.Role, &a.Builtin, &a.Enabled, &a.MaxTurns, &a.RunSecs, &a.WebSearch, &a.InteractiveShell, &a.WrapupPrompt, &a.WrapupMaxTurns, &a.TaskTimeoutWrapupPrompt, &a.TaskTimeoutWrapupMaxTurns, &a.TriggerRunMode, &a.TriggerMergeMode, &a.TriggerMaxParallel, &a.TokenBudget, &a.ToolCallBudget, &prof)
 	if err == nil && prof.Valid {
 		v := prof.Int64
 		a.LLMProfileID = &v
@@ -675,6 +680,20 @@ func (d *DB) SetAgentWebSearch(key string, on bool) error {
 // (持久 PTY 会话) tool family + Bash 提示词联动(见 docs/交互式shell设计.md §14.2).
 func (d *DB) SetAgentInteractiveShell(key string, on bool) error {
 	_, err := d.Exec(`UPDATE agents SET interactive_shell=$1 WHERE key=$2`, on, key)
+	return err
+}
+
+// SetAgentRunBudgets stores an agent's extra run budget dimensions: cumulative
+// tokens and cumulative tool calls per run (0 = unlimited). Resolved per run by
+// agent.resolveBudgetLimits.
+func (d *DB) SetAgentRunBudgets(key string, tokens, toolCalls int) error {
+	if tokens < 0 {
+		tokens = 0
+	}
+	if toolCalls < 0 {
+		toolCalls = 0
+	}
+	_, err := d.Exec(`UPDATE agents SET token_budget=$1, tool_call_budget=$2 WHERE key=$3`, tokens, toolCalls, key)
 	return err
 }
 

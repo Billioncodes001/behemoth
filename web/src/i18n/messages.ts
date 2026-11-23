@@ -2,6 +2,7 @@ import { agentRequestsMessages } from "./agent-requests-messages";
 import { chatUIMessages } from "./chat-ui-messages";
 import { errorMessages } from "./error-messages";
 import { inlineEditorMessages } from "./inline-editor-messages";
+import { jaMessages } from "./ja-messages";
 import { notifyMessages } from "./notify-messages";
 import { overviewMessages } from "./overview-messages";
 import { scheduleMessages } from "./schedule-messages";
@@ -324,11 +325,20 @@ const statuses: Record<string, readonly (readonly [string, string, string])[]> =
 export const resources = {
   "zh-CN": { translation: Object.fromEntries(Object.entries(messages).map(([key, pair]) => [key, pair[0]])) },
   en: { translation: Object.fromEntries(Object.entries(messages).map(([key, pair]) => [key, pair[1]])) },
+  // Japanese is an overlay on English: translated keys win, the rest fall back to
+  // English. Keeps existing [zh, en] dictionaries untouched.
+  ja: {
+    translation: {
+      ...Object.fromEntries(Object.entries(messages).map(([key, pair]) => [key, pair[1]])),
+      ...jaMessages,
+    },
+  },
 };
 
 for (const [domain, entries] of Object.entries(statuses)) {
   for (const [value, zh, en] of entries) {
     resources["zh-CN"].translation[`status.${domain}.${value}`] = zh;
     resources.en.translation[`status.${domain}.${value}`] = en;
+    resources.ja.translation[`status.${domain}.${value}`] = en;
   }
 }

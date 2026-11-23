@@ -92,7 +92,7 @@ func (p *Planner) compactionWindow() int {
 
 // SetProxy points the planner's WebFetch at the recording proxy plus the CA cert
 // it trusts to verify HTTPS through it (empty addr = direct).
-func (p *Planner) SetProxy(addr, caCert string)      { p.proxyAddr, p.proxyCACert = addr, caCert }
+func (p *Planner) SetProxy(addr, caCert string)              { p.proxyAddr, p.proxyCACert = addr, caCert }
 func (p *Planner) SetProxyProvider(fn func() string)         { p.proxyAddrFn = fn }
 func (p *Planner) SetWebFetchProxyProvider(fn func() string) { p.webFetchProxyFn = fn }
 
@@ -379,11 +379,17 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	taskDir := ensureRunDir(p.workDir, taskID, 0)
+	// Planner-side scope enforcement: same mechanical allowlist the workers use, so
+	// a planning-round probe (curl/nmap) cannot wander outside task_scope either.
+	scopeGuard := NewTaskScopeGuard(as, taskID)
+	tools = append(tools, ScopedHTTPTool(scopeGuard))
+	tools = wrapScopeGuardTools(tools, scopeGuard)
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
 	sysBody := plannerSystem(goal, p.workDir, taskDir)
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
 	}
+	sysBody += scopeHintForPrompt(scopeGuard)
 	system, boundary := deferredSystem(sysBody, def)
 	// planner 无自身墙钟预算;有 deadline 时把 MaxDuration 夹逼到剩余,让在跑的规划轮在
 	// 任务到点时进收尾(因超时→任务超时词,因步数→per-run 词)。
@@ -440,6 +446,8 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// or fails a tool call without calling add_intent / prove_goal when intents are needed,
 	// it is automatically nudged to complete its planning round.
 	opts.Hooks = WrapPlannerContinuationHooks(opts.Hooks, fmt.Sprintf("planner-%d", taskID), 4)
+	// Extra run budgets (tokens / tool calls). Unconfigured agents get no wrappers.
+	applyRunBudget(&opts, "planner")
 	if p.tx != nil { // persist raw LLM conversation; one accumulating file per task's planner
 		opts.Transcript = p.tx
 		opts.SessionID = fmt.Sprintf("exp%d-planner", ts.ID())

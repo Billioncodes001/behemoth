@@ -33,7 +33,10 @@ type Config struct {
 	Format llm.Format
 	// Jev marks the TypeSafe System One judge protocol. It must never be sent
 	// through the chat/completions provider path.
-	Jev     bool
+	Jev bool
+	// Mock replays a scripted scenario instead of calling a model (offline demos,
+	// CI and tests). Scenario comes from ARTEX_MOCK_SCENARIO / ARTEX_MOCK_RESPONSES.
+	Mock    bool
 	BaseURL string
 	APIKey  string
 	Model   string
@@ -172,6 +175,13 @@ func FromEnv() (Config, bool) {
 		Stream: !isFalsy(os.Getenv("ARTEX_LLM_STREAM")),
 	}
 	switch prov {
+	case "mock":
+		// Offline: no key required; the scenario file supplies the turns.
+		c.Mock = true
+		if c.Model == "" {
+			c.Model = "mock-1"
+		}
+		return c, true
 	case "openai":
 		c.Format = llm.FormatOpenAI
 		c.APIKey = oaiKey
@@ -210,6 +220,11 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		Stream:  true, // 默认流式;调用方按 profile 覆盖
 	}
 	switch strings.TrimSpace(provider) {
+	case "mock":
+		c.Mock = true
+		if c.Model == "" {
+			c.Model = "mock-1"
+		}
 	case "jev":
 		c.Jev = true
 		if c.Model == "" {
@@ -252,6 +267,9 @@ func isFalsy(s string) bool {
 
 // Provider returns the short provider name ("anthropic"/"openai").
 func (c Config) Provider() string {
+	if c.Mock {
+		return "mock"
+	}
 	if c.Jev {
 		return "jev"
 	}
@@ -284,6 +302,10 @@ func (c Config) NewProviderWithLimiter(limiter *RequestLimiter) (llm.Provider, e
 }
 
 func (c Config) newProvider(client *http.Client, limiter *RequestLimiter) (llm.Provider, error) {
+	if c.Mock {
+		// Offline scenario replay: no HTTP, no key. See agent/mock_provider.go.
+		return MockProviderFromEnv()
+	}
 	if limiter == nil {
 		limiter = &RequestLimiter{}
 	}

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use ARTEX in research or commercial work, please cite it as below."
+title: "ARTEX: Autonomous AI Penetration Testing & Offensive Security Platform"
+abstract: >-
+  ARTEX is an LLM-driven autonomous penetration-testing platform. It models an
+  engagement as a live exploration DAG, dispatches parallel worker intents,
+  records HTTP/HTTPS traffic as hash-addressed evidence, and generates
+  reproducible, artifact-rich technical reports.
+type: software
+authors:
+  - name: "ARTEX Project"
+    website: "https://github.com/Autumn-27/artex"
+repository-code: "https://github.com/Autumn-27/artex"
+url: "https://github.com/Autumn-27/artex"
+version: "2.4.0"
+date-released: "2026-11-21"
+keywords:
+  - penetration testing
+  - offensive security
+  - autonomous agents
+  - large language models
+  - vulnerability assessment

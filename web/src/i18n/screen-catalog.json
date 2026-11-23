@@ -7347,6 +7347,14 @@
     "最大循环次数（0=不限）",
     "Maximum turns (0 = unlimited)"
   ],
+  "screen.budgetTokens": [
+    "令牌预算（0=不限）",
+    "Token budget (0 = unlimited)"
+  ],
+  "screen.budgetToolCalls": [
+    "工具调用预算（0=不限）",
+    "Tool-call budget (0 = unlimited)"
+  ],
   "screen.34257fca996442": [
     "运行时长（秒，0=不限）",
     "Runtime (seconds; 0 = unlimited)"

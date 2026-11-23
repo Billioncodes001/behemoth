@@ -1381,6 +1381,8 @@ export interface Agent {
   enabled: boolean;
   llm_profile_id?: number | null; // 绑定的 LLM 配置；null/absent = 跟随任务/会话/全局
   max_turns?: number; // 0 = 无限制
+  token_budget?: number; // 单次 run 累计令牌上限；0 = 无限制
+  tool_call_budget?: number; // 单次 run 工具调用上限；0 = 无限制
   run_seconds?: number; // worker 单次运行墙钟上限(秒)；0 = 无限制
   web_search?: boolean; // 是否启用网络搜索(受系统全局开关门控)
   interactive_shell?: boolean; // 是否启用交互式 shell(持久 PTY 会话工具族)

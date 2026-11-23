@@ -367,6 +367,8 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	// max_turns/run_seconds to 0.
 	var req struct {
 		MaxTurns         *int  `json:"max_turns"`
+		TokenBudget      *int  `json:"token_budget"`
+		ToolCallBudget   *int  `json:"tool_call_budget"`
 		RunSeconds       *int  `json:"run_seconds"`
 		WebSearch        *bool `json:"web_search"`
 		InteractiveShell *bool `json:"interactive_shell"`
@@ -420,6 +422,20 @@ func (s *Server) pgSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 			rs = 0
 		}
 		if err := pg.SetAgentRunSeconds(a.Key, rs); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	// 额外预算维度:两者一起写(缺省字段回填存量值),避免只改一个把另一个清零。
+	if req.TokenBudget != nil || req.ToolCallBudget != nil {
+		tokens, calls := a.TokenBudget, a.ToolCallBudget
+		if req.TokenBudget != nil {
+			tokens = *req.TokenBudget
+		}
+		if req.ToolCallBudget != nil {
+			calls = *req.ToolCallBudget
+		}
+		if err := pg.SetAgentRunBudgets(a.Key, tokens, calls); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

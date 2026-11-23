@@ -123,6 +123,8 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
   const [skillVisible, setSkillVisible] = React.useState<string[]>([]);
   const [preview, setPreview] = React.useState("");
   const [maxTurns, setMaxTurns] = React.useState("0");
+  const [tokenBudget, setTokenBudget] = React.useState("0");
+  const [toolCallBudget, setToolCallBudget] = React.useState("0");
   const [runSecs, setRunSecs] = React.useState("600");
   // "" = 跟随(未绑定)；否则为 profile id 字符串
   const [llmProfileId, setLlmProfileId] = React.useState("");
@@ -174,6 +176,8 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
         setMcpVisible(d.visibility?.mcp ?? []);
         setSkillVisible(d.visibility?.skill ?? []);
         setMaxTurns(String(d.agent?.max_turns ?? 0));
+        setTokenBudget(String(d.agent?.token_budget ?? 0));
+        setToolCallBudget(String(d.agent?.tool_call_budget ?? 0));
         setRunSecs(String(d.agent?.run_seconds ?? 600));
         setLlmProfileId(d.agent?.llm_profile_id != null ? String(d.agent.llm_profile_id) : "");
         setLlmProfiles(d.llm_profiles ?? []);
@@ -269,6 +273,8 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
       };
       if (showConfig) {
         patch.max_turns = Math.max(0, Math.floor(Number(maxTurns) || 0));
+        patch.token_budget = Math.max(0, Math.floor(Number(tokenBudget) || 0));
+        patch.tool_call_budget = Math.max(0, Math.floor(Number(toolCallBudget) || 0));
         patch.run_seconds = Math.max(0, Math.floor(Number(runSecs) || 0));
       }
       if (showWebSearch) patch.web_search = webSearch;
@@ -421,6 +427,32 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                         className="h-8 w-32"
                         value={maxTurns}
                         onChange={(e) => setMaxTurns(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="token-budget" className="text-xs">
+                        {ui("screen.budgetTokens")}
+                      </Label>
+                      <Input
+                        id="token-budget"
+                        type="number"
+                        min={0}
+                        className="h-8 w-32"
+                        value={tokenBudget}
+                        onChange={(e) => setTokenBudget(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="tool-call-budget" className="text-xs">
+                        {ui("screen.budgetToolCalls")}
+                      </Label>
+                      <Input
+                        id="tool-call-budget"
+                        type="number"
+                        min={0}
+                        className="h-8 w-32"
+                        value={toolCallBudget}
+                        onChange={(e) => setToolCallBudget(e.target.value)}
                       />
                     </div>
                     <div className="grid gap-1.5">

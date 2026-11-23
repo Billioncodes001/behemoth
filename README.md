@@ -96,4 +96,5 @@ sudo ./start.sh domain pentest.yourdomain.com --ssl
 
 - **[Operator Wiki & How-To Guide (`docs/WIKI_HOW_TO_USE.md`)](./docs/WIKI_HOW_TO_USE.md)** — Complete step-by-step guide to LLM profiles (including Cline presets), Chat-driven operations, Task DAGs, Proxy Pool v2, Stealth settings, and End-to-End Reporting.
 - **[Production Deployment & Administration Guide (`docs/DEPLOYMENT_GUIDE.md`)](./docs/DEPLOYMENT_GUIDE.md)** — Ubuntu server requirements, port architecture, `setup.sh` / `start.sh` reference, Nginx domain/SSL setup, and administration.
+- **[Run Hardening (`docs/RUN_HARDENING.md`)](./docs/RUN_HARDENING.md)** — per-run token/tool-call budgets, mechanical scope enforcement (redirect re-authorization, per-host rate limits, fail-closed DNS), the Docker `sandbox_exec` backend, the offline mock provider, and tamper-evident evidence logs (`artex evidence verify`).
 

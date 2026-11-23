@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 新增与改进
+
+- 单次 run 新增两个硬预算维度：累计令牌数（`agents.token_budget`）与工具调用数（`agents.tool_call_budget`）。超限后探测工具直接返回「预算耗尽、请落库收尾」，写回类工具（record_fact/insert_assets/report_finding 等）不受限制，避免烂尾；后台 Agent 编辑页可配置，`0`=不限。
+- 任务范围（`task_scope`）从提示词约定升级为机械校验：Bash 命令中的 URL/IP 字面量、WebFetch 与新增 `http_request` 工具均先授权再请求；重定向逐跳重新授权并按主机限速；已配置范围时无法解析的主机按 fail-closed 拒绝。限速可用 `ARTEX_SCOPE_RPS` 调整。
+- 新增 `sandbox_exec`：在一次性 Docker 容器（工作目录挂载到 `/work`）内执行单条命令，用于高风险/重型工具；镜像、网络模式、超时与额外参数由 `ARTEX_SANDBOX_*` 配置，缺少 docker 时给出回退提示。
+- 新增 mock / scenario 提供方（`ARTEX_LLM_PROVIDER=mock` + `ARTEX_MOCK_SCENARIO`/`ARTEX_MOCK_RESPONSES`）：无网络、无密钥即可跑完整 Agent 循环，用于离线演示与 CI。
+- 证据链：每次 worker run 追加哈希链 JSONL（`<run>/evidence/run.jsonl`，含每条明细的 SHA-256 与上一条哈希），收尾活动记录链头；新增 `./artex evidence verify <file>` 逐条重放校验，篡改/乱序/缺失即报错并非零退出。
+- 日语界面（覆盖导航、通用操作、登录与 Agent 预算等相关文案，未覆盖项回退英文）；`persistence-setup` Skill 增补 phantom DLL 搜索顺序劫持（签名宿主、导出触发、trampoline、VHDX 投递与验证）；新增 `CITATION.cff` 与 `THIRD_PARTY.md`。
+
+
 ## [0.3.30] - 2026-11-14
 
 ### 新增与改进

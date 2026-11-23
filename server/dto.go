@@ -594,6 +594,8 @@ type AgentDTO struct {
 	Builtin          bool   `json:"builtin"`
 	Enabled          bool   `json:"enabled"`
 	MaxTurns         int    `json:"max_turns"`
+	TokenBudget      int    `json:"token_budget"`
+	ToolCallBudget   int    `json:"tool_call_budget"`
 	RunSecs          int    `json:"run_seconds"`
 	WebSearch        bool   `json:"web_search"`
 	InteractiveShell bool   `json:"interactive_shell"`
@@ -618,6 +620,8 @@ func agentDTO(a *db.Agent) AgentDTO {
 		Builtin:            a.Builtin,
 		Enabled:            a.Enabled,
 		MaxTurns:           a.MaxTurns,
+		TokenBudget:        a.TokenBudget,
+		ToolCallBudget:     a.ToolCallBudget,
 		RunSecs:            a.RunSecs,
 		WebSearch:          a.WebSearch,
 		InteractiveShell:   a.InteractiveShell,

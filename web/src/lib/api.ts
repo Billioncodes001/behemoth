@@ -1845,6 +1845,8 @@ export const api = {
     patch: {
       llm_profile_id?: number | null; // number=绑定；null=解绑(跟随任务/全局)；缺省=不动
       max_turns?: number;
+      token_budget?: number;
+      tool_call_budget?: number;
       run_seconds?: number;
       web_search?: boolean;
       interactive_shell?: boolean;

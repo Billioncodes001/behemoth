@@ -68,6 +68,27 @@ test("instances start in English, switch synchronously and remain isolated", asy
 test("unsupported saved locale values use the deterministic static default", () => {
   for (const value of [undefined, null, "", "fr", "corrupted", "zh-TW"]) assert.equal(resolveLocale(value), "en");
   for (const value of ["zh-CN", "zh-CN"]) assert.equal(resolveLocale(value), "zh-CN");
+  // Japanese is supported; region variants resolve to the same bundle.
+  for (const value of ["ja", "ja-JP"]) assert.equal(resolveLocale(value), "ja");
+});
+
+test("Japanese overlays English and falls back to English for uncovered keys", async () => {
+  const { resources } = loadSource("messages.ts");
+  const { jaMessages } = loadSource("ja-messages.ts");
+  assert.ok(resources.ja?.translation, "ja resources are registered");
+  assert.deepEqual(Object.keys(resources.ja.translation).sort(), Object.keys(resources.en.translation).sort());
+  const i18n = createAppI18n();
+  await i18n.changeLanguage("ja");
+  assert.equal(i18n.t("meta.title"), "ARTEX — 自律型ペネトレーションテストコンソール");
+  assert.equal(i18n.t("nav.dashboard"), "ダッシュボード");
+  assert.equal(i18n.t("screen.daa73cf0b37fcb"), "最大ターン数（0 = 無制限）");
+  // A key with no Japanese translation falls back to English rather than a stub.
+  const fallbackKey = Object.keys(resources.en.translation).find((key) => !(key in jaMessages));
+  assert.ok(fallbackKey, "expected at least one untranslated key");
+  assert.equal(i18n.t(fallbackKey), resources.en.translation[fallbackKey]);
+  // Switching back restores English.
+  await i18n.changeLanguage("en");
+  assert.equal(i18n.t("meta.title"), "ARTEX — Autonomous Pentesting Console");
 });
 
 test("localized error text keeps raw server details as fallback", async () => {

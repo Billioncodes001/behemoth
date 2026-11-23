@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/evidence"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
@@ -373,6 +375,13 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 有。仅【全局态势 overview】留在启动 user 消息里——它可降级、容忍 stale，压掉无碍。
 	// 本次意图的专属工作目录 <workDir>/tasks/<taskID>/i<intentID>，引擎侧先建好。
 	runDir := ensureRunDir(w.workDir, taskID, intent.ID)
+	// Scope enforcement (task_scope → mechanical allowlist), the scope-aware HTTP
+	// tool and the docker sandbox are per-run: they depend on this task's scope and
+	// this intent's working directory. A task with no scope rows gets a nil guard,
+	// which keeps every check permissive (prior behavior).
+	scopeGuard := NewTaskScopeGuard(as, taskID)
+	tools = append(tools, ScopedHTTPTool(scopeGuard), SandboxExecTool(SandboxConfigFromEnv(runDir)))
+	tools = wrapScopeGuardTools(tools, scopeGuard)
 	// The run-wide intent is not the current tool action. Do not forward it or
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
@@ -385,6 +394,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
 	}
+	// Tell the model scope is enforced (not just requested) when a guard is active.
+	sysBody += scopeHintForPrompt(scopeGuard)
 	// 意图块 → 意图锚定资产块 → 启动指令，依次追加到 system 尾部（与 constraintBlock 同一套追加法）。
 	sysBody += renderIntentTask(intent)
 	if as != nil {
@@ -466,6 +477,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		opts.Hooks = hooks
 	}
+	// Extra run budgets (tokens / tool calls). Unconfigured agents get no wrappers.
+	budget := applyRunBudget(&opts, "worker")
 	// Wire premature-stop continuation across all worker runs so that if a worker
 	// outputs a status announcement ("Let me probe the endpoint...") or stops right
 	// after a tool error without calling mark_done/insert_assets/report_finding,
@@ -476,7 +489,21 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		opts.SessionID = WorkerSessionID(ts.ID(), intent.ID)
 	}
 	intentID := intent.ID
+	// Tamper-evident JSONL evidence log for this run: one chained record per
+	// activity. Its head hash is attached to the terminal record so a reviewer can
+	// prove the log matches what the engine produced (see evidence/runlog.go and
+	// `artex evidence verify <file>`).
+	evLog, evErr := evidence.OpenRunLog(filepath.Join(runDir, "evidence", "run.jsonl"))
+	if evErr != nil {
+		log.Printf("[evidence] run log %s: %v", runDir, evErr)
+	}
+	if evLog != nil {
+		defer evLog.Close() //nolint:errcheck
+	}
 	emitWrap := func(r db.Activity) {
+		if evLog != nil {
+			_, _ = evLog.Append(r)
+		}
 		if emit != nil {
 			r.NodeID, r.Worker = &intentID, name
 			emit(r)
@@ -531,5 +558,23 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// still settles (no external hard-timeout backstop needed). ctx itself carries only
 	// pause / planner kill / shutdown, which the engine distinguishes and re-queues/stops.
 	_, reason, err := captureRunSession(ctx, s, input, emitWrap)
+	if budget != nil {
+		tokens, calls, exhausted := budget.Snapshot()
+		b, _ := json.Marshal(budget.Summary())
+		summary := fmt.Sprintf("run budget: %d tokens, %d tool calls", tokens, calls)
+		if exhausted != "" {
+			summary = "run budget exhausted: " + exhausted
+		}
+		emitWrap(db.Activity{Kind: "budget", Summary: summary, Metadata: b})
+	}
+	if evLog != nil {
+		// The anchor is NOT appended to the log: its metadata must name the log's true
+		// head hash, which by definition precedes the anchor itself.
+		meta, _ := json.Marshal(map[string]any{"run_log": evLog.Path(), "head_hash": evLog.HeadHash(), "records": evLog.Seq()})
+		if emit != nil {
+			emit(db.Activity{Kind: "evidence", NodeID: &intentID, Worker: name,
+				Summary: "evidence log head " + evLog.HeadHash(), Metadata: meta})
+		}
+	}
 	return reason, tsx.Writes(), err
 }
