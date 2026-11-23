@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Autumn-27/artex/agent"
 	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
 )
 
@@ -120,3 +122,86 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 		t.Fatalf("expected proxy_pool routing restored after re-enable, got %s", stRes2.Content[0].Text)
 	}
 }
+
+func TestProxyPoolFailClosedBlocksDirectAndAbortsChatsWhenAllUnhealthy(t *testing.T) {
+	upstreamProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.42"}`)
+	}))
+	pu, _ := url.Parse(upstreamProxy.URL)
+	host, portStr, _ := net.SplitHostPort(pu.Host)
+
+	m := proxyTestManager(t)
+	chatCtx, chatCancel := context.WithCancelCause(context.Background())
+	defer chatCancel(nil)
+	s := &Server{
+		m:          m,
+		chatBusy:   map[string]bool{"conv-99": true},
+		chatCancel: map[string]context.CancelCauseFunc{"conv-99": chatCancel},
+	}
+
+	pool := proxyv2.NewPool(nil)
+	ppV2 = &proxyPoolV2{
+		Pool:    pool,
+		Handler: proxyv2.NewHandler(pool),
+	}
+	pool.SetSyncHook(func(proxies []proxyv2.ProxyInfo, activeID string, cfg *proxyv2.ProxyPoolConfig) {
+		s.syncProxyPoolV2ToV1(proxies, activeID, cfg)
+	})
+
+	if _, err := pool.ImportProxies(host+":"+portStr, proxyv2.ProxyTypeHTTP); err != nil {
+		t.Fatal(err)
+	}
+	pxList := pool.GetProxies()
+	if err := pool.ActivateProxy(pxList[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	s.syncProxyPoolNow()
+
+	// Kill the upstream proxy so all proxies in the enabled pool become unhealthy/stale.
+	upstreamProxy.Close()
+
+	// Agent quarantines the failing proxy via manage_proxy_pool(action="disable_proxy").
+	// Pool MUST remain enabled (fail-closed) rather than auto-disabling and falling back to direct!
+	quarRes, err := s.toolManageProxyPool().Call(context.Background(), json.RawMessage(`{"action":"disable_proxy","proxy_id":"`+pxList[0].ID+`"}`), nil)
+	if err != nil || quarRes.IsError {
+		t.Fatalf("disable_proxy failed: err=%v res=%+v", err, quarRes)
+	}
+
+	if !pool.GetConfig().Enabled {
+		t.Fatalf("expected Proxy Pool to stay Enabled when last proxy fails during agent failover")
+	}
+	if !s.m.IsProxyPoolFailClosed() || !s.m.HasOutboundProxy() {
+		t.Fatalf("expected fail-closed outbound proxy guard active")
+	}
+
+	// Active chat run must be immediately cancelled with AbortPausedByProxy!
+	if !errors.Is(context.Cause(chatCtx), agent.AbortPausedByProxy) {
+		t.Fatalf("expected active chat to be aborted with AbortPausedByProxy, got %v", context.Cause(chatCtx))
+	}
+
+	// Outbound external HTTP requests MUST fail-closed with 503 instead of dialing direct!
+	fwdAddr := s.m.OutboundProxyAddr()
+	if !strings.HasPrefix(fwdAddr, "http://127.0.0.1:") {
+		t.Fatalf("expected non-empty OutboundProxyAddr in fail-closed state, got %q", fwdAddr)
+	}
+	spURL, _ := url.Parse(fwdAddr)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(spURL)}}
+	resp, err := client.Get("http://external.target.example/secret")
+	if err != nil {
+		t.Fatalf("proxy forwarder transport error: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "Fail-Closed Proxy Guard") {
+		t.Fatalf("expected 503 Fail-Closed Proxy Guard, got status=%d body=%q", resp.StatusCode, string(body))
+	}
+
+	// check_proxy_status must report proxy_pool_exhausted=true and STOP WORK instruction.
+	stRes, _ := s.toolCheckProxyStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
+	out := stRes.Content[0].Text
+	if !strings.Contains(out, `"proxy_pool_exhausted":true`) || !strings.Contains(out, "STOP WORK IMMEDIATELY") {
+		t.Fatalf("expected check_proxy_status to report fail-closed stop instruction, got %s", out)
+	}
+}
+

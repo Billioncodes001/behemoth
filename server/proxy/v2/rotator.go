@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -577,10 +578,10 @@ func (p *Pool) SetProxyActive(id string, active bool, autoFailover ...bool) erro
 				p.state.proxies[i].InUse = false
 				if p.state.activeID == id {
 					if failover && p.state.config != nil && p.state.config.Enabled {
+						// Agent-initiated failover MUST keep p.state.config.Enabled = true even when
+						// pickBestHealthyOrActiveLocked() returns "" so fail-closed protection blocks
+						// direct connections and halts active scans instead of exposing the server IP!
 						p.state.activeID = p.pickBestHealthyOrActiveLocked()
-						if p.state.activeID == "" {
-							p.state.config.Enabled = false
-						}
 					} else {
 						p.state.activeID = ""
 						p.state.config.Enabled = false
@@ -597,6 +598,57 @@ func (p *Pool) SetProxyActive(id string, active bool, autoFailover ...bool) erro
 		}
 	}
 	return fmt.Errorf("proxy not found: %s", id)
+}
+
+// MarkRecoveredAndActive marks a recovered proxy healthy and promotes it to activeID
+// if the pool is enabled and currently has no active healthy proxy.
+func (p *Pool) MarkRecoveredAndActive(id string) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	for i := range p.state.proxies {
+		if p.state.proxies[i].ID == id && p.state.proxies[i].Active && p.state.proxies[i].Status != StatusDisabled {
+			p.state.proxies[i].Status = StatusHealthy
+			p.state.proxies[i].ConsecutiveFailures = 0
+			if p.state.config != nil && p.state.config.Enabled && p.state.activeID == "" {
+				p.state.activeID = id
+			}
+			break
+		}
+	}
+	if p.store != nil {
+		return p.store.SavePool(&proxyPersist{
+			Config:  p.state.config,
+			Proxies: p.state.proxies,
+			Active:  p.state.activeID,
+		})
+	}
+	return nil
+}
+
+// ReplaceManagedPrefixProxies atomically replaces proxies whose ID begins with prefix
+// (used by the built-in Tor Network controller to add/refresh isolated Tor circuits)
+// while preserving any non-Tor user proxies in the pool.
+func (p *Pool) ReplaceManagedPrefixProxies(prefix string, replacements []ProxyInfo, activateFirst bool) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	kept := make([]ProxyInfo, 0, len(p.state.proxies)+len(replacements))
+	for _, px := range p.state.proxies {
+		if !strings.HasPrefix(px.ID, prefix) {
+			kept = append(kept, px)
+		}
+	}
+	kept = append(kept, replacements...)
+	p.state.proxies = kept
+	if len(replacements) > 0 && activateFirst {
+		p.state.config.Enabled = true
+		p.state.activeID = replacements[0].ID
+	} else if len(replacements) == 0 && strings.HasPrefix(p.state.activeID, prefix) {
+		p.state.activeID = p.pickBestHealthyOrActiveLocked()
+		if p.state.activeID == "" {
+			p.state.config.Enabled = false
+		}
+	}
+	return p.persistLocked()
 }
 
 // ForceRotate forces rotation to next proxy.
@@ -649,12 +701,11 @@ func (p *Pool) persistLocked() error {
 		err = p.store.SavePool(persisted)
 	}
 	if p.onSync != nil {
-		cp := make([]ProxyInfo, len(p.state.proxies))
-		copy(cp, p.state.proxies)
-		activeID := p.state.activeID
-		cfg := *p.state.config
 		fn := p.onSync
-		go fn(cp, activeID, &cfg)
+		go func() {
+			raw, curActive, curCfg := p.GetRawState()
+			fn(raw, curActive, curCfg)
+		}()
 	}
 	return err
 }

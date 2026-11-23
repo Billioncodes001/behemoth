@@ -24,7 +24,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   RefreshCw, Upload, Trash2, Play, CheckCircle2, XCircle,
-  Loader2, Globe, Activity, Zap, Settings, MapPin, Clock, FileUp, ShieldCheck,
+  Loader2, Globe, Activity, Zap, Settings, MapPin, Clock, FileUp, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 
 type ProxyStatus = "healthy" | "unhealthy" | "untested" | "unknown" | "in_use" | "disabled";
@@ -62,17 +62,31 @@ export default function ProxyPoolPage() {
   const [maxFailures, setMaxFailures] = React.useState("3");
   const [cooldown, setCooldown] = React.useState("60");
   const [sessionSticky, setSessionSticky] = React.useState(true);
+  const [torStatus, setTorStatus] = React.useState<{
+    installed: boolean;
+    daemon_running: boolean;
+    enabled_in_pool: boolean;
+    circuits_total: number;
+    circuits_healthy: number;
+    exit_ips?: string[];
+  } | null>(null);
+  const [torCircuits, setTorCircuits] = React.useState<string>("5");
+  const [torBusy, setTorBusy] = React.useState(false);
 
 
   const fetchData = React.useCallback(async () => {
     try {
-      const [proxyList, poolStats, switchLogs, poolConfig] = await Promise.all([
+      const [proxyList, poolStats, switchLogs, poolConfig, torSnap] = await Promise.all([
         api.proxyV2.listProxies().catch(() => []),
         api.proxyV2.getStats().catch(() => null),
         api.proxyV2.getLogs().catch(() => []),
         api.proxyV2.getConfig().catch(() => null),
+        api.proxyV2.getTorStatus().catch(() => null),
       ]);
       setProxies(Array.isArray(proxyList) ? proxyList : []);
+      if (torSnap) {
+        setTorStatus(torSnap);
+      }
       if (poolStats) {
         setStats({
           total: poolStats.total ?? 0,
@@ -350,6 +364,50 @@ export default function ProxyPoolPage() {
     }
   };
 
+  const handleEnableTor = async () => {
+    setTorBusy(true);
+    try {
+      const count = Math.max(1, Math.min(10, parseInt(torCircuits) || 5));
+      const res = await api.proxyV2.enableTor(count);
+      toast.success(
+        `Tor Anonymity Network enabled (${res.circuits_healthy}/${res.circuits_total} isolated SOCKS5 circuits ready)`,
+      );
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Enable Tor failed: " + (e?.message || String(e)));
+    } finally {
+      setTorBusy(false);
+    }
+  };
+
+  const handleDisableTor = async () => {
+    setTorBusy(true);
+    try {
+      await api.proxyV2.disableTor();
+      toast.success("Tor circuits removed from Proxy Pool");
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Disable Tor failed: " + (e?.message || String(e)));
+    } finally {
+      setTorBusy(false);
+    }
+  };
+
+  const handleRotateTor = async () => {
+    setTorBusy(true);
+    try {
+      const res = await api.proxyV2.rotateTorIdentity();
+      toast.success(
+        `Assigned fresh Tor exit circuits (${res.circuits_healthy}/${res.circuits_total} healthy)`,
+      );
+      await fetchData();
+    } catch (e: any) {
+      toast.error("Tor circuit rotation failed: " + (e?.message || String(e)));
+    } finally {
+      setTorBusy(false);
+    }
+  };
+
   const statusBadge = (status: ProxyStatus, isActiveEgress: boolean) => {
     const healthy = { label: "Healthy", variant: "default" as const, icon: <CheckCircle2 className="w-3 h-3" /> };
     const failed = { label: "Failed", variant: "destructive" as const, icon: <XCircle className="w-3 h-3" /> };
@@ -415,6 +473,79 @@ export default function ProxyPoolPage() {
         ))}
       </div>
 
+      {poolEnabled && !stats.active_proxy_id && (
+        <div className="rounded-lg border border-destructive/60 bg-destructive/10 p-4 flex items-start gap-3">
+          <ShieldAlert className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+          <div className="space-y-1 text-sm">
+            <p className="font-semibold text-destructive">
+              Fail-Closed Proxy Guard Active — Direct Target Connections Blocked
+            </p>
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Running Tasks and Agents have been automatically paused/stopped so your server IP is never exposed. Enable the free <strong>Tor Anonymity Network</strong> below, import fresh proxies, or toggle Proxy Pool off if you intend to connect directly.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <Card className="border-primary/25 bg-muted/15">
+        <CardContent className="pt-4 pb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-sm flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                Tor Anonymity Network
+              </span>
+              <Badge variant="secondary" className="text-[10px]">Free · Unlimited Bandwidth</Badge>
+              {torStatus?.enabled_in_pool ? (
+                <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
+                  Active ({torStatus.circuits_healthy}/{torStatus.circuits_total} Circuits)
+                </Badge>
+              ) : torStatus?.daemon_running ? (
+                <Badge variant="outline" className="text-[10px]">Daemon Running</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px]">Standby</Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Routes scanning &amp; agent traffic over isolated SOCKS5 Tor exit circuits (<code className="bg-muted px-1 rounded">IsolateSOCKSAuth</code> + <code className="bg-muted px-1 rounded">SIGNAL NEWNYM</code>) with zero bandwidth charges.
+              {torStatus?.exit_ips && torStatus.exit_ips.length > 0 && (
+                <span className="ml-1 text-foreground/80">
+                  Current Exit IPs: <code className="bg-muted px-1 rounded">{torStatus.exit_ips.slice(0, 4).join(", ")}</code>
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Select value={torCircuits} onValueChange={setTorCircuits} disabled={torBusy}>
+              <SelectTrigger className="w-[130px] h-8 text-xs">
+                <SelectValue placeholder="Circuits" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="3">3 Circuits</SelectItem>
+                <SelectItem value="5">5 Circuits</SelectItem>
+                <SelectItem value="8">8 Circuits</SelectItem>
+              </SelectContent>
+            </Select>
+            {torStatus?.enabled_in_pool ? (
+              <>
+                <Button size="sm" variant="outline" disabled={torBusy} onClick={() => void handleRotateTor()}>
+                  {torBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+                  <span>New Exit IPs (NEWNYM)</span>
+                </Button>
+                <Button size="sm" variant="destructive" disabled={torBusy} onClick={() => void handleDisableTor()}>
+                  <span>Disable Tor</span>
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" disabled={torBusy} onClick={() => void handleEnableTor()}>
+                {torBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Zap className="w-3.5 h-3.5 mr-1" />}
+                <span>Enable Free Tor Network</span>
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs defaultValue="proxies">
         <TabsList>
           <TabsTrigger value="proxies">Proxies ({stats.total})</TabsTrigger>
@@ -430,12 +561,16 @@ export default function ProxyPoolPage() {
                 <div className="flex items-center gap-2 rounded-full border bg-muted/30 px-3 py-1">
                   <Switch
                     id="header-pool-switch"
-                    checked={poolEnabled && Boolean(stats.active_proxy_id)}
+                    checked={poolEnabled}
                     disabled={savingConfig || (proxies.length === 0 && !poolEnabled)}
                     onCheckedChange={(checked) => void handleTogglePoolEnabled(checked)}
                   />
                   <Label htmlFor="header-pool-switch" className="cursor-pointer text-xs font-medium">
-                    {poolEnabled && stats.active_proxy_id ? "Pool Active" : "Pool Disabled"}
+                    {!poolEnabled
+                      ? "Pool Disabled"
+                      : stats.active_proxy_id
+                        ? "Pool Active"
+                        : "Pool Active (Fail-Closed · No Healthy Proxy)"}
                   </Label>
                 </div>
               </div>

@@ -282,13 +282,15 @@ func (m *Manager) setProxyPoolEntries(entries []proxyPoolEntry, active string) e
 				return m.applyActiveProxyLocked(e.ID, "reconnect")
 			}
 		}
-		for _, e := range entries {
-			if e.Enabled && e.RawURL != "" {
-				return m.applyActiveProxyLockedWithHealth(e.ID, "reconnect", true)
+		if !m.IsProxyPoolFailClosed() {
+			for _, e := range entries {
+				if e.Enabled && e.RawURL != "" {
+					return m.applyActiveProxyLockedWithHealth(e.ID, "reconnect", true)
+				}
 			}
 		}
 		if strings.TrimSpace(m.GlobalProxy()) != "" {
-			return m.applyActiveProxyLocked("", "reconnect")
+			return m.applyActiveProxyLocked("", "exhausted_fail_closed")
 		}
 		return nil
 	}
@@ -680,6 +682,9 @@ func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) bool {
 	}
 	s.m.proxyPool.mu.Unlock()
 	if err == nil && id != "" {
+		if ppV2 != nil && ppV2.Pool != nil {
+			_ = ppV2.Pool.MarkRecoveredAndActive(id)
+		}
 		s.proxyReconnectSuccess()
 		return true
 	}
@@ -696,8 +701,9 @@ func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) bool {
 			}
 		}
 	}
-	if id == "" && enabled > 0 && allCooling && (activeID != "" || strings.TrimSpace(s.m.GlobalProxy()) != "") {
-		s.pauseAllProxyTasks(errors.New("代理池暂无健康成员"))
+	if id == "" && ((enabled > 0 && allCooling && (activeID != "" || strings.TrimSpace(s.m.GlobalProxy()) != "" || s.m.IsProxyPoolFailClosed())) || (s.m.IsProxyPoolFailClosed() && enabled == 0)) {
+		s.pauseAllProxyTasks(errors.New("Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth — direct egress blocked"))
+		s.stopActiveChatsOnProxyExhausted()
 	}
 	return false
 }

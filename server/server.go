@@ -5370,11 +5370,19 @@ func (s *Server) initProxyPoolV2(m *Manager) {
 	log.Printf("[proxy-v2] Proxy Pool v2 initialized and unified with core agent proxy engine (%d proxies)", len(proxies))
 }
 
+var proxyV2SyncMu sync.Mutex
+
 func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID string, cfg *proxyv2.ProxyPoolConfig) {
 	if s == nil || s.m == nil {
 		return
 	}
-	poolEnabled := cfg != nil && cfg.Enabled && activeID != ""
+	proxyV2SyncMu.Lock()
+	defer proxyV2SyncMu.Unlock()
+	if ppV2 != nil && ppV2.Pool != nil {
+		proxies, activeID, cfg = ppV2.Pool.GetRawState()
+	}
+	poolEnabled := cfg != nil && cfg.Enabled
+	s.m.SetProxyPoolFailClosed(poolEnabled)
 	entries := make([]proxyPoolEntry, 0, len(proxies))
 	if poolEnabled {
 		for _, px := range proxies {
@@ -5408,9 +5416,23 @@ func (s *Server) syncProxyPoolV2ToV1(proxies []proxyv2.ProxyInfo, activeID strin
 	}
 	effectiveActive := ""
 	if poolEnabled {
-		effectiveActive = activeID
+		for _, px := range proxies {
+			if px.ID == activeID && px.Active && px.Status != proxyv2.StatusDisabled && px.Status != proxyv2.StatusUnhealthy && px.Status != proxyv2.StatusUnhealthyCool {
+				effectiveActive = activeID
+				break
+			}
+		}
 	}
 	_ = s.m.setProxyPoolEntries(entries, effectiveActive)
+	if poolEnabled && effectiveActive == "" {
+		// Fail-closed: Proxy Pool is enabled, and zero healthy proxies are usable.
+		// Immediately pause running tasks and stop active chat scans so agents never
+		// continue unproxied or spin on failed connections.
+		s.pauseAllProxyTasks(errors.New("Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth — tasks paused to prevent direct IP exposure"))
+		s.stopActiveChatsOnProxyExhausted()
+	} else if poolEnabled && effectiveActive != "" {
+		s.proxyReconnectSuccess()
+	}
 	if cfg != nil {
 		strategy := "sequential"
 		switch cfg.RotationMode {
@@ -5520,12 +5542,35 @@ func (s *Server) syncV1ToProxyPoolV2() {
 	_ = ppV2.Pool.SyncFromExternal(v2List, s.m.proxyPoolActiveID())
 }
 
+// stopActiveChatsOnProxyExhausted aborts in-flight interactive/task chat runs
+// with AbortPausedByProxy whenever Proxy Pool is enabled and all proxies go down.
+func (s *Server) stopActiveChatsOnProxyExhausted() {
+	if s == nil {
+		return
+	}
+	s.chatMu.Lock()
+	cancels := make([]context.CancelCauseFunc, 0, len(s.chatCancel))
+	for _, cancel := range s.chatCancel {
+		if cancel != nil {
+			cancels = append(cancels, cancel)
+		}
+	}
+	s.chatMu.Unlock()
+	for _, cancel := range cancels {
+		cancel(agent.AbortPausedByProxy)
+	}
+}
+
 // registerProxyPoolV2Routes registers all v2 API endpoints on the given mux.
 func (s *Server) registerProxyPoolV2Routes(mux *http.ServeMux) {
 	if ppV2 == nil || ppV2.Handler == nil {
 		return
 	}
 	ppV2.Handler.RegisterRoutes(mux)
+	mux.HandleFunc("GET /api/v2/proxy-pool/tor/status", s.handleTorStatus)
+	mux.HandleFunc("POST /api/v2/proxy-pool/tor/enable", s.handleTorEnable)
+	mux.HandleFunc("POST /api/v2/proxy-pool/tor/disable", s.handleTorDisable)
+	mux.HandleFunc("POST /api/v2/proxy-pool/tor/newnym", s.handleTorNewnym)
 	log.Printf("[proxy-v2] Registered API endpoints under /api/v2/proxy-pool/")
 }
 

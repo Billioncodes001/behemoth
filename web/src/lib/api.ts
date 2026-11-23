@@ -1466,6 +1466,33 @@ export const api = {
     forceRotate: () => get<ProxyV2Entry | null>(`/v2/proxy-pool/rotate`),
     getStats: () => get<ProxyV2Stats>(`/v2/proxy-pool/stats`),
     getLogs: () => get<ProxyV2SwitchLog[]>(`/v2/proxy-pool/logs`),
+    getTorStatus: () =>
+      get<{
+        installed: boolean;
+        binary_path?: string;
+        daemon_running: boolean;
+        managed_control: boolean;
+        socks_port: number;
+        enabled_in_pool: boolean;
+        circuits_total: number;
+        circuits_healthy: number;
+        exit_ips?: string[];
+      }>(`/v2/proxy-pool/tor/status`),
+    enableTor: (circuits = 5) =>
+      post<{
+        enabled_in_pool: boolean;
+        circuits_total: number;
+        circuits_healthy: number;
+        exit_ips?: string[];
+      }>(`/v2/proxy-pool/tor/enable`, { circuits }),
+    disableTor: () => post<{ enabled_in_pool: boolean }>(`/v2/proxy-pool/tor/disable`, {}),
+    rotateTorIdentity: () =>
+      post<{
+        circuits_total: number;
+        circuits_healthy: number;
+        exit_ips?: string[];
+        signal_newnym_sent?: boolean;
+      }>(`/v2/proxy-pool/tor/newnym`, {}),
   },
 
   commercial: {

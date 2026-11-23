@@ -170,9 +170,18 @@ type Traffic struct {
 	// transparent-passthrough paths honor it (go-mitmproxy's getUpstreamConn),
 	// so no host escapes it. Hot-swappable at runtime via SetUpstreamProxy.
 	upstream        atomic.Pointer[url.URL]
+	failClosed      atomic.Bool
 	upstreamMu      sync.RWMutex
 	upstreamFailure func(error)
 	outboundMod     atomic.Value // optional func(host string, hdr http.Header)
+}
+
+// SetFailClosed controls whether the MITM proxy blocks direct target dials when
+// Proxy Pool is enabled and no healthy upstream proxy is currently available.
+func (t *Traffic) SetFailClosed(enabled bool) {
+	if t != nil {
+		t.failClosed.Store(enabled)
+	}
 }
 
 // SetOutboundModifier registers an optional callback that can cloak headers or
@@ -227,7 +236,25 @@ func Open(dir, addr string) (*Traffic, error) {
 	// a direct dial. When a global egress proxy IS configured (SetUpstreamProxy),
 	// every captured request — intercepted AND transparently tunneled — is
 	// forwarded through it instead, so no host leaks the real source IP.
-	p.SetUpstreamProxy(func(*http.Request) (*url.URL, error) { return t.upstream.Load(), nil })
+	p.SetUpstreamProxy(func(req *http.Request) (*url.URL, error) {
+		if req != nil {
+			h := hostOnly(req.Host)
+			if h == "" && req.URL != nil {
+				h = hostOnly(req.URL.Host)
+			}
+			hl := strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]")
+			if hl == "localhost" || hl == "127.0.0.1" || hl == "::1" || strings.HasPrefix(hl, "127.") {
+				return nil, nil
+			}
+		}
+		if u := t.upstream.Load(); u != nil {
+			return u, nil
+		}
+		if t.failClosed.Load() {
+			return nil, errors.New("ARTEX fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
+		}
+		return nil, nil
+	})
 	// Fail-open: MITM every host by default, EXCEPT ones a prior request proved we
 	// can't intercept without breaking (see maybePassthrough). Those are tunneled
 	// transparently so the request still reaches the target instead of being killed.

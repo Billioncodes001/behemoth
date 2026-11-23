@@ -304,8 +304,29 @@ type Manager struct {
 	proxyPool           *proxyPoolState
 	forwardProxy        *dynamicForwardProxy
 	proxyPoolConfigured atomic.Bool
+	proxyPoolFailClosed atomic.Bool
 	onCloseMu           sync.Mutex
 	onClose             []func()
+}
+
+// SetProxyPoolFailClosed toggles strict fail-closed egress blocking when Proxy Pool
+// v2 is explicitly enabled. While true, if all proxies become unhealthy, direct
+// outbound connections are blocked across both dynamicForwardProxy and traffic MITM.
+func (m *Manager) SetProxyPoolFailClosed(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.proxyPoolFailClosed.Store(enabled)
+	if m.traffic != nil {
+		m.traffic.SetFailClosed(enabled)
+	}
+	if m.pg != nil {
+		m.syncBrowserMCPProxy()
+	}
+}
+
+func (m *Manager) IsProxyPoolFailClosed() bool {
+	return m != nil && m.proxyPoolFailClosed.Load()
 }
 
 // RegisterOnClose registers a cleanup hook invoked at the start of Manager.Close
@@ -621,9 +642,10 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
 	if fp, ferr := newDynamicForwardProxy(func() string { return m.GlobalProxy() }); ferr == nil {
 		m.forwardProxy = fp
-		// An empty runtime route means direct egress, even when the persisted
-		// pool still contains disabled or blank entries.
-		fp.direct = func() bool { return strings.TrimSpace(m.GlobalProxy()) == "" }
+		// Direct egress is allowed ONLY when fail-closed Proxy Pool mode is OFF
+		// and no Global Proxy is set. When Proxy Pool is enabled and all proxies
+		// are unhealthy, direct() returns false so requests fail-closed (503).
+		fp.direct = func() bool { return !m.IsProxyPoolFailClosed() && strings.TrimSpace(m.GlobalProxy()) == "" }
 	} else {
 		log.Printf("[proxy] local forwarder disabled: %v", ferr)
 	}
@@ -1059,7 +1081,7 @@ func (m *Manager) HasOutboundProxy() bool {
 	m.mu.RLock()
 	global := strings.TrimSpace(m.globalProxy)
 	m.mu.RUnlock()
-	return global != "" || m.proxyPoolConfigured.Load()
+	return global != "" || m.proxyPoolConfigured.Load() || m.proxyPoolFailClosed.Load()
 }
 
 // ForwardProxyAddr returns the local dynamic forward-proxy listener address (if running),
@@ -1099,7 +1121,7 @@ func (m *Manager) ProxyAddr() string {
 	m.mu.RLock()
 	global := strings.TrimSpace(m.globalProxy)
 	m.mu.RUnlock()
-	if (global != "" || m.proxyPoolConfigured.Load()) && m.forwardProxy != nil {
+	if (global != "" || m.proxyPoolConfigured.Load() || m.proxyPoolFailClosed.Load()) && m.forwardProxy != nil {
 		return m.forwardProxy.Addr()
 	}
 	return maskSecrets(global)

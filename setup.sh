@@ -138,7 +138,7 @@ install_security_arsenal() {
   if command -v apt-get >/dev/null 2>&1 && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y -qq 2>/dev/null || true
-    for pkg in tesseract-ocr tesseract-ocr-eng nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-pip pipx python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists; do
+    for pkg in tor tesseract-ocr tesseract-ocr-eng nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-pip pipx python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists; do
       apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
     done
     python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets >/dev/null 2>&1 || true

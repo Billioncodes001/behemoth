@@ -152,7 +152,7 @@ func (s *Server) handleProxyFailure(taskID string, cause error) {
 }
 
 func (s *Server) pauseProxyTask(taskID string, cause error) {
-	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	if strings.TrimSpace(s.m.GlobalProxy()) == "" && !s.m.IsProxyPoolFailClosed() {
 		return
 	}
 	max, interval := s.proxyReconnectConfig()

@@ -101,7 +101,7 @@ func (s *Server) autoProvisionLinuxArsenal() {
 	prevHashBytes, _ := os.ReadFile(stateFile)
 	prevHash := strings.TrimSpace(string(prevHashBytes))
 
-	coreExpected := []string{"tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql"}
+	coreExpected := []string{"tor", "tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql"}
 	missingCore := false
 	for _, bin := range coreExpected {
 		if _, lookErr := exec.LookPath(bin); lookErr != nil {
@@ -192,7 +192,7 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				"nmap", "nuclei", "subfinder", "httpx-pd", "httpx", "dnsx",
 				"ffuf", "gobuster", "dirb", "sqlmap", "nikto", "whatweb",
 				"wafw00f", "hydra", "sslscan", "dig", "whois", "nc",
-				"socat", "openssl", "curl", "python3", "rg", "jq", "tesseract", "mysql", "psql",
+				"socat", "openssl", "curl", "python3", "rg", "jq", "tor", "tesseract", "mysql", "psql",
 				"rustscan", "masscan", "smtp-user-enum", "onesixtyone", "snmpwalk",
 				"impacket-secretsdump", "impacket-GetNPUsers", "bloodhound-python",
 				"msfvenom", "trivy", "grype", "semgrep",

@@ -188,10 +188,13 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		activeProxyID = stats.ActiveProxyID
 	}
 	poolActive := poolEnabled && totalInPool > 0 && activeProxy != nil
+	poolExhausted := poolEnabled && !poolActive
 	globalActive := globalRaw != ""
 	routingMode := "direct"
 	if poolActive {
 		routingMode = "proxy_pool"
+	} else if poolExhausted {
+		routingMode = "proxy_pool_exhausted_fail_closed"
 	} else if globalActive {
 		routingMode = "static_global_proxy"
 	}
@@ -202,7 +205,9 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	}
 	instruction := "NO outbound proxy is enabled (Proxy Pool is OFF and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
 	if routingMode == "proxy_pool" {
-		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy. In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY (e.g. always pass --proxy \"$HTTP_PROXY\" to sqlmap/gobuster, -sT -Pn --proxies \"$HTTP_PROXY\" to nmap, and -proxy \"${HTTP_PROXY#http://}\" to openssl s_client). If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate' or 'disable_proxy')."
+		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy. In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY (e.g. always pass --proxy \"$HTTP_PROXY\" to sqlmap/gobuster, -sT -Pn --proxies \"$HTTP_PROXY\" to nmap, and -proxy \"${HTTP_PROXY#http://}\" to openssl s_client). If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate', 'tor_newnym', or 'disable_proxy')."
+	} else if routingMode == "proxy_pool_exhausted_fail_closed" {
+		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! ARTEX has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Immediately stop and inform the user that all proxies in the Proxy Pool are down/exhausted, and let them know they can click 'Enable Free Tor Network' in System -> Proxy Pool (or ask you to call manage_proxy_pool(action='enable_tor')) or import working proxies."
 	} else if routingMode == "static_global_proxy" {
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
@@ -213,12 +218,15 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		"local_proxy_env_url":        localForwarder,
 		"proxy_pool_enabled":         poolEnabled,
 		"proxy_pool_active":          poolActive,
+		"proxy_pool_exhausted":       poolExhausted,
+		"fail_closed":                poolEnabled,
 		"global_proxy_enabled":       globalActive,
 		"static_global_proxy":        maskSecrets(globalRaw),
 		"local_traffic_capture_only": trafficCapture && !anyOutbound,
 		"traffic_capture":            trafficCapture,
 		"active_proxy_id":            activeProxyID,
 		"active_proxy":               activeProxy,
+		"tor":                        s.torStatusSnapshot(),
 		"instruction":                instruction,
 		"config":                     cfg,
 		"stats":                      stats,
@@ -257,10 +265,11 @@ func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 
 func (s *Server) toolManageProxyPool() actool.CoreTool {
 	return wrTool("manage_proxy_pool",
-		"Control and reconfigure ARTEX proxy routing mid-operation: rotate (switch away from a slow/rate-limited/failing proxy immediately), test_all, test_one (probe proxy_id), activate (pin proxy_id), disable_proxy (quarantine a failing proxy_id and auto-failover), enable_proxy, clear_failed, clear_all, enable, disable, configure (adjust rotation_strategy, rotation_interval_seconds, auto_rotate_on_failure, session_sticky, max_consecutive_failures, cooldown_seconds), or delete.",
+		"Control and reconfigure ARTEX proxy routing mid-operation: rotate (switch away from a slow/rate-limited/failing proxy immediately), enable_tor (start built-in free unlimited-bandwidth Tor SOCKS5 circuits in Proxy Pool), tor_newnym (request brand-new Tor exit IPs via SIGNAL NEWNYM), disable_tor, tor_status, test_all, test_one (probe proxy_id), activate (pin proxy_id), disable_proxy (quarantine a failing proxy_id and auto-failover), enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete.",
 		objSchema(map[string]any{
-			"action":                        strParam("Action: rotate | test_all | test_one | activate | disable_proxy | enable_proxy | clear_failed | clear_all | enable | disable | configure | delete"),
+			"action":                        strParam("Action: rotate | enable_tor | tor_newnym | disable_tor | tor_status | test_all | test_one | activate | disable_proxy | enable_proxy | clear_failed | clear_all | enable | disable | configure | delete"),
 			"proxy_id":                      strParam("Target proxy ID (used by test_one, activate, disable_proxy, enable_proxy, delete)"),
+			"tor_circuits":                  map[string]any{"type": "integer", "description": "Optional number of isolated Tor SOCKS5 circuits (1-10, default 5) when action=enable_tor"},
 			"rotation_strategy":             strParam("Optional rotation strategy: round_robin | random | least_used"),
 			"rotation_interval_seconds":     map[string]any{"type": "integer", "description": "Optional rotation interval in seconds (>= 5)"},
 			"auto_rotate_on_failure":        map[string]any{"type": "boolean", "description": "Optional toggle to auto-rotate when a proxy fails"},
@@ -276,6 +285,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 			var a struct {
 				Action                     string `json:"action"`
 				ProxyID                    string `json:"proxy_id"`
+				TorCircuits                int    `json:"tor_circuits"`
 				RotationStrategy           string `json:"rotation_strategy"`
 				RotationIntervalSeconds    *int   `json:"rotation_interval_seconds"`
 				AutoRotateOnFailure        *bool  `json:"auto_rotate_on_failure"`
@@ -397,6 +407,30 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				}
 				actionOut = map[string]any{"action": act, "config": cfg}
 
+			case "tor_status":
+				return jsonResult(s.torStatusSnapshot())
+
+			case "enable_tor":
+				out, err := s.enableTorInPool(ctx, a.TorCircuits)
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				actionOut = out
+
+			case "tor_newnym":
+				out, err := s.rotateTorIdentity(ctx)
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				actionOut = out
+
+			case "disable_tor":
+				out, err := s.disableTorInPool()
+				if err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				actionOut = out
+
 			case "delete":
 				if strings.TrimSpace(a.ProxyID) == "" {
 					return actool.Errorf("proxy_id is required for action=delete"), nil
@@ -407,7 +441,7 @@ func (s *Server) toolManageProxyPool() actool.CoreTool {
 				actionOut = map[string]any{"action": act, "deleted": strings.TrimSpace(a.ProxyID)}
 
 			default:
-				return actool.Errorf(fmt.Sprintf("unsupported action %q (use rotate, test_all, test_one, activate, disable_proxy, enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete)", a.Action)), nil
+				return actool.Errorf(fmt.Sprintf("unsupported action %q (use rotate, enable_tor, tor_newnym, disable_tor, tor_status, test_all, test_one, activate, disable_proxy, enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete)", a.Action)), nil
 			}
 
 			s.syncProxyPoolNow()

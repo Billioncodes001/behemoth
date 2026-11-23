@@ -701,7 +701,11 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	if chatErr != nil {
 		finishReason = chatErr.Error()
 		log.Printf("[chat] Conversation #%d (%s) error: %v", c.ID, c.AgentKey, chatErr)
-		if ctx.Err() == nil && !emittedErrorResult {
+		if errors.Is(context.Cause(ctx), agent.AbortPausedByProxy) && !emittedErrorResult {
+			msgText := "Stopped: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect your server IP — fix/replace your proxies, enable the built-in free Tor Network, or disable Proxy Pool in System -> Proxy Pool to continue."
+			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
+				Summary: msgText, Detail: msgText})
+		} else if ctx.Err() == nil && !emittedErrorResult {
 			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
 				Summary: "Execution error: " + chatErr.Error(), Detail: chatErr.Error()})
 		}
