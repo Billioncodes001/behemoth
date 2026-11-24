@@ -65,8 +65,8 @@ persisted in the state log, and surfaced by `c2_agents` /
 | `c2_task` | write | Queue a shell command for an implant (timeout default 120 s, max 3600 s). |
 | `c2_results` | read | Read recent task results and task states. |
 | `c2_kill` | write | Queue a `kill` command; the implant removes persistence (systemd unit / cron entry / scheduled task) and exits on its next check-in. |
-| `c2_proxy_open` | write | Open a loopback SOCKS5 pivot tunnel through an implant (`socks5://user:pass@127.0.0.1:<port>`), optionally repointing the capture layer at it. |
-| `c2_proxy_close` | write | Close one tunnel or every tunnel of an implant, optionally restoring direct egress. |
+| `c2_proxy_open` | write | Open a loopback SOCKS5 pivot tunnel through an implant (`socks5://user:pass@127.0.0.1:<port>`), optionally pinning server egress at it (`use_for_capture`, outranks Pool/Tor). |
+| `c2_proxy_close` | write | Close one tunnel or every tunnel of an implant, optionally clearing a matching egress override. |
 | `c2_proxy_list` | read | List live tunnels with usage, connections and expiry. |
 
 The tools are seeded into the tools table and bound to the
@@ -101,8 +101,29 @@ implant over the existing beacon channel:
   300 ms python/powershell) instead of its beacon interval.
 
 Typical use: `c2_proxy_open{implant_id, target, use_for_capture}` then
-drive tools through the returned proxy, and `c2_proxy_close` when done
-(it also clears the global egress proxy if it still points there).
+drive tools through the returned proxy, and `c2_proxy_close` when done.
+
+### Composition with the Proxy Pool and Tor
+
+Tunnel egress is **implant-side**: the implant dials the target, so the
+server never touches it and the server's own IP stays hidden regardless of
+what the Proxy Pool or the built-in Tor client are doing. Which route the
+*server* uses for its remaining traffic is a separate decision:
+
+- `use_for_capture:true` pins the tunnel as the effective server egress
+  route (capture layer, Bash `HTTP(S)_PROXY`/`ALL_PROXY`, MCP servers,
+  scanners). The override **outranks** an enabled Proxy Pool and Exclusive
+  Tor, because it is the most specific, most recent operator decision.
+  Writing the settings-level global proxy alone is not enough there: that
+  key is read-only while the pool manages egress.
+- The reconnect supervisor probes the pinned tunnel on its tick instead of
+  Tor circuits or pool rows — a "pool recovered" signal would otherwise
+  resume runs the dead tunnel still cannot carry.
+- `c2_proxy_close` (default `clear_capture:true`) clears the override when
+  it still points at a closed tunnel, so the Pool / Tor / direct route takes
+  over again. Closing a tunnel you never pinned leaves routing untouched.
+- Fail-closed semantics are unchanged: with the Pool enabled (or Tor
+  running) a dead tunnel still yields errors, never a silent direct dial.
 
 Expectations: throughput is bounded by the beacon round trip, so the
 tunnel suits small request/response work (API calls, admin panels,

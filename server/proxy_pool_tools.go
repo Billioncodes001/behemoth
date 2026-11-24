@@ -175,9 +175,14 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		}
 	}
 	globalRaw := ""
+	override := ""
 	trafficCapture := false
 	if s.m != nil {
+		override = strings.TrimSpace(s.m.CaptureEgressOverride())
 		globalRaw = strings.TrimSpace(s.m.GlobalProxy())
+		if override != "" {
+			globalRaw = ""
+		}
 		trafficCapture = s.m.TrafficEnabled()
 	}
 	poolEnabled := cfg != nil && cfg.Enabled
@@ -192,9 +197,14 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	}
 	poolActive := poolEnabled && totalInPool > 0 && activeProxy != nil
 	poolExhausted := poolEnabled && !poolActive
-	globalActive := !exclusiveTor && !poolEnabled && globalRaw != ""
+	globalActive := override == "" && !exclusiveTor && !poolEnabled && globalRaw != ""
 	routingMode := "direct"
-	if exclusiveTor {
+	if override != "" {
+		routingMode = "tunnel_override"
+	} else if exclusiveTor {
+		// Failed circuits are pruned from the rotation, so a non-empty live list
+		// (or a healthy snapshot entry) is the only "routing works" signal; an empty
+		// list means fail-closed exhaustion, not a healthy Tor tunnel.
 		if torHealthyCount > 0 || (s.m != nil && s.m.ExclusiveTorCircuitCount() > 0) {
 			routingMode = "exclusive_tor"
 		} else {
@@ -218,6 +228,8 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	}
 	instruction := "NO outbound proxy is enabled (Tor is OFF, Proxy Pool is OFF, and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
 	switch routingMode {
+	case "tunnel_override":
+		instruction = "C2 TUNNEL EGRESS OVERRIDE ACTIVE: all server-side egress (capture layer, Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY, MCP servers, scanner tools) currently exits through an operator C2 pivot tunnel, even if a Proxy Pool or Tor is also enabled. Targets reachable only from the implant are now reachable; every byte is slow and capped, so avoid bulk fuzzing. Close with c2_proxy_close to restore the Pool/Tor/direct route."
 	case "exclusive_tor":
 		instruction = "EXCLUSIVE TOR NETWORK ACTIVE (Proxy Pool is auto-disabled): 100% of external target requests automatically route over isolated Tor SOCKS5 exit circuits ($0 bandwidth). Running agents pick up switches live per command without restarting. If a target WAF/Cloudflare challenges a Tor exit IP (403/429/Captcha), call manage_proxy_pool(action='tor_newnym') to rotate exit IPs or manage_proxy_pool(action='enable_tor', tor_mode='hybrid') to allow fallback to pool proxies."
 	case "exclusive_tor_exhausted_fail_closed":
@@ -232,16 +244,17 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
 	return map[string]any{
-		"proxy_enabled":          anyOutbound,
-		"any_proxy_enabled":      anyOutbound,
-		"effective_routing_mode": routingMode,
-		"local_proxy_env_url":    localForwarder,
-		"exclusive_tor_active":   exclusiveTor,
-		"proxy_pool_enabled":     poolEnabled,
-		"proxy_pool_active":      poolActive,
-		"proxy_pool_exhausted":   poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
-		"fail_closed":            poolEnabled || exclusiveTor,
-		"global_proxy_enabled":   globalActive,
+		"proxy_enabled":           anyOutbound,
+		"any_proxy_enabled":       anyOutbound,
+		"effective_routing_mode":  routingMode,
+		"local_proxy_env_url":     localForwarder,
+		"capture_egress_override": override,
+		"exclusive_tor_active":    exclusiveTor,
+		"proxy_pool_enabled":      poolEnabled,
+		"proxy_pool_active":       poolActive,
+		"proxy_pool_exhausted":    poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
+		"fail_closed":             poolEnabled || exclusiveTor,
+		"global_proxy_enabled":    globalActive,
 		"static_global_proxy": maskSecrets(func() string {
 			if s.m != nil {
 				return s.m.StaticGlobalProxy()

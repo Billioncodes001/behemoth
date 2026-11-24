@@ -139,14 +139,19 @@ func (s *Server) runProxyProbe(ctx context.Context, proxyRaw, caPEMPath string, 
 }
 
 func (s *Server) handleProxyFailure(taskID string, cause error) {
-	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	route := strings.TrimSpace(s.m.GlobalProxy())
+	if route == "" && !s.m.IsProxyPoolFailClosed() {
 		return
 	}
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if probe := s.runProxyProbe(s.ctx, s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
-		return
+	// An empty route in fail-closed mode means every member was pruned; a direct
+	// probe would succeed while egress is actually blocked, so only probe a route.
+	if route != "" {
+		if probe := s.runProxyProbe(s.ctx, route, "", s.m.egressProbes(), 10*time.Second); probe.OK {
+			return
+		}
 	}
 	s.pauseProxyTask(taskID, cause)
 }
@@ -195,13 +200,19 @@ func (s *Server) handleProxyTrafficFailure(cause error) {
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	if !isGlobalProxyDialFailure(cause) {
 		return
 	}
-	// Confirm the saved global proxy itself before pausing. MITM RequestError can
-	// also represent a target-side failure, and those must not pause a task.
-	if probe := probeEgress(context.Background(), s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
+	route := strings.TrimSpace(s.m.GlobalProxy())
+	if route == "" && !s.m.IsProxyPoolFailClosed() {
 		return
+	}
+	// Confirm the saved route itself before pausing. MITM RequestError can also
+	// represent a target-side failure, and those must not pause a task.
+	if route != "" {
+		if probe := probeEgress(context.Background(), route, "", s.m.egressProbes(), 10*time.Second); probe.OK {
+			return
+		}
 	}
 	for _, t := range s.m.List() {
 		st := t.lifecycleSnapshot()
@@ -216,11 +227,17 @@ func (s *Server) handleProxyToolFailure(ctx context.Context, cause error) {
 	if s.handleProxyPoolFailure(cause) {
 		return
 	}
-	if !isGlobalProxyDialFailure(cause) || strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	if !isGlobalProxyDialFailure(cause) {
 		return
 	}
-	if probe := probeEgress(context.Background(), s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second); probe.OK {
+	route := strings.TrimSpace(s.m.GlobalProxy())
+	if route == "" && !s.m.IsProxyPoolFailClosed() {
 		return
+	}
+	if route != "" {
+		if probe := probeEgress(context.Background(), route, "", s.m.egressProbes(), 10*time.Second); probe.OK {
+			return
+		}
 	}
 	if info := agent.RunInfoFrom(ctx); info.TaskID > 0 {
 		s.pauseProxyTask(fmt.Sprint(info.TaskID), cause)
@@ -254,13 +271,30 @@ func (s *Server) runProxyReconnect(ctx context.Context) {
 }
 
 func (s *Server) proxyReconnectTick() {
-	if strings.TrimSpace(s.m.GlobalProxy()) == "" {
+	route := strings.TrimSpace(s.m.GlobalProxy())
+	if route == "" && !s.m.IsProxyPoolFailClosed() {
 		// Clearing the runtime route is a successful direct transition. Reuse the
 		// generation gate so only eligible, non-exhausted proxy pauses resume.
 		s.proxyReconnectSuccess()
 		return
 	}
-	if s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {
+	if override := s.m.CaptureEgressOverride(); override != "" {
+		// A pinned tunnel outranks Tor/pool: only its own health matters, and a
+		// circuit "recovery" would resume runs the tunnel still cannot carry.
+		if probe := s.runProxyProbe(context.Background(), override, "", s.m.egressProbes(), 10*time.Second); probe.OK {
+			s.proxyReconnectSuccess()
+			return
+		}
+		route = override
+	} else if s.m.IsExclusiveTorEnabled() {
+		// Rotate off a dead circuit before falling through to per-task backoff;
+		// a healthy sibling circuit resumes the paused runs immediately.
+		if s.probeExclusiveTorRecover(route, 2) {
+			return
+		}
+		route = strings.TrimSpace(s.m.GlobalProxy())
+	}
+	if s.m.CaptureEgressOverride() == "" && s.m.proxyPool != nil && len(s.m.proxyPoolEntries()) > 0 {
 		// A pool tick may confirm the active route or switch to another available
 		// member. If it cannot confirm either, retain the original #106 per-task
 		// attempt/backoff/exhaustion loop (especially for a one-member legacy
@@ -302,12 +336,19 @@ func (s *Server) proxyReconnectTick() {
 		if !claimed {
 			continue
 		}
-		res := s.runProxyProbe(context.Background(), s.m.GlobalProxy(), "", s.m.egressProbes(), 10*time.Second)
-		if res.OK {
-			s.proxyReconnectSuccessWithGuards(map[string]proxyReconnectGuard{
-				t.ID: {generation: round, attempt: attempt, checkAttempt: true},
-			}, nil)
-			return
+		// In fail-closed mode an empty route (all members pruned) cannot recover by
+		// probing direct — direct is blocked — so count it as a failed attempt.
+		var res egressProbeResult
+		if route != "" {
+			res = s.runProxyProbe(context.Background(), route, "", s.m.egressProbes(), 10*time.Second)
+			if res.OK {
+				s.proxyReconnectSuccessWithGuards(map[string]proxyReconnectGuard{
+					t.ID: {generation: round, attempt: attempt, checkAttempt: true},
+				}, nil)
+				return
+			}
+		} else {
+			res.Error = "no live proxy route (fail-closed); direct egress blocked"
 		}
 		err := res.Error
 		exhausted := attempt >= max

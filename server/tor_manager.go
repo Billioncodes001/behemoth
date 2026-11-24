@@ -371,6 +371,40 @@ func (s *Server) shutdownExclusiveTor() {
 
 // shutdownHybridTorIfPoolDisabled cleans up Hybrid Tor circuits and stops the
 // managed Tor daemon when Proxy Pool is switched OFF while Hybrid Tor was running.
+// probeExclusiveTorRecover drops a circuit that just failed and probes up to max
+// remaining circuits, promoting the first that answers. One burned Tor exit must
+// never strand the whole platform while sibling circuits are still alive. When no
+// circuit answers it clears the rotation list, which leaves the fail-closed guard
+// in charge instead of silently falling back to a direct (IP-revealing) dial.
+func (s *Server) probeExclusiveTorRecover(dead string, max int) bool {
+	if s == nil || s.m == nil || !s.m.IsExclusiveTorEnabled() {
+		return false
+	}
+	if max < 1 {
+		max = 1
+	}
+	candidates := s.m.PruneExclusiveTorCircuit(dead)
+	alive := make([]string, 0, len(candidates))
+	probed := 0
+	for _, cand := range candidates {
+		if probed >= max {
+			alive = append(alive, cand)
+			continue
+		}
+		probed++
+		if s.runProxyProbe(serverContext(s), cand, "", s.m.egressProbes(), proxyPoolProbeTimeout).OK {
+			alive = append(alive, cand)
+		}
+	}
+	if len(alive) == 0 {
+		s.m.SetExclusiveTor(true, nil)
+		return false
+	}
+	s.m.SetExclusiveTor(true, alive)
+	s.proxyReconnectSuccess()
+	return true
+}
+
 func (s *Server) shutdownHybridTorIfPoolDisabled() {
 	if ppV2 == nil || ppV2.Pool == nil {
 		return

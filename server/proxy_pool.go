@@ -667,6 +667,18 @@ func serverContext(s *Server) context.Context {
 }
 
 func (s *Server) reconcileProxyPoolAfterProbe(activeConfirmed bool) bool {
+	if s.m.CaptureEgressOverride() != "" {
+		// An operator-pinned tunnel is the effective route: neither pool rows nor
+		// Tor circuits carry traffic while it is pinned, so a "switch" here would
+		// resume runs the tunnel cannot serve.
+		return false
+	}
+	if s.m.IsExclusiveTorEnabled() {
+		// Pool rows are suspended while Exclusive Tor owns egress: applying a pool
+		// member here would report a switch the wire never sees. Circuit rotation
+		// (probeExclusiveTorRecover) is the only recovery path in this mode.
+		return false
+	}
 	entries := s.m.proxyPoolEntries()
 	activeID := s.m.proxyPoolActiveID()
 	activeAvailable := false
@@ -735,11 +747,25 @@ func (s *Server) handleProxyPoolFailure(cause error) bool {
 	}
 	cur := strings.TrimSpace(s.m.GlobalProxy())
 	if cur == "" {
+		if s.m.IsExclusiveTorEnabled() {
+			return s.probeExclusiveTorRecover("", 3)
+		}
 		return false
 	}
 	res := s.runProxyProbe(serverContext(s), cur, "", s.m.egressProbes(), proxyPoolProbeTimeout)
 	if res.OK {
 		return false
+	}
+	if s.m.CaptureEgressOverride() != "" {
+		// The pinned tunnel is the effective route; pool rows and Tor circuits
+		// cannot serve egress until it is cleared, so a Pool/Tor "switch" here
+		// would be a false recovery.
+		return false
+	}
+	if s.m.IsExclusiveTorEnabled() {
+		// Pool rows stay suspended in Exclusive Tor mode, so applying a pool member
+		// here would report a switch that never reaches the wire. Rotate circuits.
+		return s.probeExclusiveTorRecover(cur, 3)
 	}
 	_, _, onFailure, _ := s.m.proxyRotateConfig()
 	s.proxyPoolTickMu.Lock()

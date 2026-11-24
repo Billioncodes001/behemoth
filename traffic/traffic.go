@@ -169,11 +169,16 @@ type Traffic struct {
 	// through (nil = dial targets directly). Both the intercepted and the
 	// transparent-passthrough paths honor it (go-mitmproxy's getUpstreamConn),
 	// so no host escapes it. Hot-swappable at runtime via SetUpstreamProxy.
-	upstream        atomic.Pointer[url.URL]
-	failClosed      atomic.Bool
-	upstreamMu      sync.RWMutex
-	upstreamFailure func(error)
-	outboundMod     atomic.Value // optional func(host string, hdr http.Header)
+	upstream atomic.Pointer[url.URL]
+	// upstreamProvider resolves the upstream per request, so a rotating egress
+	// route (Tor circuits, proxy pool, operator tunnel override) is spread over
+	// requests instead of pinning the whole MITM to one static proxy. An empty
+	// result falls back to the static upstream, then to the fail-closed guard.
+	upstreamProvider func() string
+	failClosed       atomic.Bool
+	upstreamMu       sync.RWMutex
+	upstreamFailure  func(error)
+	outboundMod      atomic.Value // optional func(host string, hdr http.Header)
 }
 
 // SetFailClosed controls whether the MITM proxy blocks direct target dials when
@@ -236,25 +241,7 @@ func Open(dir, addr string) (*Traffic, error) {
 	// a direct dial. When a global egress proxy IS configured (SetUpstreamProxy),
 	// every captured request — intercepted AND transparently tunneled — is
 	// forwarded through it instead, so no host leaks the real source IP.
-	p.SetUpstreamProxy(func(req *http.Request) (*url.URL, error) {
-		if req != nil {
-			h := hostOnly(req.Host)
-			if h == "" && req.URL != nil {
-				h = hostOnly(req.URL.Host)
-			}
-			hl := strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]")
-			if hl == "localhost" || hl == "127.0.0.1" || hl == "::1" || strings.HasPrefix(hl, "127.") {
-				return nil, nil
-			}
-		}
-		if u := t.upstream.Load(); u != nil {
-			return u, nil
-		}
-		if t.failClosed.Load() {
-			return nil, errors.New("ARTEX fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
-		}
-		return nil, nil
-	})
+	p.SetUpstreamProxy(t.resolveUpstream)
 	// Fail-open: MITM every host by default, EXCEPT ones a prior request proved we
 	// can't intercept without breaking (see maybePassthrough). Those are tunneled
 	// transparently so the request still reaches the target instead of being killed.
@@ -345,6 +332,36 @@ func (t *Traffic) ProxyAddr() string {
 	return "http://" + t.addr
 }
 
+// resolveUpstream decides the upstream for one captured request. Loopback targets
+// always dial direct (local PoC servers are not reachable through an external
+// proxy); everything else prefers the live provider (Tor/pool rotation, operator
+// tunnel override), then the static upstream, and finally honours the fail-closed
+// guard instead of leaking a direct dial.
+func (t *Traffic) resolveUpstream(req *http.Request) (*url.URL, error) {
+	if req != nil {
+		h := hostOnly(req.Host)
+		if h == "" && req.URL != nil {
+			h = hostOnly(req.URL.Host)
+		}
+		hl := strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]")
+		if hl == "localhost" || hl == "127.0.0.1" || hl == "::1" || strings.HasPrefix(hl, "127.") {
+			return nil, nil
+		}
+	}
+	if raw := t.currentUpstreamProvider(); raw != "" {
+		if u, err := ValidateProxyURL(raw); err == nil {
+			return u, nil
+		}
+	}
+	if u := t.upstream.Load(); u != nil {
+		return u, nil
+	}
+	if t.failClosed.Load() {
+		return nil, errors.New("ARTEX fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
+	}
+	return nil, nil
+}
+
 // SetUpstreamProxy points every captured request at a global egress proxy
 // (http/https/socks5, optional user:pass in the URL). An empty raw string clears
 // it, restoring direct dialing. The change is atomic and takes effect on the next
@@ -372,8 +389,39 @@ func (t *Traffic) SetUpstreamFailureHandler(fn func(error)) {
 	t.upstreamMu.Unlock()
 }
 
+// SetUpstreamProvider installs a dynamic upstream resolver consulted on every
+// captured request. The recording MITM shares one egress policy with the rest of
+// the platform: with Exclusive Tor or a rotating Proxy Pool it spreads requests
+// over healthy members instead of pinning every host to a single static proxy,
+// so one dead circuit cannot black-hole the whole capture layer. Returning ""
+// falls back to the static upstream (then to the fail-closed guard). Passing nil
+// removes it.
+func (t *Traffic) SetUpstreamProvider(fn func() string) {
+	if t == nil {
+		return
+	}
+	t.upstreamMu.Lock()
+	t.upstreamProvider = fn
+	t.upstreamMu.Unlock()
+}
+
+// currentUpstreamProvider runs the registered resolver, tolerating nil and
+// blank results. It is called on the request path, so it must stay cheap.
+func (t *Traffic) currentUpstreamProvider() string {
+	if t == nil {
+		return ""
+	}
+	t.upstreamMu.RLock()
+	fn := t.upstreamProvider
+	t.upstreamMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return strings.TrimSpace(fn())
+}
+
 func (t *Traffic) reportUpstreamFailure(err error) {
-	if err == nil || t.upstream.Load() == nil {
+	if err == nil || (t.upstream.Load() == nil && t.currentUpstreamProvider() == "") {
 		return
 	}
 	t.upstreamMu.RLock()

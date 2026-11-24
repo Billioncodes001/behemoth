@@ -300,8 +300,13 @@ type Manager struct {
 	// (http/https/socks5, optional user:pass). Empty = direct. When traffic
 	// capture is on it becomes the MITM's upstream; when capture is off it is
 	// injected into agent bash env / WebFetch directly. See ProxyAddr.
-	globalProxy          string
-	userStaticGlobal     string
+	globalProxy      string
+	userStaticGlobal string
+	// captureEgress overrides the effective egress route while an operator has an
+	// explicit tunnel pinned (c2_proxy_open use_for_capture). It wins over the
+	// Proxy Pool and Exclusive Tor because it is the most specific, most recent
+	// operator decision, and is cleared again by c2_proxy_close.
+	captureEgress        string
 	proxyPool            *proxyPoolState
 	forwardProxy         *dynamicForwardProxy
 	proxyPoolConfigured  atomic.Bool
@@ -337,13 +342,22 @@ func (m *Manager) SetExclusiveTor(enabled bool, circuitURLs []string) {
 	if m.traffic != nil {
 		m.traffic.SetFailClosed(enabled || m.proxyPoolFailClosed.Load())
 		if enabled {
+			// Seed the static upstream with the first circuit; the live rotation
+			// provider (NextUpstreamProxy) spreads real requests across all of them.
 			first := ""
 			if len(cleaned) > 0 {
 				first = cleaned[0]
 			}
-			_ = m.traffic.SetUpstreamProxy(first)
+			if override := m.CaptureEgressOverride(); override != "" {
+				first = override
+			}
+			if err := m.traffic.SetUpstreamProxy(first); err != nil {
+				log.Printf("[tor] exclusive upstream invalid, ignored: %v", err)
+			}
 		} else {
-			_ = m.traffic.SetUpstreamProxy(m.GlobalProxy())
+			if err := m.traffic.SetUpstreamProxy(m.GlobalProxy()); err != nil {
+				log.Printf("[tor] restoring upstream invalid, ignored: %v", err)
+			}
 		}
 	}
 	if m.pg != nil {
@@ -369,6 +383,96 @@ func (m *Manager) ExclusiveTorCircuitCount() int {
 	n := len(m.exclusiveTorCircuits)
 	m.exclusiveTorMu.RUnlock()
 	return n
+}
+
+// nextExclusiveTorCircuit round-robins over the live isolated circuits. It backs
+// both the local forwarder and the recording MITM provider, so captured and
+// uncaptured traffic rotate identically instead of pinning one exit.
+func (m *Manager) nextExclusiveTorCircuit() string {
+	if m == nil {
+		return ""
+	}
+	m.exclusiveTorMu.RLock()
+	defer m.exclusiveTorMu.RUnlock()
+	if !m.exclusiveTorEnabled || len(m.exclusiveTorCircuits) == 0 {
+		return ""
+	}
+	idx := int(m.exclusiveTorSeq.Add(1)-1) % len(m.exclusiveTorCircuits)
+	return m.exclusiveTorCircuits[idx]
+}
+
+// ExclusiveTorCircuits returns a copy of the live circuit URLs.
+func (m *Manager) ExclusiveTorCircuits() []string {
+	if m == nil {
+		return nil
+	}
+	m.exclusiveTorMu.RLock()
+	out := append([]string(nil), m.exclusiveTorCircuits...)
+	m.exclusiveTorMu.RUnlock()
+	return out
+}
+
+// PruneExclusiveTorCircuit drops one dead circuit (empty = no-op) and returns the
+// remaining URLs. Pruning keeps the rotation from handing requests to an exit
+// that already refused them, and lets Exclusive Tor fail closed on its own once
+// the last circuit is gone.
+func (m *Manager) PruneExclusiveTorCircuit(dead string) []string {
+	if m == nil {
+		return nil
+	}
+	dead = strings.TrimSpace(dead)
+	m.exclusiveTorMu.Lock()
+	if dead != "" {
+		kept := m.exclusiveTorCircuits[:0]
+		for _, u := range m.exclusiveTorCircuits {
+			if u != dead {
+				kept = append(kept, u)
+			}
+		}
+		m.exclusiveTorCircuits = kept
+	}
+	out := append([]string(nil), m.exclusiveTorCircuits...)
+	m.exclusiveTorMu.Unlock()
+	return out
+}
+
+// CaptureEgressOverride returns the operator-pinned tunnel egress ("" when none).
+func (m *Manager) CaptureEgressOverride() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.RLock()
+	v := m.captureEgress
+	m.mu.RUnlock()
+	return v
+}
+
+// SetCaptureEgressOverride pins (or, with "", clears) an explicit egress route
+// that outranks the Proxy Pool and Exclusive Tor. It is what makes
+// c2_proxy_open(use_for_capture) authoritative even while a pool is enabled or
+// Tor is running, where writing the static settings key alone is a silent no-op.
+func (m *Manager) SetCaptureEgressOverride(raw string) error {
+	if m == nil {
+		return nil
+	}
+	raw = strings.TrimSpace(raw)
+	if raw != "" {
+		if _, err := traffic.ValidateProxyURL(raw); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	m.captureEgress = raw
+	m.mu.Unlock()
+	if m.traffic != nil {
+		if err := m.traffic.SetUpstreamProxy(m.GlobalProxy()); err != nil {
+			return err
+		}
+	}
+	if m.pg != nil {
+		m.syncBrowserMCPProxy()
+	}
+	return nil
 }
 
 // SetProxyPoolFailClosed toggles strict fail-closed egress blocking when Proxy Pool
@@ -776,6 +880,10 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
 			log.Printf("[proxy] 全局代理 %q 无效，已忽略: %v", m.globalProxy, err)
 		}
+		// One egress policy for the recording layer and everyone else: the MITM
+		// asks the manager per request, so Tor/pool rotation and tunnel overrides
+		// apply to captured traffic identically to the forwarder path.
+		m.traffic.SetUpstreamProvider(m.NextUpstreamProxy)
 	}
 	m.enrich = enrich.New(m.assets, m.ProxyAddr, 4)
 	// Reconcile the seeded browser MCP with the persisted capture state, so a
@@ -1145,7 +1253,7 @@ func (m *Manager) HasOutboundProxy() bool {
 	if m == nil {
 		return false
 	}
-	return strings.TrimSpace(m.GlobalProxy()) != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed()
+	return strings.TrimSpace(m.GlobalProxy()) != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed() || m.CaptureEgressOverride() != ""
 }
 
 // ForwardProxyAddr returns the local dynamic forward-proxy listener address (if running),
@@ -1232,6 +1340,9 @@ func (m *Manager) GlobalProxy() string {
 	if m == nil {
 		return ""
 	}
+	if override := m.CaptureEgressOverride(); override != "" {
+		return override
+	}
 	m.exclusiveTorMu.RLock()
 	torOn := m.exclusiveTorEnabled
 	var torFirst string
@@ -1260,19 +1371,12 @@ func (m *Manager) NextUpstreamProxy() string {
 	if m == nil {
 		return ""
 	}
-	m.exclusiveTorMu.RLock()
-	if m.exclusiveTorEnabled {
-		n := len(m.exclusiveTorCircuits)
-		if n == 0 {
-			m.exclusiveTorMu.RUnlock()
-			return ""
-		}
-		idx := int(m.exclusiveTorSeq.Add(1)-1) % n
-		u := m.exclusiveTorCircuits[idx]
-		m.exclusiveTorMu.RUnlock()
+	if override := m.CaptureEgressOverride(); override != "" {
+		return override
+	}
+	if u := m.nextExclusiveTorCircuit(); u != "" {
 		return u
 	}
-	m.exclusiveTorMu.RUnlock()
 
 	if ppV2 != nil && ppV2.Pool != nil {
 		cfg := ppV2.Pool.GetConfig()

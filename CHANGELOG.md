@@ -2,6 +2,14 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+### 修复
+
+- 记录层（MITM）出站改为逐请求解析上游：Exclusive Tor 与轮换中的 Proxy Pool 对抓包流量同样轮询，坏掉的单个 Tor 出口不再拖垮整层抓包；仍保留直连回环与 fail-closed 语义。
+- Exclusive Tor 失败自愈：失败出口从轮换列表剔除并探测其余出口，健康者顶上；全部出口耗尽时保持 fail-closed，状态上报 `exclusive_tor_exhausted_fail_closed`，不再出现「切换到池代理」的假恢复。
+- fail-closed 且路由为空（成员全部剔除）时，重连 tick 与工具/流量失败处理不再把「直连探测成功」当作可用路由，改按失败计入重试直至耗尽。
+- 新增操作员固定出口覆盖（`c2_proxy_open` 的 `use_for_capture`）：隧道出口优先于 Proxy Pool 与 Tor，Bash 环境、MCP、抓包层一并生效；`c2_proxy_close` 只清除指向被关隧道的覆盖。修复此前池模式/独占 Tor 下写入全局代理被静默忽略、`c2_proxy_close` 无法恢复路由的问题。
+- 新增出站路由覆盖的回归测试（traffic 逐请求解析、覆盖优先级、Tor 出口轮换/耗尽、tick 探测选择）。
+
 ## [Unreleased]
 
 ### 新增与改进

@@ -28,7 +28,7 @@ func (s *Server) toolC2ProxyOpen() actool.CoreTool {
 			"ttl_minutes":     map[string]any{"type": "integer", "description": "Tunnel lifetime in minutes (default 15, max 240)"},
 			"max_mb":          map[string]any{"type": "integer", "description": "Combined up+down byte cap in MB (default 32, max 512)"},
 			"auth":            map[string]any{"type": "boolean", "description": "Require SOCKS5 user/pass (default true; only disable for local one-shot tools)"},
-			"use_for_capture": map[string]any{"type": "boolean", "description": "Also point the global egress proxy (MITM capture layer) at this tunnel right away"},
+			"use_for_capture": map[string]any{"type": "boolean", "description": "Pin this tunnel as the server's effective egress (capture layer, Bash env, MCP, scanners). Outranks an enabled Proxy Pool or Exclusive Tor until c2_proxy_close"},
 		}, "implant_id", "target"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			mgr := s.c2Manager()
@@ -76,10 +76,12 @@ func (s *Server) toolC2ProxyOpen() actool.CoreTool {
 				"hint":       "Point tools at this proxy (curl -x, HTTP_PROXY, playwright proxy) or poll c2_proxy_list. Close with c2_proxy_close when done.",
 			}
 			if a.UseForCapture && s.m != nil {
-				if err := s.m.SetGlobalProxy(proxy); err != nil {
+				// Pin it as the effective egress override: a plain global-proxy
+				// write is a silent no-op while the Proxy Pool owns routing.
+				if err := s.m.SetCaptureEgressOverride(proxy); err != nil {
 					out["capture_error"] = err.Error()
 				} else {
-					out["capture"] = "global egress proxy now points at this tunnel"
+					out["capture"] = "server egress (capture layer, bash env, MCP) now exits through this tunnel; it overrides Proxy Pool / Tor until c2_proxy_close"
 				}
 			}
 			return jsonResult(out)
@@ -118,16 +120,21 @@ func (s *Server) toolC2ProxyClose() actool.CoreTool {
 			if strings.TrimSpace(a.TunnelID) == "" && strings.TrimSpace(a.ImplantID) == "" {
 				return actool.Errorf("tunnel_id or implant_id is required"), nil
 			}
-			proxy := ""
+			proxies := make([]string, 0, 1)
 			closed := 0
 			if id := strings.TrimSpace(a.TunnelID); id != "" {
 				if info, ok := mgr.TunnelMgr().GetTunnel(id); ok {
-					proxy = info.Proxy
+					proxies = append(proxies, info.Proxy)
 				}
 				if mgr.TunnelMgr().CloseTunnel(id) {
 					closed = 1
 				}
 			} else {
+				for _, info := range mgr.TunnelMgr().ListTunnels() {
+					if info.ImplantID == a.ImplantID {
+						proxies = append(proxies, info.Proxy)
+					}
+				}
 				closed = mgr.TunnelMgr().CloseImplantTunnels(a.ImplantID)
 			}
 			out := map[string]any{"closed": closed}
@@ -135,11 +142,17 @@ func (s *Server) toolC2ProxyClose() actool.CoreTool {
 			if a.ClearCapture != nil {
 				clear = *a.ClearCapture
 			}
-			if clear && s.m != nil && proxy != "" && s.m.GlobalProxy() == proxy {
-				if err := s.m.SetGlobalProxy(""); err != nil {
-					out["capture_error"] = err.Error()
-				} else {
-					out["capture"] = "global egress proxy cleared"
+			if clear && s.m != nil {
+				override := s.m.CaptureEgressOverride()
+				for _, proxy := range proxies {
+					if override != "" && override == proxy {
+						if err := s.m.SetCaptureEgressOverride(""); err != nil {
+							out["capture_error"] = err.Error()
+						} else {
+							out["capture"] = "egress override cleared; the Proxy Pool / Tor / direct route is effective again"
+						}
+						break
+					}
 				}
 			}
 			return jsonResult(out)

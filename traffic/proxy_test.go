@@ -1,6 +1,12 @@
 package traffic
 
-import "testing"
+import (
+	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
 
 func TestValidateProxyURL(t *testing.T) {
 	ok := []string{
@@ -75,6 +81,77 @@ func TestProxyAddr(t *testing.T) {
 		got := (&Traffic{addr: c.addr}).ProxyAddr()
 		if got != c.want {
 			t.Errorf("ProxyAddr(%q) = %q, want %q", c.addr, got, c.want)
+		}
+	}
+}
+func TestResolveUpstreamPrefersLiveProvider(t *testing.T) {
+	tr := &Traffic{}
+	if err := tr.SetUpstreamProxy("http://static.example:8080"); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int64
+	tr.SetUpstreamProvider(func() string {
+		n := calls.Add(1)
+		if n%2 == 0 {
+			return "socks5://circuit-b:19051"
+		}
+		return "socks5://circuit-a:19050"
+	})
+	req := &http.Request{Host: "target.example", URL: &url.URL{Host: "target.example"}}
+
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		u, err := tr.resolveUpstream(req)
+		if err != nil {
+			t.Fatalf("resolveUpstream: %v", err)
+		}
+		if u == nil || strings.Contains(u.Host, "static") {
+			t.Fatalf("provider did not win over static upstream: %v", u)
+		}
+		seen[u.Host] = true
+	}
+	if !seen["circuit-a:19050"] || !seen["circuit-b:19051"] {
+		t.Fatalf("expected rotation across both provider values, saw %v", seen)
+	}
+}
+
+func TestResolveUpstreamFallsBackToStaticThenFailClosed(t *testing.T) {
+	tr := &Traffic{}
+	tr.SetUpstreamProvider(func() string { return "  " })
+	if err := tr.SetUpstreamProxy("http://static.example:8080"); err != nil {
+		t.Fatal(err)
+	}
+	req := &http.Request{Host: "target.example", URL: &url.URL{Host: "target.example"}}
+	u, err := tr.resolveUpstream(req)
+	if err != nil || u == nil || u.Host != "static.example:8080" {
+		t.Fatalf("blank provider must fall back to the static upstream, got u=%v err=%v", u, err)
+	}
+
+	// No provider, no static upstream and fail-closed: direct dials must be blocked.
+	if err := tr.SetUpstreamProxy(""); err != nil {
+		t.Fatal(err)
+	}
+	tr.SetUpstreamProvider(nil)
+	tr.SetFailClosed(true)
+	if u, err := tr.resolveUpstream(req); err == nil || u != nil {
+		t.Fatalf("expected fail-closed error, got u=%v err=%v", u, err)
+	}
+
+	// A live provider re-opens egress even while fail-closed is latched.
+	tr.SetUpstreamProvider(func() string { return "socks5://127.0.0.1:19050" })
+	if u, err := tr.resolveUpstream(req); err != nil || u == nil || u.Host != "127.0.0.1:19050" {
+		t.Fatalf("provider must satisfy the fail-closed guard, got u=%v err=%v", u, err)
+	}
+}
+
+func TestResolveUpstreamLoopbackBypassesEverything(t *testing.T) {
+	tr := &Traffic{}
+	tr.SetFailClosed(true)
+	tr.SetUpstreamProvider(func() string { return "socks5://127.0.0.1:19050" })
+	for _, host := range []string{"127.0.0.1:8899", "localhost:3000", "[::1]:80"} {
+		req := &http.Request{Host: host, URL: &url.URL{Host: host}}
+		if u, err := tr.resolveUpstream(req); err != nil || u != nil {
+			t.Fatalf("loopback %s must dial direct, got u=%v err=%v", host, u, err)
 		}
 	}
 }
