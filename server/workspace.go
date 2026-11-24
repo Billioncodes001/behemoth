@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -93,6 +94,7 @@ func (s *Server) wsRel(abs string) string {
 var (
 	reURLDomainExtract  = regexp.MustCompile(`(?i)https?://([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+|\d{1,3}(?:\.\d{1,3}){3})`)
 	reBareDomainExtract = regexp.MustCompile(`(?i)\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)\b`)
+	reDomainishName     = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	nonDomainExts       = map[string]bool{
 		"html": true, "htm": true, "json": true, "txt": true, "md": true, "py": true,
 		"js": true, "ts": true, "tsx": true, "css": true, "php": true, "sql": true,
@@ -100,6 +102,50 @@ var (
 		"png": true, "jpg": true, "jpeg": true, "svg": true, "pdf": true, "log": true,
 	}
 )
+
+// baseDomainSuffixes lists common two-label public suffixes (multi-part TLDs)
+// so e.g. portal.uniosun.edu.ng collapses to uniosun.edu.ng, not edu.ng.
+var baseDomainSuffixes = map[string]bool{
+	"co.uk": true, "org.uk": true, "ac.uk": true, "gov.uk": true, "me.uk": true,
+	"co.jp": true, "or.jp": true, "ne.jp": true, "ac.jp": true,
+	"com.au": true, "net.au": true, "org.au": true, "edu.au": true, "gov.au": true,
+	"co.nz": true, "net.nz": true, "org.nz": true,
+	"com.br": true, "com.mx": true, "com.ar": true, "com.co": true, "com.pe": true, "com.uy": true,
+	"com.eg": true, "com.ng": true, "edu.ng": true, "gov.ng": true, "org.ng": true, "net.ng": true, "sch.ng": true, "ac.ng": true, "co.ng": true,
+	"com.gh": true, "com.ke": true, "co.ke": true, "co.tz": true,
+	"co.za": true, "org.za": true, "com.zm": true,
+	"co.in": true, "net.in": true, "org.in": true, "edu.in": true, "gov.in": true,
+	"com.pk": true, "com.bd": true, "com.lk": true,
+	"com.my": true, "com.sg": true, "co.id": true, "com.ph": true, "com.vn": true, "co.th": true,
+	"com.hk": true, "com.tw": true, "com.cn": true, "gov.cn": true, "edu.cn": true, "org.cn": true, "net.cn": true,
+	"com.tr": true, "com.sa": true, "com.ae": true, "com.qa": true, "com.kw": true, "com.bh": true, "com.om": true,
+	"com.ua": true, "com.ru": true, "co.kr": true, "or.kr": true, "co.il": true,
+	"com.es": true, "com.pt": true, "com.pl": true, "com.gr": true, "com.ro": true, "com.cz": true,
+	"co.ca": true, "com.de": true, "com.fr": true, "com.it": true, "com.nl": true, "com.se": true, "com.no": true,
+}
+
+// baseDomainOf reduces a hostname to its registrable base domain (eTLD+1),
+// handling multi-part suffixes like .edu.ng / .co.uk. IPs and single-label
+// hosts pass through unchanged.
+func baseDomainOf(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	h = strings.TrimSuffix(h, ".")
+	if h == "" || !strings.Contains(h, ".") {
+		return h
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return h
+	}
+	parts := strings.Split(h, ".")
+	if len(parts) <= 2 {
+		return h
+	}
+	last2 := parts[len(parts)-2] + "." + parts[len(parts)-1]
+	if baseDomainSuffixes[last2] {
+		return parts[len(parts)-3] + "." + last2
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
 
 // extractPrimaryTargetDomain pulls a clean target domain/host (e.g. "tax-database.oirs.ng")
 // out of a prompt, task description, or conversation title.
@@ -160,6 +206,77 @@ func (s *Server) ensureDomainWorkspaceStructure(domain, sessionID string) {
 			_ = os.Symlink(domDir, linkPath)
 		}
 	}
+}
+
+// sessionDirDomain inspects a session directory for domain-scoped workspace
+// links (sessions/conv-N/<domain> → domains/<domain>, created by
+// ensureDomainWorkspaceStructure) or domain-named subfolders, returning the
+// most recently modified candidate domain ("" when none).
+func (s *Server) sessionDirDomain(sessAbs string) string {
+	ents, err := os.ReadDir(sessAbs)
+	if err != nil {
+		return ""
+	}
+	domainsDir := filepath.Join(filepath.Clean(s.m.dir), "domains") + string(os.PathSeparator)
+	best := ""
+	var bestMod int64
+	for _, e := range ents {
+		full := filepath.Join(sessAbs, e.Name())
+		lstat, err := os.Lstat(full)
+		if err != nil {
+			continue
+		}
+		info, serr := os.Stat(full) // follow internal symlinks
+		if serr != nil {
+			info = lstat
+		}
+		cand := ""
+		if lstat.Mode()&os.ModeSymlink != 0 {
+			if target, terr := os.Readlink(full); terr == nil {
+				t := filepath.Clean(target)
+				if filepath.IsAbs(t) && strings.HasPrefix(t, domainsDir) {
+					cand = filepath.Base(t)
+				}
+			}
+		}
+		if cand == "" && info.IsDir() && reDomainishName.MatchString(strings.ToLower(e.Name())) {
+			cand = strings.ToLower(e.Name())
+		}
+		if cand == "" {
+			continue
+		}
+		mod := info.ModTime().UnixNano()
+		if best == "" || mod > bestMod {
+			best, bestMod = cand, mod
+		}
+	}
+	return best
+}
+
+// conversationMessageDomain extracts a target domain from the conversation's
+// first user message — the usual place a target URL appears when the title
+// itself doesn't carry one. Activity lists omit the lazy detail blob, so the
+// first user activity's detail is loaded explicitly.
+func (s *Server) conversationMessageDomain(convID int64) string {
+	acts, _, err := s.m.pg.ConvActivityList(convID, 0, 10)
+	if err != nil {
+		return ""
+	}
+	for _, a := range acts {
+		if a.Kind != "user" {
+			continue
+		}
+		if dom := extractPrimaryTargetDomain(a.Summary); dom != "" {
+			return dom
+		}
+		if detail, derr := s.m.pg.ConvActivityDetail(convID, a.ID); derr == nil {
+			if dom := extractPrimaryTargetDomain(detail); dom != "" {
+				return dom
+			}
+		}
+		return "" // only the first user message is a reliable target hint
+	}
+	return ""
 }
 
 func classifyWorkspaceKind(name string, isDir bool) string {
@@ -256,9 +373,20 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 		if isDir && relDir == "sessions" && strings.HasPrefix(e.Name(), "conv-") && s.m != nil && s.m.pg != nil {
 			if cid, perr := strconv.ParseInt(strings.TrimPrefix(e.Name(), "conv-"), 10, 64); perr == nil {
 				if conv, cerr := s.m.pg.GetConversation(cid); cerr == nil && conv != nil {
+					// Label sessions by the BASE DOMAIN they worked on — resolved
+					// from the conversation title, then the domain-scoped
+					// workspace links inside the session dir, then the first
+					// user message — so related sessions cluster visually
+					// instead of showing arbitrary conversation text.
 					dom := extractPrimaryTargetDomain(conv.Title)
+					if dom == "" {
+						dom = s.sessionDirDomain(filepath.Join(abs, e.Name()))
+					}
+					if dom == "" {
+						dom = s.conversationMessageDomain(cid)
+					}
 					if dom != "" {
-						displayName = fmt.Sprintf("%s (%s)", dom, e.Name())
+						displayName = fmt.Sprintf("%s (%s)", baseDomainOf(dom), e.Name())
 					} else if strings.TrimSpace(conv.Title) != "" {
 						displayName = fmt.Sprintf("%s (%s)", strings.TrimSpace(conv.Title), e.Name())
 					}
@@ -269,7 +397,7 @@ func (s *Server) wsList(w http.ResponseWriter, r *http.Request) {
 				dom := extractPrimaryTargetDomain(t.Name + " " + t.Description + " " + t.Goal)
 				label := strings.TrimSpace(t.Name)
 				if dom != "" {
-					displayName = fmt.Sprintf("%s (Task #%s)", dom, e.Name())
+					displayName = fmt.Sprintf("%s (Task #%s)", baseDomainOf(dom), e.Name())
 				} else if label != "" {
 					displayName = fmt.Sprintf("%s (Task #%s)", label, e.Name())
 				}

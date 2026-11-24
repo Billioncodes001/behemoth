@@ -241,8 +241,8 @@ func TestTaskDeduplicationDomainWorkspaceAndModelParser(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	s.wsList(w, httptest.NewRequest(http.MethodGet, "/api/workspace/list?path=sessions", nil))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "portal.acme-corp.example ("+sessID+")") {
-		t.Fatalf("expected domain-named session display_name, got status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "acme-corp.example ("+sessID+")") {
+		t.Fatalf("expected base-domain session display_name, got status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	w2 := httptest.NewRecorder()

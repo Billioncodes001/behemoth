@@ -99,10 +99,10 @@ func (s *Server) processCredentialJob(parent context.Context, item *db.Intellige
 	result := *item.Credentials
 	conversationID := result.ConversationID
 	if conversationID == 0 {
-		if c, err := s.m.pg.CreateConversation(db.CredentialAgentKey, "凭据整理 · "+firstLine(item.Title, 42), nil); err == nil {
+		if c, err := s.m.pg.CreateConversation(db.CredentialAgentKey, "Credential processing · "+firstLine(item.Title, 42), nil); err == nil {
 			conversationID = c.ID
 			result.ConversationID = c.ID
-			_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: db.CredentialAgentKey, Kind: "user", Summary: "收到凭据上报，开始整理", Detail: item.Content})
+			_, _ = s.m.pg.AppendConvActivity(c.ID, db.Activity{Worker: db.CredentialAgentKey, Kind: "user", Summary: "Credential report received — starting processing", Detail: item.Content})
 		}
 	}
 	needsExtract := result.ForceExtract || result.SourceHash != db.CredentialSourceHash(item.Content) || result.Method == "" || (result.Error != "" && len(result.Accounts) == 0)

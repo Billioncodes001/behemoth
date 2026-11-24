@@ -99,6 +99,12 @@ const artifactColumns = `a.id, a.company_id, a.task_id, a.asset_id, a.name, a.fi
 	a.rel_path, a.kind, a.mime, a.size, a.sha256, a.source_url, a.source_tool,
 	a.description, a.extra, a.created_at::text, a.updated_at::text`
 
+// artifactReturningCols is the unqualified column list for INSERT ... RETURNING
+// (the INSERT target carries no "a" alias).
+const artifactReturningCols = `id, company_id, task_id, asset_id, name, filename,
+	rel_path, kind, mime, size, sha256, source_url, source_tool,
+	description, extra, created_at::text, updated_at::text`
+
 func scanArtifact(sc interface{ Scan(...any) error }) (*Artifact, error) {
 	var (
 		a                 Artifact
@@ -157,7 +163,7 @@ func (s *ArtifactStore) Create(req ArtifactCreate) (*Artifact, error) {
 INSERT INTO artifacts (company_id, task_id, asset_id, name, filename, rel_path,
                        kind, mime, size, sha256, source_url, source_tool, description, extra)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-RETURNING `+artifactColumns,
+RETURNING `+artifactReturningCols,
 		req.CompanyID, req.TaskID, req.AssetID, name, strings.TrimSpace(req.Filename), relPath,
 		kind, strings.TrimSpace(req.MIME), req.Size, strings.TrimSpace(req.SHA256),
 		strings.TrimSpace(req.SourceURL), strings.TrimSpace(req.SourceTool),

@@ -14,9 +14,12 @@ import (
 // artifacts store: filterable List + per-status Counts for badges.
 // =====================================================================
 
-// Agent request kinds. The DB enforces the same set with a CHECK constraint.
+// Agent request kinds. The DB enforces the same set with a CHECK constraint
+// (kept in sync by EnsureAgentRequestKinds on existing databases).
 const (
 	AgentRequestKindTool        = "tool"
+	AgentRequestKindToolError   = "tool_error"
+	AgentRequestKindResource    = "resource"
 	AgentRequestKindCapability  = "capability"
 	AgentRequestKindIntegration = "integration"
 	AgentRequestKindInfra       = "infra"
@@ -26,7 +29,8 @@ const (
 
 // AgentRequestKinds is the ordered list of valid kinds (for validation + UI).
 var AgentRequestKinds = []string{
-	AgentRequestKindTool, AgentRequestKindCapability, AgentRequestKindIntegration,
+	AgentRequestKindTool, AgentRequestKindToolError, AgentRequestKindResource,
+	AgentRequestKindCapability, AgentRequestKindIntegration,
 	AgentRequestKindInfra, AgentRequestKindData, AgentRequestKindOther,
 }
 
@@ -140,6 +144,13 @@ const agentRequestColumns = `r.id, r.agent_key, r.task_id, r.session_id, r.kind,
 	r.urgency, r.title, r.details, r.context, r.status, r.extra,
 	r.created_at::text, r.updated_at::text`
 
+// agentRequestReturningCols is the unqualified column list for INSERT ...
+// RETURNING: the INSERT target has no "r" alias, so the r.-prefixed SELECT list
+// above cannot be reused there.
+const agentRequestReturningCols = `id, agent_key, task_id, session_id, kind,
+	urgency, title, details, context, status, extra,
+	created_at::text, updated_at::text`
+
 func scanAgentRequest(sc interface{ Scan(...any) error }) (*AgentRequest, error) {
 	var (
 		r        AgentRequest
@@ -181,7 +192,7 @@ func (s *AgentRequestStore) Create(req AgentRequestCreate) (*AgentRequest, error
 INSERT INTO agent_requests (agent_key, task_id, session_id, kind, urgency,
                             title, details, context, extra)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-RETURNING `+agentRequestColumns,
+RETURNING `+agentRequestReturningCols,
 		strings.TrimSpace(req.AgentKey), req.TaskID, strings.TrimSpace(req.SessionID),
 		NormalizeAgentRequestKind(req.Kind), NormalizeAgentRequestUrgency(req.Urgency),
 		title, strings.TrimSpace(req.Details), strings.TrimSpace(req.Context), extraJSON)
@@ -308,4 +319,34 @@ func (s *AgentRequestStore) Counts() (map[string]int, error) {
 		out["total"] += n
 	}
 	return out, rows.Err()
+}
+
+// agentRequestKindCheckNames is the set of kinds the agent_requests.kind CHECK
+// constraint must allow. Older databases carry a narrower constraint (before
+// tool_error/resource were added), which would silently coerce the new kinds
+// back to "capability" — so the constraint is recreated idempotently on startup.
+func agentRequestKindCheckNames() string {
+	quoted := make([]string, 0, len(AgentRequestKinds))
+	for _, k := range AgentRequestKinds {
+		quoted = append(quoted, "'"+k+"'")
+	}
+	return strings.Join(quoted, ",")
+}
+
+// EnsureAgentRequestKinds recreates the agent_requests.kind CHECK constraint so
+// it matches AgentRequestKinds. Safe to run on every startup.
+func (d *DB) EnsureAgentRequestKinds() error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`ALTER TABLE agent_requests DROP CONSTRAINT IF EXISTS agent_requests_kind_check`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE agent_requests ADD CONSTRAINT agent_requests_kind_check CHECK (kind IN (` +
+		agentRequestKindCheckNames() + `))`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

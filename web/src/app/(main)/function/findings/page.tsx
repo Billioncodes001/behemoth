@@ -62,6 +62,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 import { AssetTree, assetPathOf } from "./_components/asset-tree";
+import { baseDomainOf } from "@/lib/domain";
 import {
   extractFindingWebsite,
   FINDING_STATUSES,
@@ -290,7 +291,9 @@ export default function FindingsPage() {
   // 导出弹窗状态:范围(当前筛选/全部/选中) × 格式(md 单文件/md 分文件 zip/csv/json)。
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
-  const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "html-pdf" | "csv" | "json">("md-single");
+  const [exportFormat, setExportFormat] = React.useState<"md-single" | "md-zip" | "html-pdf" | "csv" | "json">(
+    "md-single",
+  );
   const [includeOriginals, setIncludeOriginals] = React.useState(false);
   const [reviewing, setReviewing] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
@@ -825,9 +828,7 @@ export default function FindingsPage() {
       setLaunchingChat(lockKey);
       try {
         const title =
-          site !== "Unassigned / General"
-            ? `${site} — Exploit #${f.finding_id}`
-            : `Exploit Finding #${f.finding_id}`;
+          site !== "Unassigned / General" ? `${site} — Exploit #${f.finding_id}` : `Exploit Finding #${f.finding_id}`;
         const conv = await api.createConversation("auto", title);
         const prompt =
           `Continue penetration testing and active exploitation on @[finding#${f.finding_id}:${f.name || f.vulnclass || "Finding"}]` +
@@ -861,7 +862,9 @@ export default function FindingsPage() {
         const conv = await api.createConversation("auto", website);
         const prompt =
           `Continue comprehensive penetration testing and post-discovery exploitation on target website **https://${website}**` +
-          (taskId ? ` (attached to existing Task #${taskId} — reuse Task #${taskId} via \`add_task_hint\`, do NOT spawn a duplicate task)` : "") +
+          (taskId
+            ? ` (attached to existing Task #${taskId} — reuse Task #${taskId} via \`add_task_hint\`, do NOT spawn a duplicate task)`
+            : "") +
           `.\n\nDiscovered findings so far on ${website}:\n${topRefs || "- None yet"}\n\n` +
           `Systematically test and exploit every finding above, hunt for deeper attack chains (auth bypass, SQLi, XSS, SSRF, BOLA/IDOR, exposed portals), update confirmed severities via \`update_finding\`, tabularize all created/found portal credentials in \`domains/${website}/CREDENTIALS.md\`, and save offline HTML snapshots of any accessed portals in \`domains/${website}/portal-simulation/\`.`;
         await api.sendConversationMessage(Number(conv.id), prompt);
@@ -880,6 +883,7 @@ export default function FindingsPage() {
       string,
       {
         website: string;
+        hosts: string[];
         items: Finding[];
         latestTs: number;
         latestIso: string;
@@ -891,12 +895,17 @@ export default function FindingsPage() {
       }
     >();
     for (const f of flat.items) {
-      const website = extractFindingWebsite(f);
+      // Group by the registrable BASE domain so subdomains of the same site
+      // (api-prod.example.com, api-croms.example.com, …) cluster under one
+      // example.com group instead of one group per subdomain.
+      const host = extractFindingWebsite(f);
+      const website = host === "Unassigned / General" ? host : baseDomainOf(host);
       let g = bySite.get(website);
       const tms = new Date(f.ts || 0).getTime() || 0;
       if (!g) {
         g = {
           website,
+          hosts: [],
           items: [],
           latestTs: tms,
           latestIso: f.ts,
@@ -908,6 +917,7 @@ export default function FindingsPage() {
         };
         bySite.set(website, g);
       }
+      if (!g.hosts.includes(host)) g.hosts.push(host);
       g.items.push(f);
       if (tms > g.latestTs) {
         g.latestTs = tms;
@@ -1211,7 +1221,8 @@ export default function FindingsPage() {
             {websiteGroups.length > 1 && (
               <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
                 <span>
-                  Grouped across <strong className="text-foreground">{websiteGroups.length}</strong> target websites (latest findings at top)
+                  Grouped across <strong className="text-foreground">{websiteGroups.length}</strong> target websites
+                  (latest findings at top)
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -1268,9 +1279,7 @@ export default function FindingsPage() {
                           <GlobeIcon className="size-4 shrink-0 text-emerald-500" />
                           <div className="flex min-w-0 flex-col">
                             <div className="flex items-center gap-2">
-                              <CardTitle className="truncate font-mono text-sm">
-                                {wg.website}
-                              </CardTitle>
+                              <CardTitle className="truncate font-mono text-sm">{wg.website}</CardTitle>
                               <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
                                 {wg.items.length} {wg.items.length === 1 ? "finding" : "findings"}
                               </span>
@@ -1279,6 +1288,12 @@ export default function FindingsPage() {
                               Latest activity: {wg.latestIso ? fmtTime(wg.latestIso, ui) : "—"}
                               {wg.taskId ? ` · Task #${wg.taskId}` : ""}
                             </CardDescription>
+                            {wg.hosts.length > 1 && (
+                              <CardDescription className="truncate text-xs">
+                                Includes: {wg.hosts.slice(0, 4).join(", ")}
+                                {wg.hosts.length > 4 ? ` +${wg.hosts.length - 4} more` : ""}
+                              </CardDescription>
+                            )}
                           </div>
                         </button>
 
@@ -1302,11 +1317,22 @@ export default function FindingsPage() {
                                 onClick={() => void continueWebsitePentest(wg.website, wg.items)}
                                 title="Continue scanning and exploiting this website in Chat"
                               >
-                                {busySite ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" className="text-emerald-500" />}
+                                {busySite ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : (
+                                  <PlayIcon data-icon="inline-start" className="text-emerald-500" />
+                                )}
                                 Continue Pentest
                               </Button>
-                              <Button size="sm" variant="outline" asChild title="Open domain credentials & portal simulations">
-                                <Link href={`/function/workspace?path=${encodeURIComponent(`domains/${wg.website}`)}`}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                asChild
+                                title="Open domain credentials & portal simulations"
+                              >
+                                <Link
+                                  href={`/function/workspace?path=${encodeURIComponent(`domains/${isRealDomain && wg.hosts.length > 0 ? wg.hosts[0] : wg.website}`)}`}
+                                >
                                   <FolderOpenIcon data-icon="inline-start" />
                                   Workspace
                                 </Link>

@@ -1848,7 +1848,7 @@ CREATE TABLE IF NOT EXISTS agent_requests (
     task_id     BIGINT REFERENCES tasks(id) ON DELETE SET NULL,
     session_id  TEXT NOT NULL DEFAULT '',
     kind        TEXT NOT NULL DEFAULT 'capability'
-                CHECK (kind IN ('tool','capability','integration','infra','data','other')),
+                CHECK (kind IN ('tool','tool_error','resource','capability','integration','infra','data','other')),
     urgency     TEXT NOT NULL DEFAULT 'normal'
                 CHECK (urgency IN ('low','normal','high')),
     title       TEXT NOT NULL,

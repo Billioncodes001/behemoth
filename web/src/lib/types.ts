@@ -325,7 +325,15 @@ export interface IntentAsset {
 }
 
 // ---- Agent capability/infra requests (report_need inbox) ----
-export type AgentRequestKind = "tool" | "capability" | "integration" | "infra" | "data" | "other";
+export type AgentRequestKind =
+  | "tool"
+  | "tool_error"
+  | "resource"
+  | "capability"
+  | "integration"
+  | "infra"
+  | "data"
+  | "other";
 export type AgentRequestUrgency = "low" | "normal" | "high";
 export type AgentRequestStatus = "new" | "acknowledged" | "resolved" | "dismissed";
 

@@ -9,10 +9,13 @@ import {
   BellRing,
   CheckIcon,
   CircleCheckIcon,
+  CpuIcon,
+  LightbulbIcon,
   MessageSquareWarningIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   Trash2Icon,
+  WrenchIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,7 +27,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notificationError } from "@/i18n/notify-runtime";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
-import type { AgentRequest, AgentRequestStatus } from "@/lib/types";
+import type { AgentRequest, AgentRequestKind, AgentRequestStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -42,9 +45,45 @@ const STATUS_CLASS: Record<string, string> = {
   dismissed: "bg-muted text-muted-foreground",
 };
 
+const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  tool: WrenchIcon,
+  tool_error: MessageSquareWarningIcon,
+  resource: CpuIcon,
+  capability: WrenchIcon,
+  integration: WrenchIcon,
+  infra: CpuIcon,
+  data: WrenchIcon,
+  other: LightbulbIcon,
+};
+
+const KIND_FILTERS: Array<AgentRequestKind | "all"> = [
+  "all",
+  "tool",
+  "tool_error",
+  "resource",
+  "capability",
+  "integration",
+  "infra",
+  "data",
+  "other",
+];
+
+// splitRecommendation pulls a trailing "Recommendation: …" out of the free-text
+// details so the card can render it as its own plain-language section.
+function splitRecommendation(details: string): { body: string; recommendation: string } {
+  const m = /recommendation\s*[:：]\s*/i.exec(details);
+  if (!m) return { body: details, recommendation: "" };
+  const idx = m.index;
+  return {
+    body: details.slice(0, idx).trim(),
+    recommendation: details.slice(idx + m[0].length).trim(),
+  };
+}
+
 export default function AgentRequestsPage() {
   const { t, liveT } = useLiveTranslation();
   const [tab, setTab] = React.useState<AgentRequestStatus | "all">("new");
+  const [kind, setKind] = React.useState<AgentRequestKind | "all">("all");
   const [items, setItems] = React.useState<AgentRequest[]>([]);
   const [counts, setCounts] = React.useState<Record<string, number>>({});
   const [total, setTotal] = React.useState(0);
@@ -54,14 +93,14 @@ export default function AgentRequestsPage() {
   const load = React.useCallback(() => {
     const status = tab === "all" ? "" : tab;
     api
-      .agentRequests({ status, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+      .agentRequests({ status, kind: kind === "all" ? undefined : kind, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
       .then((r) => {
         setItems(r.requests);
         setTotal(r.total);
         setCounts(r.counts);
       })
       .catch((e) => toast.error(liveT("agentRequests.loadFailed", { message: notificationError(e, liveT) })));
-  }, [tab, page, liveT]);
+  }, [tab, kind, page, liveT]);
 
   React.useEffect(() => {
     load();
@@ -138,6 +177,27 @@ export default function AgentRequestsPage() {
             </Button>
           </div>
 
+          <div className="flex flex-wrap items-center gap-1.5">
+            {KIND_FILTERS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setKind(value);
+                  setPage(0);
+                }}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                  kind === value
+                    ? "border-foreground/30 bg-foreground/10 font-medium text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t(`agentRequests.kind.${value}`)}
+              </button>
+            ))}
+          </div>
+
           {items.length === 0 ? (
             <div className="flex flex-col items-center gap-1 py-10 text-center">
               <MessageSquareWarningIcon className="size-6 text-muted-foreground" />
@@ -186,37 +246,50 @@ function RequestCard({
   onAct: (req: AgentRequest, status: AgentRequestStatus) => Promise<void>;
   onRemove: (req: AgentRequest) => Promise<void>;
 }) {
+  const Icon = KIND_ICON[req.kind] ?? LightbulbIcon;
+  const { body, recommendation } = splitRecommendation(req.details ?? "");
+  const defaultRec = ["tool", "tool_error", "resource", "capability"].includes(req.kind)
+    ? t(`agentRequests.defaultRec.${req.kind}`)
+    : "";
+  const suggestion = recommendation || defaultRec;
+
   return (
     <div className={cn("rounded-lg border p-3", req.status === "new" && "border-l-4 border-l-blue-500")}>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className={cn("capitalize", STATUS_CLASS[req.status])}>
-          {req.status}
+        <Badge variant="outline" className={cn(STATUS_CLASS[req.status])}>
+          {t(`agentRequests.status.${req.status}`)}
         </Badge>
-        <Badge variant="outline" className="capitalize">
-          {req.kind}
+        <Badge variant="outline" className="gap-1">
+          <Icon className="size-3" />
+          {t(`agentRequests.kind.${req.kind}`)}
         </Badge>
-        <Badge variant="outline" className={cn("capitalize", URGENCY_CLASS[req.urgency])}>
-          {req.urgency}
+        <Badge variant="outline" className={cn(URGENCY_CLASS[req.urgency])}>
+          {t(`agentRequests.urgency.${req.urgency}`)}
         </Badge>
-        <span className="truncate font-medium text-sm">{req.title}</span>
+        <span className="truncate text-sm font-medium">{req.title}</span>
         <span className="ml-auto shrink-0 text-muted-foreground text-xs">{req.agent_key}</span>
       </div>
-      {(req.details ?? req.context) && (
-        <div className="mt-2 flex flex-col gap-1.5">
-          {req.details && (
-            <p className="whitespace-pre-wrap text-muted-foreground text-xs">
-              <span className="font-medium">{t("agentRequests.details")}: </span>
-              {req.details}
-            </p>
-          )}
-          {req.context && (
-            <p className="whitespace-pre-wrap text-muted-foreground text-xs">
-              <span className="font-medium">{t("agentRequests.context")}: </span>
-              {req.context}
-            </p>
-          )}
-        </div>
-      )}
+
+      <div className="mt-2 flex flex-col gap-2">
+        {req.context && (
+          <p className="text-xs">
+            <span className="font-medium">{t("agentRequests.section.workingOn")}: </span>
+            <span className="whitespace-pre-wrap text-muted-foreground">{req.context}</span>
+          </p>
+        )}
+        {body && (
+          <p className="text-xs">
+            <span className="font-medium">{t("agentRequests.section.whatHappened")}: </span>
+            <span className="whitespace-pre-wrap text-muted-foreground">{body}</span>
+          </p>
+        )}
+        {suggestion && (
+          <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1.5 text-xs">
+            <span className="font-medium">{t("agentRequests.section.recommendation")}: </span>
+            <span className="whitespace-pre-wrap">{suggestion}</span>
+          </p>
+        )}
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-3">
         {req.task_id && (
           <Link

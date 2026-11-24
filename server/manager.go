@@ -802,6 +802,9 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := pg.EnsureLLMRecordsTable(); err != nil {
 		log.Printf("[llmrec] create table: %v", err)
 	}
+	if err := pg.EnsureAgentRequestKinds(); err != nil {
+		log.Printf("[agentreq] ensure kinds constraint: %v", err)
+	}
 	if err := pg.EnsureLLMUsageTable(); err != nil {
 		log.Printf("[llmusage] create table: %v", err)
 	}
