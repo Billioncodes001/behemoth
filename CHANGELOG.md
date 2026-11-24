@@ -4,7 +4,7 @@
 
 ### 变更
 
-- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
+- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。保留 `cmd/artex` 目录别名（指向 `cmd/behemoth` 的符号链接）与自更新脚本中对旧 `./artex` 路径的同步刷新，使更名前已部署实例的自动同步与 supervisor 重启循环能平滑过渡到新二进制。
 
 ### 修复
 
@@ -34,10 +34,6 @@
 - 新增 MCP 服务端：外部智能体可通过 `/mcp`（Streamable HTTP）查看任务与漏洞、创建任务、暂停/恢复任务及补充提示。提供访问令牌的权限范围、企业限制、任务限额、有效期和吊销，以及调用审计、来源 IP/CIDR 白名单与可信代理配置。默认关闭；该端点使用独立访问令牌认证，不使用 HTTP Basic Auth。
 - 统一出站 HTTP 请求标识：Go 请求与两个 Python 采集模板从 20 个标准桌面浏览器 User-Agent 中随机选择，保留环境变量和显式请求头覆盖，同一请求的重定向与重试复用选定值。此变化仅涉及 HTTP 请求头。
 
-### 变更
-
-- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
-
 ### 修复
 
 - 命令拦截除匹配原始工具输入 JSON 外，也匹配解码后的嵌套字符串值，修复换行、制表符和转义引号导致危险命令漏拦的问题；保留原始 JSON 规则及非 JSON 输入的兼容行为。
@@ -51,10 +47,6 @@
 - 新增可选「无成果止损」：按实际运行时长、独立漏洞数量与最低等级做一次检查，未达标时自动收尾并显示「无成果停止」；暂停、排队及计划窗口外不计时，复活后重新计时，默认关闭。停止状态复用 `timeout`，已有 `on_task_timeout` 触发器仍会执行并可能消耗 token。
 - 任务详情新增只读文件浏览，支持目录导航、最近文件、文本与图片预览、单文件下载及目录 ZIP 下载；展示意图目录对应的标题和状态，并提供中英文界面。
 
-### 变更
-
-- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
-
 ### 修复
 
 - 无成果检查与漏洞写入串行化，并在同一事务内重新计算独立漏洞数量，避免临界时刻已达到成果要求的任务被误停止。
@@ -67,10 +59,6 @@
 - 新增英文界面和语言切换，覆盖任务、审批、设置、通知及计划任务等页面，并统一常用状态、日期与错误提示的翻译。
 - 流量页面展示完整流量 ID，支持按 ID 搜索及在 HTTP 环境复制；Agent 可直接使用该 ID 读取已有流量。
 - 漏洞统计与列表使用相同筛选条件，区分独立漏洞和原始上报记录数量。
-
-### 变更
-
-- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
 
 ### 修复
 

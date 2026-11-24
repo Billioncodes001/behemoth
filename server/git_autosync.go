@@ -314,6 +314,9 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o behemoth.new ./cmd/behemoth
 		mv -f behemoth.new behemoth
 		chmod +x behemoth
+		# Legacy keep-alive: pre-rename supervisors and Docker entrypoints still exec ./artex.
+		# rm+cp (not cp in place) avoids ETXTBSY while the old binary is still running.
+		rm -f artex && cp -f behemoth artex 2>/dev/null || true
 	`, needNpmInstall))
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("build failed: %v (%s)", err, firstLine(string(out), 300))
