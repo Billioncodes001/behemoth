@@ -17,7 +17,7 @@ func TestApplyOnWire(t *testing.T) {
 		{"non-ascii", "客户端", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("ARTEX_HTTP_USER_AGENT", tc.value)
+			t.Setenv("BEHEMOTH_HTTP_USER_AGENT", tc.value)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				got := r.UserAgent()
 				if tc.want == "" && !slices.Contains(userAgents[:], got) {

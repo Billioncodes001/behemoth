@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -423,7 +423,7 @@ func (s *Server) toolUpdateInterceptRule() actool.CoreTool {
 				return actool.Errorf(fmt.Sprintf("intercept rule %d not found", a.ID)), nil
 			}
 			if immutableHostSafetyRuleNames[target.Name] && (!*a.Enabled || strings.TrimSpace(a.Pattern) != "" || (a.Action != "" && a.Action != "deny")) {
-				return actool.Errorf(fmt.Sprintf("rule %q protects the ARTEX host operating system and cannot be weakened", target.Name)), nil
+				return actool.Errorf(fmt.Sprintf("rule %q protects the BEHEMOTH host operating system and cannot be weakened", target.Name)), nil
 			}
 			newPattern := target.Pattern
 			if strings.TrimSpace(a.Pattern) != "" {

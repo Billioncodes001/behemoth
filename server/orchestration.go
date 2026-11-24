@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/behemoth/agent"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/intercept"
+	"github.com/Autumn-27/behemoth/traffic"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )

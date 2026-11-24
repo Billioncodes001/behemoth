@@ -1,4 +1,4 @@
-// Command artex runs the ARTEX backend: the dual SQLite graph stores,
+// Command behemoth runs the BEHEMOTH backend: the dual SQLite graph stores,
 // the event-driven exploration engine, and the JSON HTTP API consumed by the
 // shadcn/ui frontend.
 package main
@@ -16,11 +16,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/config"
-	"github.com/Autumn-27/artex/evidence"
-	"github.com/Autumn-27/artex/selfupdate"
-	"github.com/Autumn-27/artex/server"
+	"github.com/Autumn-27/behemoth/agent"
+	"github.com/Autumn-27/behemoth/config"
+	"github.com/Autumn-27/behemoth/evidence"
+	"github.com/Autumn-27/behemoth/selfupdate"
+	"github.com/Autumn-27/behemoth/server"
 )
 
 // version is the build version, injected at release time via
@@ -80,7 +80,7 @@ func main() {
 }
 
 func run() int {
-	// `artex evidence verify <file.jsonl> [...]` — replay a run log's hash chain.
+	// `behemoth evidence verify <file.jsonl> [...]` — replay a run log's hash chain.
 	// Intercepted before flag.Parse because it is a subcommand, not a flag.
 	if len(os.Args) >= 4 && os.Args[1] == "evidence" && os.Args[2] == "verify" {
 		return runEvidenceVerify(os.Args[3:])
@@ -89,7 +89,7 @@ func run() int {
 		addr          = flag.String("addr", ":8787", "HTTP listen address")
 		dataDir       = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
 		proxy         = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
-		genLicense    = flag.Bool("generate-license", false, "generate a signed commercial ARTEX-LIC-* customer license key and exit")
+		genLicense    = flag.Bool("generate-license", false, "generate a signed commercial BEHEMOTH-LIC-* customer license key and exit")
 		licCustomer   = flag.String("license-customer", "", "customer / organization name for --generate-license")
 		licTier       = flag.String("license-tier", "Enterprise", "license tier for --generate-license (Starter | Professional | Enterprise)")
 		licDays       = flag.Int("license-days", 365, "validity in days for --generate-license")
@@ -100,7 +100,7 @@ func run() int {
 	if *genLicense {
 		key, claims, err := server.GenerateCommercialLicense(*licCustomer, *licTier, *licDays, *licMaxWorkers)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating license: %v\nUsage: ./artex --generate-license --license-customer \"Acme Corp\" --license-tier Enterprise --license-days 365\n", err)
+			fmt.Fprintf(os.Stderr, "Error generating license: %v\nUsage: ./behemoth --generate-license --license-customer \"Acme Corp\" --license-tier Enterprise --license-days 365\n", err)
 			return 1
 		}
 		fmt.Printf("Customer     : %s\n", claims.Customer)
@@ -139,7 +139,7 @@ func run() int {
 	if _, e := os.Stat(cfgPath); e == nil {
 		log.Printf("[config] Config file: %s", cfgPath)
 	} else {
-		log.Printf("[config] Config file: %s (not found — will check ARTEX_PG_DSN env only)", cfgPath)
+		log.Printf("[config] Config file: %s (not found — will check BEHEMOTH_PG_DSN env only)", cfgPath)
 	}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -173,7 +173,7 @@ func run() int {
 	}
 
 	go func() {
-		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
+		log.Printf("BEHEMOTH %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}

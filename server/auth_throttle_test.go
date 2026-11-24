@@ -109,7 +109,7 @@ func TestVerifyJWTPinsHS256(t *testing.T) {
 		t.Fatal(err)
 	}
 	hs512, err := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.RegisteredClaims{
-		Subject: "ARTEX", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		Subject: "BEHEMOTH", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 	}).SignedString(s.jwtKey)
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestAuthLoginRateLimited(t *testing.T) {
 
 	login := func(password string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
-		body := strings.NewReader(`{"username":"ARTEX","password":"` + password + `"}`)
+		body := strings.NewReader(`{"username":"BEHEMOTH","password":"` + password + `"}`)
 		s.authLogin(w, httptest.NewRequest("POST", "/api/auth/login", body))
 		return w
 	}

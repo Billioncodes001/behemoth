@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-// 本文件实现 ARTEX 的 MCP 服务端：一个无状态的 Streamable HTTP 端点 /mcp，把
+// 本文件实现 BEHEMOTH 的 MCP 服务端：一个无状态的 Streamable HTTP 端点 /mcp，把
 // mcp_server_tools.go 里的白名单工具暴露给外部智能体。只支持 initialize / ping /
 // tools/list / tools/call，响应一律 application/json，不开 SSE、不维护会话。
 //
-// 鉴权只认访问令牌(Authorization: Bearer artex_mcp_...)。/mcp 不经过 HTTP Basic
+// 鉴权只认访问令牌(Authorization: Bearer behemoth_mcp_...)。/mcp 不经过 HTTP Basic
 // Auth 门，也不接受管理员 JWT：一个请求只有一个 Authorization 头，外部客户端无法
 // 同时携带 Basic 凭证和 Bearer 令牌。
 
@@ -156,7 +156,7 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	token, authErr := s.authenticateMCP(store, r)
 	if authErr != "" {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="artex-mcp"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="behemoth-mcp"`)
 		writeErr(w, http.StatusUnauthorized, authErr)
 		return
 	}
@@ -205,7 +205,7 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 		writeMCPResult(w, req.ID, map[string]any{
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "artex", "title": "ARTEX", "version": BuildVersion},
+			"serverInfo":      map[string]any{"name": "behemoth", "title": "BEHEMOTH", "version": BuildVersion},
 			"instructions":    mcpInstructions,
 		})
 	case "ping":

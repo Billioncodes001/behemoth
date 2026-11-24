@@ -30,7 +30,7 @@ func fakeIPServer(ip string) *httptest.Server {
 func TestProbeOneUserAgent(t *testing.T) {
 	for _, ua := range []string{"", "Captured-UA/1.0"} {
 		t.Run(ua, func(t *testing.T) {
-			t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
+			t.Setenv("BEHEMOTH_HTTP_USER_AGENT", ua)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := r.UserAgent(); ua == "" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
 					t.Errorf("random UA missing: %q", got)

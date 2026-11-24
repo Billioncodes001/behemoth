@@ -5,7 +5,7 @@
 // Japanese (in English) without a full retranslation, and no existing dictionary
 // had to grow a third element.
 export const jaMessages: Record<string, string> = {
-  "meta.title": "ARTEX — 自律型ペネトレーションテストコンソール",
+  "meta.title": "BEHEMOTH — 自律型ペネトレーションテストコンソール",
   "meta.description": "LLM 駆動の自律型ペネトレーションテストコンソール",
 
   "language.label": "言語",

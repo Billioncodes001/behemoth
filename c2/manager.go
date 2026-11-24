@@ -1,5 +1,5 @@
 // Package c2 implements a self-contained command-and-control capability for
-// ARTEX: implant generation, beacon/result HTTP endpoints, an operator
+// BEHEMOTH: implant generation, beacon/result HTTP endpoints, an operator
 // console, and an optional dedicated listener.
 //
 // The semantics are modeled on the Mamba RMM (registry/task lifecycle,
@@ -165,7 +165,7 @@ type Manager struct {
 	tunPending map[string][]*Task // ephemeral tunnel frames, not persisted
 	tun        *TunnelManager
 
-	fallbackSecret string // optional global beacon secret (ARTEX_C2_SECRET)
+	fallbackSecret string // optional global beacon secret (BEHEMOTH_C2_SECRET)
 }
 
 // event is one JSONL line in the state log. Implant and task events are
@@ -191,7 +191,7 @@ func NewManager(dir string) (*Manager, error) {
 		tasks:          map[int64]*Task{},
 		tunPending:     map[string][]*Task{},
 		nextTaskID:     1,
-		fallbackSecret: strings.TrimSpace(os.Getenv("ARTEX_C2_SECRET")),
+		fallbackSecret: strings.TrimSpace(os.Getenv("BEHEMOTH_C2_SECRET")),
 	}
 	if err := m.load(); err != nil {
 		return nil, err
@@ -529,7 +529,7 @@ func (m *Manager) Count() int {
 }
 
 // VerifySecret checks an implant's auth secret. The per-implant token is
-// always accepted; the global fallback secret (ARTEX_C2_SECRET) is accepted
+// always accepted; the global fallback secret (BEHEMOTH_C2_SECRET) is accepted
 // for any implant so shared builds stay simple.
 func (m *Manager) VerifySecret(id, secret string) bool {
 	m.mu.Lock()

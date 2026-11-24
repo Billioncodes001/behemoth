@@ -146,7 +146,7 @@ func TestVerifySecret(t *testing.T) {
 	if m.VerifySecret("c2_missing", im.Token) {
 		t.Fatal("unknown implant accepted")
 	}
-	t.Setenv("ARTEX_C2_SECRET", "shared-secret")
+	t.Setenv("BEHEMOTH_C2_SECRET", "shared-secret")
 	m2, err := NewManager(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

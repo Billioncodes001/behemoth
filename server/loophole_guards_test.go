@@ -186,7 +186,7 @@ func TestLoopholeGitWebhookAuthAndCooldown(t *testing.T) {
 	})
 
 	s := &Server{} // s.ctx is nil so background git fetch is safely skipped in unit test
-	t.Setenv("ARTEX_WEBHOOK_SECRET", "super-secret-key")
+	t.Setenv("BEHEMOTH_WEBHOOK_SECRET", "super-secret-key")
 
 	// 1. Missing token/signature -> 401
 	w1 := httptest.NewRecorder()
@@ -211,7 +211,7 @@ func TestLoopholeGitWebhookAuthAndCooldown(t *testing.T) {
 
 	// 3. Immediate second public webhook call within cooldown -> 429 Too Many Requests
 	req3 := httptest.NewRequest(http.MethodPost, "/api/update/webhook", bytes.NewReader(payload))
-	req3.Header.Set("X-Artex-Webhook-Token", "super-secret-key")
+	req3.Header.Set("X-Behemoth-Webhook-Token", "super-secret-key")
 	w3 := httptest.NewRecorder()
 	s.handleTriggerGitSync(w3, req3)
 	if w3.Code != http.StatusTooManyRequests || w3.Header().Get("Retry-After") == "" {

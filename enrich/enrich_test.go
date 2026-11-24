@@ -12,7 +12,7 @@ import (
 func TestProbeUserAgent(t *testing.T) {
 	for _, ua := range []string{"", "Captured-UA/1.0"} {
 		t.Run(ua, func(t *testing.T) {
-			t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
+			t.Setenv("BEHEMOTH_HTTP_USER_AGENT", ua)
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++

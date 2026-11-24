@@ -116,10 +116,10 @@ func TestMockProviderComplete(t *testing.T) {
 	}
 }
 
-// Provider selection: ConfigFrom("mock") and ARTEX_LLM_PROVIDER=mock must both
+// Provider selection: ConfigFrom("mock") and BEHEMOTH_LLM_PROVIDER=mock must both
 // resolve to the offline provider without keys.
 func TestMockProviderViaConfig(t *testing.T) {
-	t.Setenv("ARTEX_MOCK_RESPONSES", `["offline answer"]`)
+	t.Setenv("BEHEMOTH_MOCK_RESPONSES", `["offline answer"]`)
 	c := ConfigFrom("mock", "", "", "", "")
 	if c.Provider() != "mock" {
 		t.Fatalf("provider = %q; want mock", c.Provider())
@@ -132,7 +132,7 @@ func TestMockProviderViaConfig(t *testing.T) {
 		t.Fatalf("provider type = %T; want *MockProvider", p)
 	}
 
-	t.Setenv("ARTEX_LLM_PROVIDER", "mock")
+	t.Setenv("BEHEMOTH_LLM_PROVIDER", "mock")
 	envCfg, ok := FromEnv()
 	if !ok || envCfg.Provider() != "mock" {
 		t.Fatalf("FromEnv = %+v, %v; want mock provider without keys", envCfg, ok)

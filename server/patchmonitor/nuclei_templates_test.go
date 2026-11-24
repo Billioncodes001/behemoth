@@ -17,9 +17,9 @@ func TestNucleiTemplateYAML_BasicShape(t *testing.T) {
 	out := nucleiTemplateYAML(e)
 
 	for _, want := range []string{
-		"id: artex-cve-2024-1234",
+		"id: behemoth-cve-2024-1234",
 		"severity: high",
-		"tags: artex,patch-monitor",
+		"tags: behemoth,patch-monitor",
 		"cve-id: CVE-2024-1234",
 		"\"{{BaseURL}}/vuln?id=1\"",
 		"method: GET",

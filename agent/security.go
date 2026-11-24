@@ -1,4 +1,4 @@
-// Package agent implements offensive enhancement capabilities for ARTEX:
+// Package agent implements offensive enhancement capabilities for BEHEMOTH:
 //
 // This module ENHANCES offensive security operations by:
 //  1. Benign Reframing: decomposing refusal-triggering commands into technical subtasks

@@ -1,4 +1,4 @@
-// Package fingerprint provides dynamic fingerprint generation for ARTEX.
+// Package fingerprint provides dynamic fingerprint generation for BEHEMOTH.
 // All external communications use randomized identifiers to prevent
 // tool detection via static signatures (User-Agents, headers, cookies, etc.)
 //
@@ -30,7 +30,7 @@ type SessionFingerprint struct {
 	SessionID    string
 	UserAgent    string
 	CookieName   string
-	AuthHeader   string // replaces static "X-Artex-Auth"
+	AuthHeader   string // replaces static "X-Behemoth-Auth"
 	RequestID    string // correlation ID for request tracing
 	CreatedAt    time.Time
 	RotatedAt    time.Time
@@ -144,14 +144,14 @@ func (m *Manager) generateExtraHeaders() map[string]string {
 }
 
 // GetDynamicCookieName returns the dynamic cookie name for basic auth.
-// Replaces static "artex_basic_auth".
+// Replaces static "behemoth_basic_auth".
 func GetDynamicCookieName() string {
 	m := GetManager()
 	return fmt.Sprintf("auth_%s", m.cookieSuffix)
 }
 
 // GetDynamicAuthHeaderName returns the dynamic auth header name.
-// Replaces static "X-Artex-Auth".
+// Replaces static "X-Behemoth-Auth".
 func GetDynamicAuthHeaderName() string {
 	m := GetManager()
 	return fmt.Sprintf("X-Auth-%s", m.headerSuffix)

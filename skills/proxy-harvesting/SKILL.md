@@ -5,7 +5,7 @@ description: Discover, parse, self-improve, and strictly verify public SOCKS5 an
 
 # Autonomous Proxy Harvesting & Self-Improvement Playbook
 
-Use this playbook when operating as `proxy_harvester` (or `auto`) to discover high-yield public proxy feeds, prune dead sources, and replenish ARTEX's Proxy Pool with fast, Elite, TLS-verified proxies.
+Use this playbook when operating as `proxy_harvester` (or `auto`) to discover high-yield public proxy feeds, prune dead sources, and replenish BEHEMOTH's Proxy Pool with fast, Elite, TLS-verified proxies.
 
 ## 1. Inspect Current Source Yield First
 1. Call `list_proxy_scrape_sources` and `get_proxy_pool_status`.
@@ -23,9 +23,9 @@ curl -s "https://api.github.com/repos/<owner>/<repo>/git/trees/<branch>?recursiv
 Prefer pre-checked / speed-sorted feeds (`priority: true`) over raw unchecked dumps.
 
 ## 3. Register Persistent Feeds vs. Custom Extraction
-- **Direct TXT/JSON/CSV URLs**: Call `add_proxy_scrape_source(name=..., url=..., protocol="socks5"|"http", priority=true, test_immediately=true)` so ARTEX's native Go background scraper polls them automatically on every scheduled cycle.
+- **Direct TXT/JSON/CSV URLs**: Call `add_proxy_scrape_source(name=..., url=..., protocol="socks5"|"http", priority=true, test_immediately=true)` so BEHEMOTH's native Go background scraper polls them automatically on every scheduled cycle.
 - **Paginated JSON APIs / Base64 / HTML Tables**: Write a concise `python3` or `jq` one-liner in `Bash` to extract `ip:port` or `socks5://ip:port` lines, then pass the extracted lines directly to `verify_and_import_scraped_proxies`!
 
 ## 4. Strict Security Invariants
-- **Never** import unverified public proxies directly without `verify_and_import_scraped_proxies`: ARTEX's 2-stage verifier enforces real TLS certificate validation (`InsecureSkipVerify=false`) and rejects transparent proxies that echo the host's real IP.
+- **Never** import unverified public proxies directly without `verify_and_import_scraped_proxies`: BEHEMOTH's 2-stage verifier enforces real TLS certificate validation (`InsecureSkipVerify=false`) and rejects transparent proxies that echo the host's real IP.
 - Whenever you discover a reusable parser for a new public API format, save/update it here via `update_skill_file`.

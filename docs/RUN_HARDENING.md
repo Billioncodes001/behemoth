@@ -57,7 +57,7 @@ turns the rows into a mechanical boundary for the agent's own network tools:
   hop**, re-rate-limits each hop, and returns the body SHA-256.
 - Unresolvable hosts are **denied** when a scope exists (fail-closed DNS): a
   typo'd or hijacked name cannot silently escape the allowlist.
-- Per-host throttling uses a token bucket; set `ARTEX_SCOPE_RPS` (requests per
+- Per-host throttling uses a token bucket; set `BEHEMOTH_SCOPE_RPS` (requests per
   second per host, default `0` = off).
 
 Scope language (from `task_scope`):
@@ -95,10 +95,10 @@ Environment:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ARTEX_SANDBOX_IMAGE` | `kalilinux/kali-last-release` | container image |
-| `ARTEX_SANDBOX_NETWORK` | `host` | docker network mode (`host`/`bridge`/`none`) |
-| `ARTEX_SANDBOX_TIMEOUT` | `600` | seconds per run |
-| `ARTEX_SANDBOX_ARGS` | — | extra `docker run` flags (e.g. `--cap-add=NET_RAW`) |
+| `BEHEMOTH_SANDBOX_IMAGE` | `kalilinux/kali-last-release` | container image |
+| `BEHEMOTH_SANDBOX_NETWORK` | `host` | docker network mode (`host`/`bridge`/`none`) |
+| `BEHEMOTH_SANDBOX_TIMEOUT` | `600` | seconds per run |
+| `BEHEMOTH_SANDBOX_ARGS` | — | extra `docker run` flags (e.g. `--cap-add=NET_RAW`) |
 
 If the docker CLI is missing the tool returns a clear "fall back to Bash"
 error. Interactive programs still belong in the existing `shell_*` PTY session
@@ -114,12 +114,12 @@ Code: `agent/sandbox.go`.
 (tool call → result → final text) runs with no network and no API key.
 
 ```bash
-export ARTEX_LLM_PROVIDER=mock
-export ARTEX_MOCK_RESPONSES='[
+export BEHEMOTH_LLM_PROVIDER=mock
+export BEHEMOTH_MOCK_RESPONSES='[
   {"text":"Probing /login","tools":[{"name":"Bash","input":{"command":"curl -i http://app.test/login"}}]},
   {"text":"The login page is reachable."}
 ]'
-./artex
+./behemoth
 ```
 
 Note the server's precedence is **persisted DB LLM profile > env**, so the env
@@ -128,7 +128,7 @@ saved profile, or use a scratch `data/` directory). In code, tests and the API c
 use it directly via `agent.ConfigFrom("mock", …)`.
 
 
-A scenario can also live in a file (`ARTEX_MOCK_SCENARIO=/path/scenario.json`)
+A scenario can also live in a file (`BEHEMOTH_MOCK_SCENARIO=/path/scenario.json`)
 with `{"model":"mock-1","default_text":"...","turns":[...]}`. Selection is
 deterministic: the first unused turn whose `match` substring appears in the
 latest user message wins; otherwise turns are consumed in order; an exhausted
@@ -152,7 +152,7 @@ disk can be tied to the engine's own record.
 Verify a log (and any archive/copy of it):
 
 ```bash
-./artex evidence verify data/tasks/12/i34/evidence/run.jsonl
+./behemoth evidence verify data/tasks/12/i34/evidence/run.jsonl
 # OK    .../run.jsonl  records=87  head=9f2c…
 ```
 

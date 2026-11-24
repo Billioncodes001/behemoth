@@ -1,6 +1,6 @@
 // Package c2 — implant pivot tunnel.
 //
-// Design (Mode A): a tunnel is a loopback-only SOCKS5 listener on the ARTEX
+// Design (Mode A): a tunnel is a loopback-only SOCKS5 listener on the BEHEMOTH
 // server that relays TCP connections through a compromised implant over the
 // existing beacon channel. The feeding MITM/agents point their upstream proxy
 // at socks5://<user>:<pass>@127.0.0.1:<port>, so captured traffic exits from

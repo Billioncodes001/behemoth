@@ -42,7 +42,7 @@ func TestWriteImplantFilesAllRuntimes(t *testing.T) {
 			t.Errorf("%s: unfilled placeholder in script", im.Runtime)
 		}
 		// AES key derivation must be present when encrypt=aes.
-		if im.Encrypt == "aes" && !strings.Contains(script, "artex-c2:") {
+		if im.Encrypt == "aes" && !strings.Contains(script, "behemoth-c2:") {
 			t.Errorf("%s: aes key material missing", im.Runtime)
 		}
 		// Installers exist and carry the id.

@@ -21,7 +21,7 @@ type TelemetryConfig struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() *TelemetryConfig {
 	return &TelemetryConfig{
-		ServiceName:    "artex",
+		ServiceName:    "behemoth",
 		ServiceVersion: "dev",
 		Enabled:        true,
 		OTLPEndpoint:   "localhost:4317",
@@ -55,12 +55,12 @@ func New(cfg *TelemetryConfig) (*Telemetry, error) {
 
 	// Create counters and histograms
 	var err error
-	t.counter, err = meter.Int64Counter("artex.operations.total")
+	t.counter, err = meter.Int64Counter("behemoth.operations.total")
 	if err != nil {
 		return nil, fmt.Errorf("create counter: %w", err)
 	}
 
-	t.histogram, err = meter.Float64Histogram("artex.operation.duration.ms")
+	t.histogram, err = meter.Float64Histogram("behemoth.operation.duration.ms")
 	if err != nil {
 		return nil, fmt.Errorf("create histogram: %w", err)
 	}

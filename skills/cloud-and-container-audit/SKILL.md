@@ -1,6 +1,6 @@
 ---
 name: cloud-and-container-audit
-description: Playbook for auditing cloud accounts (AWS/Azure/GCP) and container/supply-chain surfaces with the ARTEX arsenal — aws/az/gcloud recon, Pacu privilege-escalation, Scout Suite audits, and trivy/grype image scanning plus semgrep source review.
+description: Playbook for auditing cloud accounts (AWS/Azure/GCP) and container/supply-chain surfaces with the BEHEMOTH arsenal — aws/az/gcloud recon, Pacu privilege-escalation, Scout Suite audits, and trivy/grype image scanning plus semgrep source review.
 ---
 
 # Cloud & Container Audit Playbook

@@ -118,7 +118,7 @@ func (s *Server) toolCreateCallbackListener() actool.CoreTool {
 		"Register a temporary correlation callback URL (/api/oast-cb/<token>/<tag>) to verify asynchronous webhook delivery or outbound egress filtering policies during authorized testing.",
 		objSchema(map[string]any{
 			"label":           strParam("Short label describing what webhook or async flow is being verified"),
-			"public_base_url": strParam("Optional externally reachable base URL of this ARTEX instance (e.g. https://console.example.com)"),
+			"public_base_url": strParam("Optional externally reachable base URL of this BEHEMOTH instance (e.g. https://console.example.com)"),
 			"ttl_seconds":     map[string]any{"type": "integer", "description": "Listener lifetime in seconds (default 900, max 3600)"},
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
@@ -154,7 +154,7 @@ func (s *Server) toolCreateCallbackListener() actool.CoreTool {
 
 			base := strings.TrimRight(strings.TrimSpace(a.PublicBaseURL), "/")
 			if base == "" {
-				base = strings.TrimRight(strings.TrimSpace(os.Getenv("ARTEX_PUBLIC_URL")), "/")
+				base = strings.TrimRight(strings.TrimSpace(os.Getenv("BEHEMOTH_PUBLIC_URL")), "/")
 			}
 			relPath := fmt.Sprintf("/api/oast-cb/%s/verify", token)
 			fullURL := relPath

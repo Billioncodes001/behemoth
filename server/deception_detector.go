@@ -99,7 +99,7 @@ func fetchWithProfile(ctx context.Context, client *http.Client, targetURL, ua, a
 func randomControlPath() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return "/artex-404-check-" + hex.EncodeToString(b) + ".txt"
+	return "/behemoth-404-check-" + hex.EncodeToString(b) + ".txt"
 }
 
 func extractEnvMap(body []byte) map[string]string {

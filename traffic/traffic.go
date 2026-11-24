@@ -30,7 +30,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 	mproxy "github.com/lqqyt2423/go-mitmproxy/proxy"
@@ -357,7 +357,7 @@ func (t *Traffic) resolveUpstream(req *http.Request) (*url.URL, error) {
 		return u, nil
 	}
 	if t.failClosed.Load() {
-		return nil, errors.New("ARTEX fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
+		return nil, errors.New("BEHEMOTH fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
 	}
 	return nil, nil
 }

@@ -27,8 +27,8 @@ export function BrowserConfigCard() {
         setChromePath(cfg.chrome_path || "");
       })
       .catch(() => {
-        setScraperURL(localStorage.getItem("artex_browser_scraper_url") || "");
-        const savedLocal = localStorage.getItem("artex_browser_use_local");
+        setScraperURL(localStorage.getItem("behemoth_browser_scraper_url") || "");
+        const savedLocal = localStorage.getItem("behemoth_browser_use_local");
         setUseLocal(savedLocal ? savedLocal === "true" : true);
       });
   }, []);
@@ -37,8 +37,8 @@ export function BrowserConfigCard() {
     setSaving(true);
     try {
       await api.browser.saveConfig({ scraper_url: nextScraperURL, use_local_chrome: nextUseLocal });
-      localStorage.setItem("artex_browser_scraper_url", nextScraperURL);
-      localStorage.setItem("artex_browser_use_local", String(nextUseLocal));
+      localStorage.setItem("behemoth_browser_scraper_url", nextScraperURL);
+      localStorage.setItem("behemoth_browser_use_local", String(nextUseLocal));
       toast.success("Browser configuration saved");
     } catch (e) {
       toast.error(String(e));

@@ -22,8 +22,8 @@ import (
 //   - otherwise turns are consumed in order;
 //   - once the script is exhausted the last turn repeats (bounded by MaxTurns).
 //
-// Wire it with provider "mock" and ARTEX_MOCK_SCENARIO=<path to JSON> (or
-// ARTEX_MOCK_RESPONSES=<inline JSON array>). See docs/mock-provider.md.
+// Wire it with provider "mock" and BEHEMOTH_MOCK_SCENARIO=<path to JSON> (or
+// BEHEMOTH_MOCK_RESPONSES=<inline JSON array>). See docs/mock-provider.md.
 
 // MockToolCall is one scripted tool invocation.
 type MockToolCall struct {
@@ -68,11 +68,11 @@ func NewMockProvider(sc MockScenario) *MockProvider {
 	return &MockProvider{scenario: sc, used: make([]bool, len(sc.Turns))}
 }
 
-// MockProviderFromEnv builds a mock provider from ARTEX_MOCK_SCENARIO (file) or
-// ARTEX_MOCK_RESPONSES (inline JSON: either a scenario object or a string array of
+// MockProviderFromEnv builds a mock provider from BEHEMOTH_MOCK_SCENARIO (file) or
+// BEHEMOTH_MOCK_RESPONSES (inline JSON: either a scenario object or a string array of
 // plain-text turns).
 func MockProviderFromEnv() (*MockProvider, error) {
-	if path := strings.TrimSpace(os.Getenv("ARTEX_MOCK_SCENARIO")); path != "" {
+	if path := strings.TrimSpace(os.Getenv("BEHEMOTH_MOCK_SCENARIO")); path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("mock scenario %s: %w", path, err)
@@ -83,10 +83,10 @@ func MockProviderFromEnv() (*MockProvider, error) {
 		}
 		return NewMockProvider(sc), nil
 	}
-	if inline := strings.TrimSpace(os.Getenv("ARTEX_MOCK_RESPONSES")); inline != "" {
+	if inline := strings.TrimSpace(os.Getenv("BEHEMOTH_MOCK_RESPONSES")); inline != "" {
 		sc, err := ParseMockScenario([]byte(inline))
 		if err != nil {
-			return nil, fmt.Errorf("ARTEX_MOCK_RESPONSES: %w", err)
+			return nil, fmt.Errorf("BEHEMOTH_MOCK_RESPONSES: %w", err)
 		}
 		return NewMockProvider(sc), nil
 	}

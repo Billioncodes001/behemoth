@@ -174,7 +174,7 @@ export function downloadFilename(contentDisposition: string, fallback: string): 
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("artex_token");
+  return localStorage.getItem("behemoth_token");
 }
 
 let basicAuthReloading = false;
@@ -185,7 +185,7 @@ let basicAuthProbe: Promise<void> | null = null;
 // Keep the admin token and collapse concurrent failures into one reload.
 
 // Dynamic auth header name - detected from first response or defaulted
-let detectedAuthHeader = "X-Artex-Auth"; // Will be updated on first 401 response
+let detectedAuthHeader = "X-Behemoth-Auth"; // Will be updated on first 401 response
 let directLoopbackUnavailable = false;
 
 function localDirectOrigin(): string {
@@ -226,7 +226,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   if (basicAuthReloading) throw basicAuthExpired();
 
   // Check for basic auth challenge - support both static and dynamic header names
-  const authHeader = response.headers?.get("X-Artex-Auth") || response.headers?.get(detectedAuthHeader) || "";
+  const authHeader = response.headers?.get("X-Behemoth-Auth") || response.headers?.get(detectedAuthHeader) || "";
   if (response.status === 401 && authHeader === "basic") {
     // Remember the actual header name for future requests
     const headerName = response.headers
@@ -333,8 +333,8 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
       // Keep the status-based fallback for empty or non-JSON error responses.
     }
     if (r.status === 401 && typeof window !== "undefined") {
-      localStorage.removeItem("artex_token");
-      document.cookie = "artex_token=; path=/; max-age=0";
+      localStorage.removeItem("behemoth_token");
+      document.cookie = "behemoth_token=; path=/; max-age=0";
       window.location.href = "/login";
     }
     throw new ApiError(message, code, params);
@@ -361,7 +361,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 // Token is appended as ?token= because SSE can't carry cookies cross-origin.
 // mockReport returns a canned Markdown report for the demo.
 function mockReport(_task?: string): string {
-  return `# ARTEX Penetration Test Report — Acme Corp
+  return `# BEHEMOTH Penetration Test Report — Acme Corp
 
 ## Overview
 - Scope: acme.com (including www / admin / api / shop / vpn subdomains)
@@ -1354,7 +1354,7 @@ export const api = {
     put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
 
-  // ---- MCP 服务端（ARTEX 对外暴露的 /mcp）：开关、访问令牌、调用审计 ----
+  // ---- MCP 服务端（BEHEMOTH 对外暴露的 /mcp）：开关、访问令牌、调用审计 ----
   mcpServerSettings: () => get<McpServerSettings>("/mcp-server/settings"),
   setMcpServerEnabled: (enabled: boolean) => put<McpServerSettings>("/mcp-server/settings", { enabled }),
   setMcpServerAccess: (access: { allowed_ips: string[]; trusted_proxies: string[] }) =>

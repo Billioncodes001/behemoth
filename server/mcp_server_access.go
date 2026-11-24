@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 // 来源白名单：限制「谁」能连 /mcp。它在令牌校验之前生效，是令牌之外的第二道条件——

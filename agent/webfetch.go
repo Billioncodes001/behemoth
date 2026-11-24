@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/Autumn-27/artex/internal/webfetch"
+	"github.com/Autumn-27/behemoth/internal/webfetch"
 	"github.com/Autumn-27/norma/agentcore"
 	actool "github.com/Autumn-27/norma/tool"
 )

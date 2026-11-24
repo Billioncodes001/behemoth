@@ -73,10 +73,10 @@ class UserAgentTests(unittest.TestCase):
             self.assertEqual(module.USER_AGENTS, go_pool)
             for sample in module.USER_AGENTS:
                 with self.subTest(script=name, sample=sample):
-                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": ""}), patch.object(module.secrets, "choice", return_value=sample) as choose:
+                    with patch.dict(os.environ, {"BEHEMOTH_HTTP_USER_AGENT": ""}), patch.object(module.secrets, "choice", return_value=sample) as choose:
                         self.assertEqual(module.user_agent(), sample)
                         choose.assert_called_once_with(module.USER_AGENTS)
-                    with patch.dict(os.environ, {"ARTEX_HTTP_USER_AGENT": "Configured-UA"}), patch.object(module.secrets, "choice") as choose:
+                    with patch.dict(os.environ, {"BEHEMOTH_HTTP_USER_AGENT": "Configured-UA"}), patch.object(module.secrets, "choice") as choose:
                         self.assertEqual(module.user_agent(), "Configured-UA")
                         self.assertEqual(module.user_agent("Override-UA"), "Override-UA")
                         self.assertEqual(module.user_agent(""), "")
@@ -88,7 +88,7 @@ class UserAgentTests(unittest.TestCase):
             for value, expected in (("", "random"), (" Captured-UA/1.0 ", "Captured-UA/1.0"),
                                     ("ok\r\nX-Injected: yes", "random"), ("客户端", "random")):
                 with self.subTest(script=name, value=value), capture_server() as (base, seen):
-                    with patch.dict(os.environ, {**DIRECT_ENV, "ARTEX_HTTP_USER_AGENT": value}):
+                    with patch.dict(os.environ, {**DIRECT_ENV, "BEHEMOTH_HTTP_USER_AGENT": value}):
                         if name == "harvest_static":
                             body, status = module.fetch(base + "/start")
                             self.assertEqual(status, 200)
@@ -108,7 +108,7 @@ class UserAgentTests(unittest.TestCase):
                                            ("Environment-UA/1.0", ["--user-agent", ""], None)):
                 with self.subTest(script=name, flags=flags), capture_server() as (base, seen):
                     with tempfile.TemporaryDirectory() as outdir:
-                        env = dict(os.environ, **DIRECT_ENV, ARTEX_HTTP_USER_AGENT=env_ua)
+                        env = dict(os.environ, **DIRECT_ENV, BEHEMOTH_HTTP_USER_AGENT=env_ua)
                         command = [sys.executable, str(SCRIPTS / f"{name}.py"), base + "/start", outdir] + flags
                         if name == "spider_mpa":
                             command += ["--max", "1", "--delay", "0"]

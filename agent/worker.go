@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/evidence"
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/evidence"
+	"github.com/Autumn-27/behemoth/intercept"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
@@ -89,7 +89,7 @@ func WorkerSessionID(explorationID, intentID int64) string {
 	return fmt.Sprintf("exp%d-worker-i%d", explorationID, intentID)
 }
 
-const workerChatMarkerPrefix = "<!-- ARTEX_WORKER_CHAT:"
+const workerChatMarkerPrefix = "<!-- BEHEMOTH_WORKER_CHAT:"
 
 func workerChatMarker(requestID string) string {
 	return workerChatMarkerPrefix + requestID + " -->"
@@ -492,7 +492,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// Tamper-evident JSONL evidence log for this run: one chained record per
 	// activity. Its head hash is attached to the terminal record so a reviewer can
 	// prove the log matches what the engine produced (see evidence/runlog.go and
-	// `artex evidence verify <file>`).
+	// `behemoth evidence verify <file>`).
 	evLog, evErr := evidence.OpenRunLog(filepath.Join(runDir, "evidence", "run.jsonl"))
 	if evErr != nil {
 		log.Printf("[evidence] run log %s: %v", runDir, evErr)

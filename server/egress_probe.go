@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autumn-27/artex/internal/httpidentity"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/traffic"
 )
 
 const settingEgressProbeURL = "egress_probe_url"
@@ -53,7 +53,7 @@ func (m *Manager) egressProbes() []string {
 
 // validateProbeURL 只放行指向"非本机、非链路本地"的绝对 http(s) 地址。
 //
-// 这个接口要登录，但仍要挡：agent 可能被目标页面诱导去调它，而"本机"在容器里就是 ARTEX
+// 这个接口要登录，但仍要挡：agent 可能被目标页面诱导去调它，而"本机"在容器里就是 BEHEMOTH
 // 自己（管理端口、云元数据 169.254.169.254）。**私网地址是刻意放行的**——自定义探测服务
 // 的主用途就是内网回显，挡掉 192.168/10/172.16 等于废掉这个功能。
 func validateProbeURL(raw string) (string, error) {
@@ -547,7 +547,7 @@ func egressWarningDetails(rep egressReport, pending bool, savedProxy string) []p
 	// W5 容器里的 127.0.0.1 指容器自己，连不到宿主机上的代理。
 	if isLoopbackProxy(rep.Configured) {
 		add("loopback_proxy", nil, "代理地址是回环地址（127.0.0.1 / localhost）。"+
-			"如果 ARTEX 跑在容器里，这里的 127.0.0.1 指容器自身，连不到宿主机上的代理；"+
+			"如果 BEHEMOTH 跑在容器里，这里的 127.0.0.1 指容器自身，连不到宿主机上的代理；"+
 			"请改用宿主机的可达 IP（如 http://192.168.x.x:端口）。")
 	}
 

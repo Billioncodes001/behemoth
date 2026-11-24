@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 	"golang.org/x/net/proxy"
 )
 
@@ -553,7 +553,7 @@ func buildTorCircuitEntries(socksPort, count int, nonce string) []proxyv2.ProxyI
 			Type:      proxyv2.ProxyTypeSOCKS5,
 			Host:      torManagedHost,
 			Port:      socksPort,
-			Username:  fmt.Sprintf("artex-tor-c%d", i),
+			Username:  fmt.Sprintf("behemoth-tor-c%d", i),
 			Password:  nonce,
 			Status:    proxyv2.StatusUntested,
 			Active:    true,

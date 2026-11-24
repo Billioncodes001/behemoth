@@ -1,6 +1,6 @@
-# ARTEX C2 — Command & Control Guide
+# BEHEMOTH C2 — Command & Control Guide
 
-ARTEX ships a self-contained C2 capability: it can generate lightweight
+BEHEMOTH ships a self-contained C2 capability: it can generate lightweight
 implant scripts (bash / python3 / powershell), serve their check-in and
 result endpoints on the main port or a dedicated listener, deploy them to
 connected SSH targets, and drive them from the agent tool set or a
@@ -28,7 +28,7 @@ see `THIRD_PARTY.md` for attribution notes. No code is imported from `rmm/`.
   the management endpoints (`api/c2`, `c2/ui`) are rejected.
 - **Encoding** — `none`: base64(JSON) over TLS; `aes`: AES-256-CBC with a
   random IV per message (IV in the `X-IV` header), key =
-  `SHA-256("artex-c2:" + token)`. Not available for python3 (stdlib-only).
+  `SHA-256("behemoth-c2:" + token)`. Not available for python3 (stdlib-only).
 
 ## Endpoints
 
@@ -49,10 +49,10 @@ persisted in the state log, and surfaced by `c2_agents` /
 
 - **Default**: beacon endpoints are mounted on the main server mux (port
   8787), next to the REST API.
-- **Dedicated**: set `ARTEX_C2_ADDR` (e.g. `0.0.0.0:8443`) to start a
+- **Dedicated**: set `BEHEMOTH_C2_ADDR` (e.g. `0.0.0.0:8443`) to start a
   separate listener serving only the beacon endpoints and the console.
-  Add `ARTEX_C2_TLS_CERT` / `ARTEX_C2_TLS_KEY` for TLS.
-- `ARTEX_C2_PUBLIC_URL` is the base URL baked into generated implants
+  Add `BEHEMOTH_C2_TLS_CERT` / `BEHEMOTH_C2_TLS_KEY` for TLS.
+- `BEHEMOTH_C2_PUBLIC_URL` is the base URL baked into generated implants
   (e.g. `https://c2.example.com`).
 
 ## Agent tools
@@ -149,11 +149,11 @@ after uploading the build directory.
 
 | Variable | Meaning |
 |---|---|
-| `ARTEX_C2_ADDR` | Dedicated listener address (empty = main mux). |
-| `ARTEX_C2_PUBLIC_URL` | Callback base URL baked into implants. |
-| `ARTEX_C2_SECRET` | Optional shared beacon secret accepted for every implant (per-implant tokens always work). |
-| `ARTEX_C2_TLS_CERT` / `ARTEX_C2_TLS_KEY` | TLS for the dedicated listener. |
-| `ARTEX_C2_PORT` | Host-side port mapping for docker-compose. |
+| `BEHEMOTH_C2_ADDR` | Dedicated listener address (empty = main mux). |
+| `BEHEMOTH_C2_PUBLIC_URL` | Callback base URL baked into implants. |
+| `BEHEMOTH_C2_SECRET` | Optional shared beacon secret accepted for every implant (per-implant tokens always work). |
+| `BEHEMOTH_C2_TLS_CERT` / `BEHEMOTH_C2_TLS_KEY` | TLS for the dedicated listener. |
+| `BEHEMOTH_C2_PORT` | Host-side port mapping for docker-compose. |
 
 ## Validation rules
 

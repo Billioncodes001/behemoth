@@ -19,36 +19,36 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/c2"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/intercept/jev"
-	"github.com/Autumn-27/artex/llmpool"
-	"github.com/Autumn-27/artex/llmrec"
-	"github.com/Autumn-27/artex/report"
-	"github.com/Autumn-27/artex/server/browser"
-	"github.com/Autumn-27/artex/server/factgraph"
-	"github.com/Autumn-27/artex/server/fingerprint"
-	"github.com/Autumn-27/artex/server/patchmonitor"
-	"github.com/Autumn-27/artex/server/proxy/v2"
-	"github.com/Autumn-27/artex/server/recipes"
-	"github.com/Autumn-27/artex/server/search"
-	"github.com/Autumn-27/artex/server/security"
-	"github.com/Autumn-27/artex/server/targets"
-	"github.com/Autumn-27/artex/server/tools"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/behemoth/agent"
+	"github.com/Autumn-27/behemoth/c2"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/intercept"
+	"github.com/Autumn-27/behemoth/intercept/jev"
+	"github.com/Autumn-27/behemoth/llmpool"
+	"github.com/Autumn-27/behemoth/llmrec"
+	"github.com/Autumn-27/behemoth/report"
+	"github.com/Autumn-27/behemoth/server/browser"
+	"github.com/Autumn-27/behemoth/server/factgraph"
+	"github.com/Autumn-27/behemoth/server/fingerprint"
+	"github.com/Autumn-27/behemoth/server/patchmonitor"
+	"github.com/Autumn-27/behemoth/server/proxy/v2"
+	"github.com/Autumn-27/behemoth/server/recipes"
+	"github.com/Autumn-27/behemoth/server/search"
+	"github.com/Autumn-27/behemoth/server/security"
+	"github.com/Autumn-27/behemoth/server/targets"
+	"github.com/Autumn-27/behemoth/server/tools"
+	"github.com/Autumn-27/behemoth/traffic"
 	"github.com/Autumn-27/norma/llm"
 	actool "github.com/Autumn-27/norma/tool"
 	"github.com/Autumn-27/norma/transcript"
 )
 
-// BuildVersion is the backend application version, injected from cmd/artex at
+// BuildVersion is the backend application version, injected from cmd/behemoth at
 // startup (which in turn gets it from -ldflags "-X main.version=<tag>").
 // Defaults to "dev" for local builds. Exposed via the authenticated GET /api/version.
 var BuildVersion = "dev"
 
-// Server exposes the ARTEX backend over a JSON HTTP API for the shadcn/ui
+// Server exposes the BEHEMOTH backend over a JSON HTTP API for the shadcn/ui
 // frontend.
 type Server struct {
 	scheduleMu sync.Mutex
@@ -409,7 +409,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.patchMon = patchmonitor.NewMonitor(m.pg.DB)
 		s.patchMon.SetAgentWatchCallback(s.launchPatchWatchAgentRun)
 		s.patchMon.SetProxyProvider(s.m.OutboundProxyAddr)
-		s.patchMon.SetNucleiTemplatesDir(filepath.Join(dataDir, "nuclei-templates", "artex"))
+		s.patchMon.SetNucleiTemplatesDir(filepath.Join(dataDir, "nuclei-templates", "behemoth"))
 		log.Printf("[patchmon] Patch monitor initialized")
 	}
 
@@ -1421,7 +1421,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/mcp", s.pgSaveMCP)
 	mux.HandleFunc("DELETE /api/mcp/{id}", s.pgDeleteMCP)
 	mux.HandleFunc("GET /api/mcp/{id}/tools", s.pgMCPTools)
-	// MCP 服务端(ARTEX 对外暴露的 /mcp)：开关、访问令牌、调用审计
+	// MCP 服务端(BEHEMOTH 对外暴露的 /mcp)：开关、访问令牌、调用审计
 	mux.HandleFunc("GET /api/mcp-server/settings", s.getMCPServerSettings)
 	mux.HandleFunc("PUT /api/mcp-server/settings", s.putMCPServerSettings)
 	mux.HandleFunc("GET /api/mcp-server/tokens", s.listMCPServerTokens)
@@ -2867,7 +2867,7 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	stage, err := os.MkdirTemp("", "artex-finding-export-")
+	stage, err := os.MkdirTemp("", "behemoth-finding-export-")
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -5338,8 +5338,8 @@ func cors(next http.Handler) http.Handler {
 		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		exposeHeaders := "X-Artex-Auth"
-		if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Artex-Auth") {
+		exposeHeaders := "X-Behemoth-Auth"
+		if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Behemoth-Auth") {
 			exposeHeaders += ", " + dynamicAuthHeaderName
 		}
 		w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)

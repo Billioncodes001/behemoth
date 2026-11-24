@@ -381,7 +381,7 @@ export function SecurityConfigCard() {
           <div className="space-y-0.5">
             <Label className="text-sm font-medium">Automatic Git Repository Live-Sync</Label>
             <p className="text-xs text-muted-foreground">
-              Automatically polls <code>origin/main</code> (<code>Billioncodes001/myartex</code>) every 60s, displays a live maintenance notice when new commits are pushed, rebuilds, and restarts the server.
+              Automatically polls <code>origin/main</code> (<code>Billioncodes001/mybehemoth</code>) every 60s, displays a live maintenance notice when new commits are pushed, rebuilds, and restarts the server.
             </p>
           </div>
           <div className="flex items-center gap-2">

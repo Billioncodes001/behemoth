@@ -84,23 +84,23 @@ jobs:
         with:
           name: web-dist
           path: server/webui/dist
-      - name: Cross-compile embedded ARTEX binary and package zip
+      - name: Cross-compile embedded BEHEMOTH binary and package zip
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           version="${RELEASE_TAG#v}"
-          pkg_name="artex-${version}-${GOOS}-${GOARCH}"
+          pkg_name="behemoth-${version}-${GOOS}-${GOARCH}"
           pkg_dir="dist/${pkg_name}"
-          bin_name="artex"
+          bin_name="behemoth"
           if [[ "$GOOS" == "windows" ]]; then
-            bin_name="artex.exe"
+            bin_name="behemoth.exe"
           fi
           mkdir -p "$pkg_dir"
           CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
             go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${version}" \
-            -o "${pkg_dir}/${bin_name}" ./cmd/artex
+            -o "${pkg_dir}/${bin_name}" ./cmd/behemoth
           cp -r skills "${pkg_dir}/skills"
           cp config.example.json setup.sh start.sh README.md "${pkg_dir}/"
           chmod +x "${pkg_dir}/setup.sh" "${pkg_dir}/start.sh"
@@ -114,7 +114,7 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           version="${RELEASE_TAG#v}"
-          "dist/artex-${version}-linux-amd64/artex" -h
+          "dist/behemoth-${version}-linux-amd64/behemoth" -h
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -140,7 +140,7 @@ jobs:
         run: |
           version="${RELEASE_TAG#v}"
           for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64; do
-            test -s "artex-${version}-${target}.zip"
+            test -s "behemoth-${version}-${target}.zip"
           done
           sha256sum *.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
@@ -151,7 +151,7 @@ jobs:
             gh release edit "$RELEASE_TAG" --draft=false --latest
           else
             gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS \
-              --title "ARTEX ${RELEASE_TAG}" \
+              --title "BEHEMOTH ${RELEASE_TAG}" \
               --generate-notes \
               --latest
           fi

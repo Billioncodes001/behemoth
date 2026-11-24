@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 // generateFindingReport requeues the reporter workflow for any finding — both
@@ -33,7 +33,7 @@ func (s *Server) generateFindingReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reporter == nil {
-		writeErr(w, http.StatusConflict, "The Report Writer agent (reporter) is missing; restart ARTEX to re-seed built-in agents")
+		writeErr(w, http.StatusConflict, "The Report Writer agent (reporter) is missing; restart BEHEMOTH to re-seed built-in agents")
 		return
 	}
 	if !reporter.Enabled {

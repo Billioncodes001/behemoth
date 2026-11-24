@@ -74,7 +74,7 @@ func (ad *AntiDetect) ApplyOutboundStealth(host string, hdr map[string][]string)
 	isLoopback := h == "localhost" || h == "127.0.0.1" || h == "::1"
 
 	// Strip headers that could leak proxy/platform identity
-	for _, k := range []string{"Via", "X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Artex-Agent"} {
+	for _, k := range []string{"Via", "X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Behemoth-Agent"} {
 		delete(hdr, k)
 	}
 

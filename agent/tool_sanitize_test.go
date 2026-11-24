@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/artex/agent/payloads"
+	"github.com/Autumn-27/behemoth/agent/payloads"
 	"github.com/Autumn-27/norma/llm"
 )
 

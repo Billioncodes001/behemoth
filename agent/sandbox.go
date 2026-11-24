@@ -14,7 +14,7 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-// Docker sandbox backend. Bash runs on the ARTEX host with the server's
+// Docker sandbox backend. Bash runs on the BEHEMOTH host with the server's
 // privileges and filesystem; that is convenient and occasionally destructive.
 // sandbox_exec runs one command in a throwaway container instead, with the
 // workspace bind-mounted at /work, so heavyweight or risky tooling (nmap, sqlmap,
@@ -25,7 +25,7 @@ import (
 
 // SandboxConfig configures the container backend.
 type SandboxConfig struct {
-	// Image defaults to ARTEX_SANDBOX_IMAGE or kalilinux/kali-last-release.
+	// Image defaults to BEHEMOTH_SANDBOX_IMAGE or kalilinux/kali-last-release.
 	Image string
 	// Network is the docker network mode: "host" (default: target traffic works),
 	// "bridge", or "none".
@@ -39,12 +39,12 @@ type SandboxConfig struct {
 }
 
 // SandboxConfigFromEnv reads the sandbox settings from the environment, with
-// safe defaults. env: ARTEX_SANDBOX_IMAGE, ARTEX_SANDBOX_NETWORK,
-// ARTEX_SANDBOX_TIMEOUT (seconds), ARTEX_SANDBOX_ARGS (space-separated).
+// safe defaults. env: BEHEMOTH_SANDBOX_IMAGE, BEHEMOTH_SANDBOX_NETWORK,
+// BEHEMOTH_SANDBOX_TIMEOUT (seconds), BEHEMOTH_SANDBOX_ARGS (space-separated).
 func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	cfg := SandboxConfig{
-		Image:   strings.TrimSpace(os.Getenv("ARTEX_SANDBOX_IMAGE")),
-		Network: strings.TrimSpace(os.Getenv("ARTEX_SANDBOX_NETWORK")),
+		Image:   strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_IMAGE")),
+		Network: strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_NETWORK")),
 		Timeout: 10 * time.Minute,
 		WorkDir: workDir,
 	}
@@ -54,12 +54,12 @@ func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	if cfg.Network == "" {
 		cfg.Network = "host"
 	}
-	if v := strings.TrimSpace(os.Getenv("ARTEX_SANDBOX_TIMEOUT")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_TIMEOUT")); v != "" {
 		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
 			cfg.Timeout = secs
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("ARTEX_SANDBOX_ARGS")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_ARGS")); v != "" {
 		cfg.ExtraArgs = strings.Fields(v)
 	}
 	return cfg
@@ -139,7 +139,7 @@ func runSandboxExec(ctx context.Context, cfg SandboxConfig, in json.RawMessage) 
 		return actool.Errorf("command is required")
 	}
 	if !cfg.Available() {
-		return actool.Errorf("sandbox_exec unavailable: docker CLI not found on the ARTEX host. Fall back to Bash for this command, or install Docker to enable isolated execution.")
+		return actool.Errorf("sandbox_exec unavailable: docker CLI not found on the BEHEMOTH host. Fall back to Bash for this command, or install Docker to enable isolated execution.")
 	}
 	timeout := cfg.Timeout
 	if args.TimeoutSeconds > 0 {

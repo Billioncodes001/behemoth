@@ -2,6 +2,10 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+### 变更
+
+- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
+
 ### 修复
 
 - 记录层（MITM）出站改为逐请求解析上游：Exclusive Tor 与轮换中的 Proxy Pool 对抓包流量同样轮询，坏掉的单个 Tor 出口不再拖垮整层抓包；仍保留直连回环与 fail-closed 语义。
@@ -15,12 +19,12 @@
 ### 新增与改进
 
 - 单次 run 新增两个硬预算维度：累计令牌数（`agents.token_budget`）与工具调用数（`agents.tool_call_budget`）。超限后探测工具直接返回「预算耗尽、请落库收尾」，写回类工具（record_fact/insert_assets/report_finding 等）不受限制，避免烂尾；后台 Agent 编辑页可配置，`0`=不限。
-- 任务范围（`task_scope`）从提示词约定升级为机械校验：Bash 命令中的 URL/IP 字面量、WebFetch 与新增 `http_request` 工具均先授权再请求；重定向逐跳重新授权并按主机限速；已配置范围时无法解析的主机按 fail-closed 拒绝。限速可用 `ARTEX_SCOPE_RPS` 调整。
-- 新增 `sandbox_exec`：在一次性 Docker 容器（工作目录挂载到 `/work`）内执行单条命令，用于高风险/重型工具；镜像、网络模式、超时与额外参数由 `ARTEX_SANDBOX_*` 配置，缺少 docker 时给出回退提示。
-- 新增 mock / scenario 提供方（`ARTEX_LLM_PROVIDER=mock` + `ARTEX_MOCK_SCENARIO`/`ARTEX_MOCK_RESPONSES`）：无网络、无密钥即可跑完整 Agent 循环，用于离线演示与 CI。
-- 证据链：每次 worker run 追加哈希链 JSONL（`<run>/evidence/run.jsonl`，含每条明细的 SHA-256 与上一条哈希），收尾活动记录链头；新增 `./artex evidence verify <file>` 逐条重放校验，篡改/乱序/缺失即报错并非零退出。
+- 任务范围（`task_scope`）从提示词约定升级为机械校验：Bash 命令中的 URL/IP 字面量、WebFetch 与新增 `http_request` 工具均先授权再请求；重定向逐跳重新授权并按主机限速；已配置范围时无法解析的主机按 fail-closed 拒绝。限速可用 `BEHEMOTH_SCOPE_RPS` 调整。
+- 新增 `sandbox_exec`：在一次性 Docker 容器（工作目录挂载到 `/work`）内执行单条命令，用于高风险/重型工具；镜像、网络模式、超时与额外参数由 `BEHEMOTH_SANDBOX_*` 配置，缺少 docker 时给出回退提示。
+- 新增 mock / scenario 提供方（`BEHEMOTH_LLM_PROVIDER=mock` + `BEHEMOTH_MOCK_SCENARIO`/`BEHEMOTH_MOCK_RESPONSES`）：无网络、无密钥即可跑完整 Agent 循环，用于离线演示与 CI。
+- 证据链：每次 worker run 追加哈希链 JSONL（`<run>/evidence/run.jsonl`，含每条明细的 SHA-256 与上一条哈希），收尾活动记录链头；新增 `./behemoth evidence verify <file>` 逐条重放校验，篡改/乱序/缺失即报错并非零退出。
 - 日语界面（覆盖导航、通用操作、登录与 Agent 预算等相关文案，未覆盖项回退英文）；`persistence-setup` Skill 增补 phantom DLL 搜索顺序劫持（签名宿主、导出触发、trampoline、VHDX 投递与验证）；新增 `CITATION.cff` 与 `THIRD_PARTY.md`。
-- 新增自包含 C2 能力：生成植入体脚本（bash/python3/powershell，含可定制 beacon/回传路径、睡眠抖动、可选 AES-256-CBC 加密与 systemd/cron/schtasks 持久化安装脚本），beacon/结果端点可挂主端口或独立监听（`ARTEX_C2_ADDR`，可选 TLS），SSH 一键部署（`c2_deploy`），任务队列与结果留存（JSONL 事件日志重启恢复），Agent 工具 `c2_build_implant`/`c2_deploy`/`c2_agents`/`c2_task`/`c2_results`/`c2_kill`，以及令牌鉴权的操作员控制台 `/c2/ui/`。语义参照 Mamba RMM，实现为原创代码（见 `THIRD_PARTY.md`）。
+- 新增自包含 C2 能力：生成植入体脚本（bash/python3/powershell，含可定制 beacon/回传路径、睡眠抖动、可选 AES-256-CBC 加密与 systemd/cron/schtasks 持久化安装脚本），beacon/结果端点可挂主端口或独立监听（`BEHEMOTH_C2_ADDR`，可选 TLS），SSH 一键部署（`c2_deploy`），任务队列与结果留存（JSONL 事件日志重启恢复），Agent 工具 `c2_build_implant`/`c2_deploy`/`c2_agents`/`c2_task`/`c2_results`/`c2_kill`，以及令牌鉴权的操作员控制台 `/c2/ui/`。语义参照 Mamba RMM，实现为原创代码（见 `THIRD_PARTY.md`）。
 
 
 ## [0.3.30] - 2026-11-14
@@ -29,6 +33,10 @@
 
 - 新增 MCP 服务端：外部智能体可通过 `/mcp`（Streamable HTTP）查看任务与漏洞、创建任务、暂停/恢复任务及补充提示。提供访问令牌的权限范围、企业限制、任务限额、有效期和吊销，以及调用审计、来源 IP/CIDR 白名单与可信代理配置。默认关闭；该端点使用独立访问令牌认证，不使用 HTTP Basic Auth。
 - 统一出站 HTTP 请求标识：Go 请求与两个 Python 采集模板从 20 个标准桌面浏览器 User-Agent 中随机选择，保留环境变量和显式请求头覆盖，同一请求的重定向与重试复用选定值。此变化仅涉及 HTTP 请求头。
+
+### 变更
+
+- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
 
 ### 修复
 
@@ -43,6 +51,10 @@
 - 新增可选「无成果止损」：按实际运行时长、独立漏洞数量与最低等级做一次检查，未达标时自动收尾并显示「无成果停止」；暂停、排队及计划窗口外不计时，复活后重新计时，默认关闭。停止状态复用 `timeout`，已有 `on_task_timeout` 触发器仍会执行并可能消耗 token。
 - 任务详情新增只读文件浏览，支持目录导航、最近文件、文本与图片预览、单文件下载及目录 ZIP 下载；展示意图目录对应的标题和状态，并提供中英文界面。
 
+### 变更
+
+- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
+
 ### 修复
 
 - 无成果检查与漏洞写入串行化，并在同一事务内重新计算独立漏洞数量，避免临界时刻已达到成果要求的任务被误停止。
@@ -55,6 +67,10 @@
 - 新增英文界面和语言切换，覆盖任务、审批、设置、通知及计划任务等页面，并统一常用状态、日期与错误提示的翻译。
 - 流量页面展示完整流量 ID，支持按 ID 搜索及在 HTTP 环境复制；Agent 可直接使用该 ID 读取已有流量。
 - 漏洞统计与列表使用相同筛选条件，区分独立漏洞和原始上报记录数量。
+
+### 变更
+
+- 全线更名为 **Behemoth**：Go 模块路径（`github.com/Autumn-27/behemoth`）、二进制与 `cmd/behemoth`、环境变量前缀（`BEHEMOTH_*`）、HTTP 头（`X-Behemoth-*`）、GitHub 仓库（`Billioncodes001/behemoth`，自更新 `Repo` 常量与发布包命名同步）、前端界面与文档中的全部 ARTEX/Artex/artex 字样。数据库默认库名回退值改为 `behemoth`（现有 config.json 中的库名不受影响）；已部署环境如通过 `ARTEX_PG_DSN` 等旧环境变量注入配置，需同步改为 `BEHEMOTH_*`。
 
 ### 修复
 
@@ -96,8 +112,8 @@
 
 ### 部署与发布维护
 
-- 迁移至独立的 `RuoJi6/ARTEX` 仓库，保留原提交历史与分支。
-- 页面在线更新源为 `RuoJi6/ARTEX`；GitHub Actions 构建五个平台程序包和 SHA256 校验文件。
+- 迁移至独立的 `RuoJi6/BEHEMOTH` 仓库，保留原提交历史与分支。
+- 页面在线更新源为 `RuoJi6/BEHEMOTH`；GitHub Actions 构建五个平台程序包和 SHA256 校验文件。
 - 在原生 AMD64、ARM64 runner 上构建 Docker Hub 镜像，并验证程序启动、数据库连接和内嵌前端。
 - 两种架构验证通过后，发布 `v0.3.15`、`latest` 镜像及对应程序包。
 - Compose 和部署说明使用本仓库的镜像，补充已有部署保留数据的迁移方式。
@@ -125,7 +141,7 @@
 
 - **修复掩码可被「改目标地址、保留凭据」绕过（严重）**：配置合并对「未提及的键」一律保留库中原值，于是只改地址、对凭据避而不谈，就能让服务端把库里的真凭据发到任意地址，且完全静默。现规定目标地址一旦变化，每个凭据字段都必须显式表态——给新值，或显式留空表示不再需要。
 - **修复 markdown 系渠道对不可信内容零转义**：漏洞标题与摘要来自模型输出、资产 URL 来自扫描结果，构造的标题会在钉钉 / 企业微信 / 飞书里渲染成可点击外链，图片语法则会在渲染时被客户端拉取并泄露阅读者 IP。现统一做单行化 + markdown 元字符转义，且转义发生在各渠道的渲染出口而非共用的标题函数。
-- **修复投递地址的 SSRF 面**：此前环回、内网与云元数据地址一律可投递，而失败响应体前 200 字节会进 `last_error` 并被投递历史回显，构成一条半盲读原语。现改在**拨号阶段**设防，覆盖 DNS 重绑定，并拒绝跨主机重定向；环回与链路本地地址需显式设置 `ARTEX_NOTIFY_ALLOW_LOCAL=1`，RFC1918 私网仍放行（内网自建 SMTP 中继很常见）。
+- **修复投递地址的 SSRF 面**：此前环回、内网与云元数据地址一律可投递，而失败响应体前 200 字节会进 `last_error` 并被投递历史回显，构成一条半盲读原语。现改在**拨号阶段**设防，覆盖 DNS 重绑定，并拒绝跨主机重定向；环回与链路本地地址需显式设置 `BEHEMOTH_NOTIFY_ALLOW_LOCAL=1`，RFC1918 私网仍放行（内网自建 SMTP 中继很常见）。
 - **修复推送凭据经错误信息外泄**：钉钉的 `access_token`、企业微信的 `key`、Telegram 的 bot token 都在 URL 里，而投递失败时完整 URL 会流入 `last_error`、投递历史、服务端日志与前端提示四处。现统一脱敏，只保留 `scheme://host` 与底层原因。
 - **修复汇总消息被截断后整批标记已送达导致的静默丢失**：被截掉的漏洞既不在消息里、也不在失败列表里，投递历史却显示成功。现改为按**整条**打包，只标记装进本条的那些，其余回队列等下一条续发且不消耗重试次数，消息头部也写明还有多少条将在下一条继续。
 - **修复最低级别门槛打错字会让过滤器静默失效**：`min_severity` 写成 `hgih` 这类笔误时未知级别序数为 0，判定退化成恒真，用户以为只收高危、实际全部漏洞都被灌进群里。现于写入路径校验取值并列出可选值。
@@ -499,13 +515,13 @@
 #### 新增的功能
 
 - 支持**页面一键更新**：系统配置页新增「版本与更新」卡片，顶栏在有新版时亮出提示。流程为下载发布包 → 校验 `SHA256SUMS` → 冒烟测试 → 暂存 → 退出由守护脚本重新拉起完成换装，页面自动刷新。
-- 新增守护启动脚本 `start.sh` / `start.bat` 作为正式启动入口（发布包与 Docker 镜像均已带上，`install.sh` 不变），按退出码决定是否重新拉起，并负责把 SIGTERM 转发给 artex。校验与换装逻辑都在 Go 里，脚本保持傻瓜化。
+- 新增守护启动脚本 `start.sh` / `start.bat` 作为正式启动入口（发布包与 Docker 镜像均已带上，`install.sh` 不变），按退出码决定是否重新拉起，并负责把 SIGTERM 转发给 behemoth。校验与换装逻辑都在 Go 里，脚本保持傻瓜化。
 - 失败自动兜底：校验或冒烟不通过就丢弃、继续跑当前版本；新版连续 3 次启动失败则回滚上一版本。设置页另有手动回滚（注意数据库结构不会回退）。
 - 更新只认 GitHub 域名且强制 HTTPS，发布源不可配置；开发构建禁用一键更新。GitHub 查询结果缓存 30 分钟，避免顶栏提示耗尽 API 配额。
 
 #### 已知限制
 
-- Docker 下只换程序、不换镜像：工具链不会跟着升级，且重建容器会退回镜像自带版本，需要时仍用 `docker compose pull artex`。
+- Docker 下只换程序、不换镜像：工具链不会跟着升级，且重建容器会退回镜像自带版本，需要时仍用 `docker compose pull behemoth`。
 - 不同步发布包里的 `skills/`，新版新增的内置 skill 不会自动生效。
 - 更新即重启，会中断正在运行的任务。
 
@@ -729,7 +745,7 @@
 
 #### 新增的功能
 
-- 新增 `reset-password.sh` 重置管理员（用户名固定 `ARTEX`）密码：支持 local / docker 两种部署，连接信息可显式指定或自动从 `--dsn`/`$ARTEX_PG_DSN`/`config.json` 读取；在库内用 `pgcrypto` 生成与后端登录兼容的 bcrypt 哈希并写回 `settings.auth.password_hash`，重置后无需重启服务。密码经环境变量传入、不进入进程 argv，并做转义防注入。
+- 新增 `reset-password.sh` 重置管理员（用户名固定 `BEHEMOTH`）密码：支持 local / docker 两种部署，连接信息可显式指定或自动从 `--dsn`/`$BEHEMOTH_PG_DSN`/`config.json` 读取；在库内用 `pgcrypto` 生成与后端登录兼容的 bcrypt 哈希并写回 `settings.auth.password_hash`，重置后无需重启服务。密码经环境变量传入、不进入进程 argv，并做转义防注入。
 
 ### 贡献者
 
@@ -824,7 +840,7 @@
 - LLM 配置页改为配置卡片列表和右侧抽屉编辑，并提供 Pool 轮询顺序、优先级、排除项、健康状态和恢复操作。
 - 配置链耗尽信息支持窄屏换行；当前模型由会话列表图标改为当前会话标题旁的文字标签和完整 Tooltip。
 - 任务内各角色解析 LLM 的顺序调整为「Agent 绑定 → 任务配置链 → 全局」：显式绑定模型的角色始终跑在该模型上，未绑定角色才落到任务链，任务链为空时再落到全局。
-- 出站代理留空即直连，不再回退 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量（显式 `ARTEX_LLM_PROXY` 不受影响）；代理输入支持带账号密码的 `socks5://user:pass@host:port`。
+- 出站代理留空即直连，不再回退 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量（显式 `BEHEMOTH_LLM_PROXY` 不受影响）；代理输入支持带账号密码的 `socks5://user:pass@host:port`。
 
 #### 修复的问题
 
@@ -975,13 +991,13 @@
 - [@Autumn-27](https://github.com/Autumn-27)
 - [@neouks](https://github.com/neouks)
 
-[Unreleased]: https://github.com/Autumn-27/ARTEX/compare/v0.3.10...HEAD
-[0.3.10]: https://github.com/Autumn-27/ARTEX/compare/v0.3.9...v0.3.10
-[0.3.9]: https://github.com/Autumn-27/ARTEX/compare/v0.3.8...v0.3.9
-[0.3.8]: https://github.com/Autumn-27/ARTEX/compare/v0.3.7...v0.3.8
-[0.3.7]: https://github.com/Autumn-27/ARTEX/compare/v0.3.6...v0.3.7
-[0.3.6]: https://github.com/Autumn-27/ARTEX/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/Autumn-27/ARTEX/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/Autumn-27/ARTEX/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/Autumn-27/ARTEX/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/Autumn-27/ARTEX/compare/v0.3.1...v0.3.2
+[Unreleased]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.10...HEAD
+[0.3.10]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/Autumn-27/BEHEMOTH/compare/v0.3.1...v0.3.2

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/agent"
+	"github.com/Autumn-27/behemoth/db"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -33,7 +33,7 @@ func (s *Server) agentRequestStore() *db.AgentRequestStore {
 // toolReportNeed exposes report_need.
 func (s *Server) toolReportNeed() actool.CoreTool {
 	return wrTool("report_need",
-		"Report a missing tool, capability, integration, infrastructure or data source to the ARTEX operators so it can be added in a future update. Call it the moment you realize the platform lacks something you need for the task (e.g. no tool for X, an integration that is not configured, missing API keys/credentials, a capability that has to be built) — one call per distinct need, with a concise title, kind, urgency (high = currently blocking this task), details (what exactly you need and why, candidate tools/APIs you know of) and context (where you hit the gap). After reporting, continue with the best available approach; do not stop the task waiting for the request.",
+		"Report a missing tool, capability, integration, infrastructure or data source to the BEHEMOTH operators so it can be added in a future update. Call it the moment you realize the platform lacks something you need for the task (e.g. no tool for X, an integration that is not configured, missing API keys/credentials, a capability that has to be built) — one call per distinct need, with a concise title, kind, urgency (high = currently blocking this task), details (what exactly you need and why, candidate tools/APIs you know of) and context (where you hit the gap). After reporting, continue with the best available approach; do not stop the task waiting for the request.",
 		objSchema(map[string]any{
 			"title":   strParam("One-line summary of the need, e.g. 'PDF parsing tool for report attachments'"),
 			"kind":    map[string]any{"type": "string", "enum": db.AgentRequestKinds, "description": "What kind of need this is (default capability)"},

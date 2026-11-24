@@ -1,6 +1,6 @@
 <div align="center">
 
-# ARTEX
+# BEHEMOTH
 
 ### Autonomous AI Penetration Testing & Offensive Security Platform
 
@@ -19,9 +19,9 @@
 
 ## Overview
 
-**ARTEX** is a full-stack autonomous offensive security and penetration testing platform powered by a coordinated multi-agent reasoning engine (**Go** backend + **Next.js** control plane + **PostgreSQL** graph store).
+**BEHEMOTH** is a full-stack autonomous offensive security and penetration testing platform powered by a coordinated multi-agent reasoning engine (**Go** backend + **Next.js** control plane + **PostgreSQL** graph store).
 
-Unlike linear AI wrappers, ARTEX models every engagement as a live **Exploration DAG (Directed Acyclic Graph)**—decomposing high-level objectives into measurable goals, scheduling parallel worker intents, recording MITM HTTP/HTTPS traffic packets as cryptographic evidence, rotating outbound proxies with GeoIP telemetry, and generating reproducible, artifact-rich technical reports.
+Unlike linear AI wrappers, BEHEMOTH models every engagement as a live **Exploration DAG (Directed Acyclic Graph)**—decomposing high-level objectives into measurable goals, scheduling parallel worker intents, recording MITM HTTP/HTTPS traffic packets as cryptographic evidence, rotating outbound proxies with GeoIP telemetry, and generating reproducible, artifact-rich technical reports.
 
 ---
 
@@ -42,16 +42,16 @@ Unlike linear AI wrappers, ARTEX models every engagement as a live **Exploration
 
 ## Quick Start (Ubuntu Production)
 
-ARTEX uses a streamlined **two-script workflow**:
+BEHEMOTH uses a streamlined **two-script workflow**:
 - **`./setup.sh`** — One-time installation, dependency provisioning, frontend/backend compilation, updates, and password recovery.
 - **`./start.sh`** — Daily service runner (`tmux` multi-service orchestration, Nginx custom domain/SSL routing, status checks, and live logs).
 
 ```bash
-git clone https://github.com/Billioncodes001/myartex.git ARTEX
-cd ARTEX
+git clone https://github.com/Billioncodes001/mybehemoth.git BEHEMOTH
+cd BEHEMOTH
 
 # 1. Full Ubuntu setup (installs PostgreSQL, Go 1.26, Node.js 20, Nginx, Certbot,
-#    Headless Chrome, Nmap/SQLMap/Nikto/WhatWeb/Hydra, builds ARTEX, and starts services):
+#    Headless Chrome, Nmap/SQLMap/Nikto/WhatWeb/Hydra, builds BEHEMOTH, and starts services):
 sudo ./setup.sh full
 
 # 2. Or install and bind a custom domain with automatic Let's Encrypt HTTPS:
@@ -72,7 +72,7 @@ Once complete, open **`http://<server-ip>`** or **`https://pentest.yourdomain.co
 ./start.sh status
 
 # Attach to the live tmux control session (Windows: 0:backend, 1:frontend, 2:logs):
-tmux attach -t artex
+tmux attach -t behemoth
 
 # Link or switch your custom domain via Nginx (Port 80 / 443) at any time:
 sudo ./start.sh domain pentest.yourdomain.com --ssl
@@ -85,7 +85,7 @@ sudo ./start.sh domain pentest.yourdomain.com --ssl
 ### Maintenance & Upgrades (`./setup.sh`)
 
 ```bash
-./setup.sh build                                    # Rebuild frontend + ./artex binary
+./setup.sh build                                    # Rebuild frontend + ./behemoth binary
 ./setup.sh update                                   # Pull latest git changes, rebuild & restart
 ./setup.sh reset-password -p 'NewStrongPassword!'   # Reset admin password in PostgreSQL
 ```
@@ -96,6 +96,6 @@ sudo ./start.sh domain pentest.yourdomain.com --ssl
 
 - **[Operator Wiki & How-To Guide (`docs/WIKI_HOW_TO_USE.md`)](./docs/WIKI_HOW_TO_USE.md)** — Complete step-by-step guide to LLM profiles (including Cline presets), Chat-driven operations, Task DAGs, Proxy Pool v2, Stealth settings, and End-to-End Reporting.
 - **[Production Deployment & Administration Guide (`docs/DEPLOYMENT_GUIDE.md`)](./docs/DEPLOYMENT_GUIDE.md)** — Ubuntu server requirements, port architecture, `setup.sh` / `start.sh` reference, Nginx domain/SSL setup, and administration.
-- **[Run Hardening (`docs/RUN_HARDENING.md`)](./docs/RUN_HARDENING.md)** — per-run token/tool-call budgets, mechanical scope enforcement (redirect re-authorization, per-host rate limits, fail-closed DNS), the Docker `sandbox_exec` backend, the offline mock provider, and tamper-evident evidence logs (`artex evidence verify`).
+- **[Run Hardening (`docs/RUN_HARDENING.md`)](./docs/RUN_HARDENING.md)** — per-run token/tool-call budgets, mechanical scope enforcement (redirect re-authorization, per-host rate limits, fail-closed DNS), the Docker `sandbox_exec` backend, the offline mock provider, and tamper-evident evidence logs (`behemoth evidence verify`).
 - **[C2 Guide (`docs/C2_GUIDE.md`)](./docs/C2_GUIDE.md)** — self-contained command & control: implant generation (bash/python3/powershell, malleable profiles, AES check-ins), SSH deployment with persistence helpers, the agent tool set (`c2_build_implant` … `c2_kill`), and the token-authed operator console at `/c2/ui/`.
 

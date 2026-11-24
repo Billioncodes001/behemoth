@@ -1,4 +1,4 @@
-// Package db is the PostgreSQL data source for ARTEX (取代旧 graph 单文件 SQLite)。
+// Package db is the PostgreSQL data source for BEHEMOTH (取代旧 graph 单文件 SQLite)。
 // 它打开连接、应用 schema、并 seed 内置 agent 与变量目录。
 package db
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/behemoth/config"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
 )
@@ -87,7 +87,7 @@ func coordinateWithSchemaMigration(tx *sql.Tx) error {
 }
 
 // DSN resolves the PostgreSQL connection string and reports where it came from.
-// Precedence: env ARTEX_PG_DSN > config file (config.json). There is no
+// Precedence: env BEHEMOTH_PG_DSN > config file (config.json). There is no
 // built-in default — it errors if neither source is configured.
 func DSN() (dsn, source string, err error) {
 	return config.PostgresDSN()
@@ -628,7 +628,7 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 
 // seedDefaultInterceptRulesV4 eliminates false-positive built-in interception rules
 // that blocked legitimate reconnaissance wordlists (e.g. "admin/delete" inside
-// directory enumeration scripts) and workspace file cleanup under /root/myartex/data,
+// directory enumeration scripts) and workspace file cleanup under /root/mybehemoth/data,
 // while keeping host OS destructive-command protections strictly enabled.
 func (d *DB) seedDefaultInterceptRulesV4() error {
 	if v, _, _ := d.GetSetting("intercept_default_rules_v4"); v == "done" {
@@ -645,7 +645,7 @@ func (d *DB) seedDefaultInterceptRulesV4() error {
 		`(?i)https?://[^\s"']+/(?:clear|wipe|flush|purge|truncate|drop|destroy|factory[-_]reset|reset[-_]all)(?:[/?#"'\s]|$)`,
 	)
 	// 2) Scope rm rules to critical host root directories so cleaning up recon subdirectories
-	//    inside the session workspace (including /root/myartex/data/sessions/...) is allowed.
+	//    inside the session workspace (including /root/mybehemoth/data/sessions/...) is allowed.
 	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
 		"[Built-in] Recursive forced deletion rm -rf",
 		`(?i)\brm\b[^|\n;&]{0,80}(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|--recursive|--no-preserve-root)\s+["']?(?:/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/home|/root)(?:["'\s/;\n]|$)`,

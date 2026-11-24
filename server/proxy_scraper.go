@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	"github.com/Autumn-27/behemoth/db"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 	actool "github.com/Autumn-27/norma/tool"
 	"golang.org/x/net/proxy"
 )
@@ -1006,7 +1006,7 @@ func (s *Server) proxyScraperAgentTools() []actool.CoreTool {
 
 func (s *Server) toolScrapeOnlineProxies() actool.CoreTool {
 	return wrTool("scrape_online_proxies",
-		"Scrape free public SOCKS5 and HTTPS proxies from 16+ curated GitHub & API feeds (plus AI-discovered feeds), verify them with 2-stage TCP + strict TLS certificate & Elite non-transparent IP checks, and import the fastest working proxies into ARTEX's Proxy Pool.",
+		"Scrape free public SOCKS5 and HTTPS proxies from 16+ curated GitHub & API feeds (plus AI-discovered feeds), verify them with 2-stage TCP + strict TLS certificate & Elite non-transparent IP checks, and import the fastest working proxies into BEHEMOTH's Proxy Pool.",
 		objSchema(map[string]any{
 			"max_proxies":      map[string]any{"type": "integer", "description": "Optional max verified proxies to add to pool (default 25, max 100)"},
 			"max_latency_ms":   map[string]any{"type": "integer", "description": "Optional max HTTPS round-trip latency in ms (default 4500)"},
@@ -1130,7 +1130,7 @@ func newSafePublicFeedClient(timeout time.Duration) *http.Client {
 
 func (s *Server) toolAddProxyScrapeSource() actool.CoreTool {
 	return wrTool("add_proxy_scrape_source",
-		"Register a newly discovered online proxy feed URL (raw GitHub TXT, CSV, JSON, or public proxy API) into ARTEX's persistent Online Proxy Scraper registry and optionally test & verify its proxies immediately.",
+		"Register a newly discovered online proxy feed URL (raw GitHub TXT, CSV, JSON, or public proxy API) into BEHEMOTH's persistent Online Proxy Scraper registry and optionally test & verify its proxies immediately.",
 		objSchema(map[string]any{
 			"name":             strParam("Descriptive source name (e.g. 'owner/repo SOCKS5 live list')"),
 			"url":              strParam("Direct HTTP/HTTPS URL returning proxy ip:port entries in TXT, JSON, CSV, or HTML"),
@@ -1257,7 +1257,7 @@ func (s *Server) toolRemoveProxyScrapeSource() actool.CoreTool {
 
 func (s *Server) toolVerifyAndImportScrapedProxies() actool.CoreTool {
 	return wrTool("verify_and_import_scraped_proxies",
-		"Run ARTEX's strict 2-stage TCP + HTTPS certificate + Elite non-transparent IP verification on raw proxy candidates extracted by the agent and import only fast, verified working proxies into Proxy Pool.",
+		"Run BEHEMOTH's strict 2-stage TCP + HTTPS certificate + Elite non-transparent IP verification on raw proxy candidates extracted by the agent and import only fast, verified working proxies into Proxy Pool.",
 		objSchema(map[string]any{
 			"proxies":          strParam("Raw text or JSON containing ip:port or scheme://ip:port candidates"),
 			"default_protocol": strParam("Protocol for bare ip:port entries: socks5 (default) | http"),

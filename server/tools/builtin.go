@@ -107,7 +107,7 @@ func (c *Catalog) registerBuiltInTools() {
 			Category:    "scan", Version: "3.3", Command: "nuclei",
 			Parameters: []ToolParameter{
 				{Name: "target", Type: "url", Required: true, Description: "Target URL or list file"},
-				{Name: "templates", Type: "string", Required: false, Default: "", Flag: "-t", Description: "Template paths (ARTEX auto-injects verified Patch Monitor templates from <data>/nuclei-templates/artex when empty)"},
+				{Name: "templates", Type: "string", Required: false, Default: "", Flag: "-t", Description: "Template paths (BEHEMOTH auto-injects verified Patch Monitor templates from <data>/nuclei-templates/behemoth when empty)"},
 				{Name: "severity", Type: "select", Required: false, Options: []string{"critical", "high", "medium", "low", "info"}, Flag: "-severity", Description: "Filter by severity"},
 				{Name: "rate-limit", Type: "int", Required: false, Default: "150", Flag: "-rl", Description: "Requests per second"},
 			},
@@ -379,7 +379,7 @@ func (c *Catalog) registerBuiltInTools() {
 			Description: "AWS exploitation framework — enumerate permissions, escalate privileges, exfiltrate (requires AWS keys)",
 			Category:    "cloud", Version: "2.x", Command: "pacu",
 			Parameters: []ToolParameter{
-				{Name: "session", Type: "string", Required: false, Default: "artex", Description: "Pacu session name"},
+				{Name: "session", Type: "string", Required: false, Default: "behemoth", Description: "Pacu session name"},
 				{Name: "module", Type: "string", Required: false, Description: "Module to run (e.g. runall, iam__enum_users)"},
 				{Name: "key-alias", Type: "string", Required: false, Description: "Imported key alias"},
 			},

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/mcphttp"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/mcphttp"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -159,7 +159,7 @@ func TestMCPServerAuthentication(t *testing.T) {
 	}
 	// The token is accepted from the Authorization header only.
 	r := httptest.NewRequest(http.MethodPost, mcpEndpointPath+"?token="+mcpTestReadToken, strings.NewReader(ping))
-	r.AddCookie(&http.Cookie{Name: "artex_token", Value: mcpTestReadToken})
+	r.AddCookie(&http.Cookie{Name: "behemoth_token", Value: mcpTestReadToken})
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
@@ -179,7 +179,7 @@ func TestMCPServerBypassesBasicAuthGate(t *testing.T) {
 
 	health := httptest.NewRecorder()
 	s.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/api/health", nil))
-	if health.Code != http.StatusUnauthorized || health.Header().Get("X-Artex-Auth") != "basic" {
+	if health.Code != http.StatusUnauthorized || health.Header().Get("X-Behemoth-Auth") != "basic" {
 		t.Fatalf("gate should still protect /api: status=%d", health.Code)
 	}
 	ping := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
@@ -567,7 +567,7 @@ func TestMCPServerPostgresEndToEnd(t *testing.T) {
 		return out.Token, out.Item.ID
 	}
 	connect := func(token string) (*mcphttp.Client, error) {
-		return mcphttp.New(context.Background(), "artex", srv.URL+mcpEndpointPath, map[string]string{"Authorization": "Bearer " + token}, false)
+		return mcphttp.New(context.Background(), "behemoth", srv.URL+mcpEndpointPath, map[string]string{"Authorization": "Bearer " + token}, false)
 	}
 
 	// Disabled until an administrator turns it on.

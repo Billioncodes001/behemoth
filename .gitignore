@@ -40,14 +40,14 @@ Thumbs.db
 .claude/
 
 # Embedded frontend single-binary & update artifacts
-/artex
-/artex-server
+/behemoth
+/behemoth-server
 # 一键更新在可执行文件旁留下的中间产物（暂存件 / 备份 / 失败版本 / 升级标记）
-/artex.new
-/artex.new.sha256
-/artex.old
-/artex.failed
-/artex.upgrade.json
+/behemoth.new
+/behemoth.new.sha256
+/behemoth.old
+/behemoth.failed
+/behemoth.upgrade.json
 /server/webui/dist/
 /dist/
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -31,7 +31,7 @@ func (s *Server) syncProxyPoolNow() {
 
 func (s *Server) toolImportAndTestProxies() actool.CoreTool {
 	return wrTool("import_and_test_proxies",
-		"Import one or more proxies (from pasted text in any format such as ip:port:user:pass, user:pass@ip:port, http/socks5 URLs, CSV, or JSON — or from an uploaded proxy file) into the ARTEX Proxy Pool page, automatically health-test all proxies in parallel, enable the Proxy Pool, and activate a verified healthy egress proxy before running scans.",
+		"Import one or more proxies (from pasted text in any format such as ip:port:user:pass, user:pass@ip:port, http/socks5 URLs, CSV, or JSON — or from an uploaded proxy file) into the BEHEMOTH Proxy Pool page, automatically health-test all proxies in parallel, enable the Proxy Pool, and activate a verified healthy egress proxy before running scans.",
 		objSchema(map[string]any{
 			"proxies":           strParam("Raw proxy list pasted by the user (supports host:port:user:pass, user:pass@host:port, scheme://user:pass@host:port, host:port, CSV, or JSON)"),
 			"file_path":         strParam("Optional path to an uploaded proxy file (.txt, .csv, .json) in the session workspace"),
@@ -239,7 +239,7 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 	case "proxy_pool":
 		instruction = "Proxy Pool is ENABLED. ZERO-IP-LEAK RULE: WebFetch, MCP servers (browser, vuln_intel, recon_osint, web_sec_analyzer), run_security_tool, browser_inspect, detect_deception_and_honeypot, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY automatically route through the active proxy (picking up Tor/pool switches live mid-run). In Bash, NEVER run raw unproxied socket/SYN/UDP commands that bypass HTTP_PROXY. If a proxy slows down or gets 403/429'd, call manage_proxy_pool(action='rotate' or 'disable_proxy') or scrape_online_proxies."
 	case "proxy_pool_exhausted_fail_closed":
-		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! ARTEX has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Immediately stop and inform the user that all proxies in the Proxy Pool are down/exhausted, and let them know they can click 'Enable Free Tor Network' in System -> Proxy Pool (or ask you to call manage_proxy_pool(action='enable_tor')) or import working proxies."
+		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! BEHEMOTH has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Immediately stop and inform the user that all proxies in the Proxy Pool are down/exhausted, and let them know they can click 'Enable Free Tor Network' in System -> Proxy Pool (or ask you to call manage_proxy_pool(action='enable_tor')) or import working proxies."
 	case "static_global_proxy":
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
 	}
@@ -288,7 +288,7 @@ func (s *Server) toolCheckProxyStatus() actool.CoreTool {
 
 func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 	return roTool("get_proxy_pool_status",
-		"Check whether outbound proxies are enabled anywhere in ARTEX (Proxy Pool or static Global Proxy), inspect active egress proxy IP/location/latency, pool health counts, rotation/sticky settings, and all configured proxies.",
+		"Check whether outbound proxies are enabled anywhere in BEHEMOTH (Proxy Pool or static Global Proxy), inspect active egress proxy IP/location/latency, pool health counts, rotation/sticky settings, and all configured proxies.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			if ppV2 == nil || ppV2.Pool == nil {
@@ -304,7 +304,7 @@ func (s *Server) toolGetProxyPoolStatus() actool.CoreTool {
 
 func (s *Server) toolManageProxyPool() actool.CoreTool {
 	return wrTool("manage_proxy_pool",
-		"Control and reconfigure ARTEX proxy routing mid-operation: rotate (switch away from a slow/rate-limited/failing proxy immediately), enable_tor (start built-in free unlimited-bandwidth Tor SOCKS5 circuits in Proxy Pool), tor_newnym (request brand-new Tor exit IPs via SIGNAL NEWNYM), disable_tor, tor_status, test_all, test_one (probe proxy_id), activate (pin proxy_id), disable_proxy (quarantine a failing proxy_id and auto-failover), enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete.",
+		"Control and reconfigure BEHEMOTH proxy routing mid-operation: rotate (switch away from a slow/rate-limited/failing proxy immediately), enable_tor (start built-in free unlimited-bandwidth Tor SOCKS5 circuits in Proxy Pool), tor_newnym (request brand-new Tor exit IPs via SIGNAL NEWNYM), disable_tor, tor_status, test_all, test_one (probe proxy_id), activate (pin proxy_id), disable_proxy (quarantine a failing proxy_id and auto-failover), enable_proxy, clear_failed, clear_all, enable, disable, configure, or delete.",
 		objSchema(map[string]any{
 			"action":                        strParam("Action: rotate | enable_tor | tor_newnym | disable_tor | tor_status | test_all | test_one | activate | disable_proxy | enable_proxy | clear_failed | clear_all | enable | disable | configure | delete"),
 			"proxy_id":                      strParam("Target proxy ID (used by test_one, activate, disable_proxy, enable_proxy, delete)"),

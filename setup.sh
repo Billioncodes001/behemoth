@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# ARTEX — Unified Setup, Build, Update & Admin Maintenance Script
+# BEHEMOTH — Unified Setup, Build, Update & Admin Maintenance Script
 # ============================================================================
 # Consolidates: Ubuntu production setup, Docker setup, Local setup,
 # Cross-platform release builder, Updater, and Admin Password Reset.
@@ -11,7 +11,7 @@
 #   ./setup.sh docker                                    # Docker Compose setup
 #   ./setup.sh build [--target os/arch] [--release]      # Build frontend + single binary
 #   ./setup.sh update                                    # Pull & rebuild/update deployment
-#   ./setup.sh reset-password [-p 'NewPass!']            # Reset ARTEX admin password in DB
+#   ./setup.sh reset-password [-p 'NewPass!']            # Reset BEHEMOTH admin password in DB
 # ============================================================================
 set -euo pipefail
 
@@ -34,7 +34,7 @@ rand_secret() { LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c 256 /dev/urandom) | cut 
 
 banner() {
   echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${CYAN}║          ARTEX — Autonomous Penetration Testing Platform         ║${NC}"
+  echo -e "${CYAN}║          BEHEMOTH — Autonomous Penetration Testing Platform         ║${NC}"
   echo -e "${CYAN}║         Unified Setup, Build, Update & Maintenance Utility       ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
   echo ""
@@ -99,7 +99,7 @@ import json, sys, urllib.request
 repo, os_tag, arch_tag = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
 os_aliases = ["macos", "darwin"] if os_tag == "macos" else ["linux"]
 arch_aliases = ["arm64", "aarch64"] if arch_tag == "arm64" else ["amd64", "x86_64", "64-bit", "64bit"]
-req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers={"User-Agent": "artex-setup"})
+req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers={"User-Agent": "behemoth-setup"})
 with urllib.request.urlopen(req, timeout=15) as r:
     data = json.load(r)
 for a in data.get("assets", []):
@@ -236,28 +236,28 @@ setup_postgresql() {
 
   local db_pass
   db_pass="$(rand_secret)"
-  su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname = 'artex'\" | grep -q 1 || psql -c \"CREATE USER artex WITH PASSWORD '${db_pass}';\""
-  su - postgres -c "psql -c \"ALTER USER artex WITH PASSWORD '${db_pass}';\""
-  su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname = 'artex'\" | grep -q 1 || psql -c \"CREATE DATABASE artex OWNER artex;\""
-  su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE artex TO artex;\""
+  su - postgres -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname = 'behemoth'\" | grep -q 1 || psql -c \"CREATE USER behemoth WITH PASSWORD '${db_pass}';\""
+  su - postgres -c "psql -c \"ALTER USER behemoth WITH PASSWORD '${db_pass}';\""
+  su - postgres -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname = 'behemoth'\" | grep -q 1 || psql -c \"CREATE DATABASE behemoth OWNER behemoth;\""
+  su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE behemoth TO behemoth;\""
 
   cat > config.json <<EOF
 {
   "database": {
     "host": "127.0.0.1",
     "port": 5432,
-    "user": "artex",
+    "user": "behemoth",
     "password": "${db_pass}",
-    "dbname": "artex",
+    "dbname": "behemoth",
     "sslmode": "disable"
   }
 }
 EOF
   chmod 600 config.json
-  ok "PostgreSQL database 'artex' initialized and config.json created"
+  ok "PostgreSQL database 'behemoth' initialized and config.json created"
 }
 
-build_artex() {
+build_behemoth() {
   export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
   if command -v npm >/dev/null 2>&1; then
     info "Building Next.js frontend static bundle (for embedded single-binary)..."
@@ -270,28 +270,28 @@ build_artex() {
     info "Building Next.js server runtime bundle (with /api/* proxy rewrites)..."
     ( cd web && npm run build )
   fi
-  local build_ver="${ARTEX_BUILD_VERSION:-}"
+  local build_ver="${BEHEMOTH_BUILD_VERSION:-}"
   if [[ -z "$build_ver" ]]; then
     build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.3.0")"
   fi
   build_ver="${build_ver#v}"
-  info "Compiling single-binary ARTEX server (./artex v${build_ver})..."
-  CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${build_ver}" -o artex ./cmd/artex
-  chmod +x artex start.sh
-  ok "Compiled ./artex v${build_ver} ($(du -h artex | awk '{print $1}'))"
+  info "Compiling single-binary BEHEMOTH server (./behemoth v${build_ver})..."
+  CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${build_ver}" -o behemoth ./cmd/behemoth
+  chmod +x behemoth start.sh
+  ok "Compiled ./behemoth v${build_ver} ($(du -h behemoth | awk '{print $1}'))"
 }
 
 reset_admin_password() {
   local newpass="${1:-}"
   if [[ -z "$newpass" ]]; then
-    read -rsp "Enter new ARTEX admin password (>=8 chars): " newpass; echo ""
+    read -rsp "Enter new BEHEMOTH admin password (>=8 chars): " newpass; echo ""
   fi
   [[ "${#newpass}" -ge 8 ]] || die "Password must be at least 8 characters"
-  export ARTEX_RESET_NEWPASS="$newpass"
+  export BEHEMOTH_RESET_NEWPASS="$newpass"
 
   local psql_cmd=(psql --no-psqlrc -v ON_ERROR_STOP=1)
-  if [[ -n "${ARTEX_PG_DSN:-}" ]]; then
-    psql_cmd+=("$ARTEX_PG_DSN")
+  if [[ -n "${BEHEMOTH_PG_DSN:-}" ]]; then
+    psql_cmd+=("$BEHEMOTH_PG_DSN")
   elif [[ -f config.json ]] && command -v python3 >/dev/null 2>&1; then
     local db_dsn
     db_dsn="$(python3 -c '
@@ -304,7 +304,7 @@ elif c.get("user") and c.get("dbname"):
     pw = urllib.parse.quote(str(c.get("password", "")), safe="")
     h = c.get("host") or "127.0.0.1"
     pt = c.get("port") or 5432
-    db = urllib.parse.quote(str(c.get("dbname", "artex")), safe="")
+    db = urllib.parse.quote(str(c.get("dbname", "behemoth")), safe="")
     ssl = c.get("sslmode") or "disable"
     auth = f"{u}:{pw}@" if pw else f"{u}@"
     print(f"postgres://{auth}{h}:{pt}/{db}?sslmode={ssl}")
@@ -312,16 +312,16 @@ elif c.get("user") and c.get("dbname"):
     if [[ -n "$db_dsn" ]]; then
       psql_cmd+=("$db_dsn")
     else
-      psql_cmd+=(-d artex)
+      psql_cmd+=(-d behemoth)
     fi
   elif [[ "${EUID:-$(id -u)}" -eq 0 ]] && id -u postgres >/dev/null 2>&1; then
-    psql_cmd=(sudo -E -u postgres psql --no-psqlrc -d artex -v ON_ERROR_STOP=1)
+    psql_cmd=(sudo -E -u postgres psql --no-psqlrc -d behemoth -v ON_ERROR_STOP=1)
   else
-    psql_cmd+=(-d artex)
+    psql_cmd+=(-d behemoth)
   fi
 
   "${psql_cmd[@]}" <<'SQL'
-\getenv newpw ARTEX_RESET_NEWPASS
+\getenv newpw BEHEMOTH_RESET_NEWPASS
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
@@ -332,8 +332,8 @@ INSERT INTO settings(key, value)
 VALUES ('auth.password_hash', crypt(:'newpw', gen_salt('bf', 10)))
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 SQL
-  unset ARTEX_RESET_NEWPASS
-  ok "ARTEX admin password updated successfully (login with username: ARTEX)"
+  unset BEHEMOTH_RESET_NEWPASS
+  ok "BEHEMOTH admin password updated successfully (login with username: BEHEMOTH)"
 }
 
 CMD="${1:-full}"
@@ -361,7 +361,7 @@ case "$CMD" in
     install_nodejs
     install_playwright_globals
     setup_postgresql
-    build_artex
+    build_behemoth
     ./start.sh all
     if [[ "$DOMAIN" != "_" ]]; then
       if [[ "$ENABLE_SSL" -eq 1 ]]; then ./start.sh domain "$DOMAIN" --ssl; else ./start.sh domain "$DOMAIN"; fi
@@ -371,11 +371,11 @@ case "$CMD" in
     ;;
   build)
     banner
-    build_artex
+    build_behemoth
     ;;
   local)
     banner
-    build_artex
+    build_behemoth
     ./start.sh all
     ;;
   docker)
@@ -386,7 +386,7 @@ case "$CMD" in
       if [[ -f .env.example ]]; then
         sed "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${gen_pass}/" .env.example > .env
       else
-        printf "POSTGRES_USER=artex\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=artex\n" "$gen_pass" > .env
+        printf "POSTGRES_USER=behemoth\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=behemoth\n" "$gen_pass" > .env
       fi
       chmod 600 .env
       ok "Initialized .env with generated PostgreSQL password"
@@ -397,7 +397,7 @@ case "$CMD" in
   update)
     banner
     git pull --ff-only || warn "git pull skipped or non-fast-forward"
-    build_artex
+    build_behemoth
     ./start.sh all
     ;;
   arsenal)

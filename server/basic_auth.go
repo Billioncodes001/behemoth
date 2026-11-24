@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Autumn-27/artex/server/fingerprint"
+	"github.com/Autumn-27/behemoth/server/fingerprint"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -21,12 +21,12 @@ import (
 const basicAuthKey = "auth.http_basic"
 
 // Dynamic cookie name - set at startup via fingerprint package
-var basicAuthCookie = "artex_basic_auth" // will be overridden by InitializeDynamicNames()
+var basicAuthCookie = "behemoth_basic_auth" // will be overridden by InitializeDynamicNames()
 const basicAuthTTL = 12 * time.Hour
 const basicAuthSaveTimeout = 10 * time.Second
 
 // Dynamic auth header name - set at startup
-var dynamicAuthHeaderName = "X-Artex-Auth" // will be overridden
+var dynamicAuthHeaderName = "X-Behemoth-Auth" // will be overridden
 
 // InitializeDynamicNames sets dynamic names from fingerprint manager.
 // Call once at server startup after fingerprint.Initialize().
@@ -97,7 +97,7 @@ func validBasicUsername(username string) bool {
 // A separate signing key prevents a gate cookie from being used as an admin JWT.
 func (s *Server) basicAuthSigningKey() []byte {
 	m := hmac.New(sha256.New, s.jwtKey)
-	m.Write([]byte("artex/http-basic-auth/session/v1"))
+	m.Write([]byte("behemoth/http-basic-auth/session/v1"))
 	return m.Sum(nil)
 }
 
@@ -110,7 +110,7 @@ func (s *Server) validBasicAuthCookie(r *http.Request, cfg basicAuthConfig) bool
 	_, err = jwt.ParseWithClaims(cookie.Value, claims, func(*jwt.Token) (any, error) {
 		return s.basicAuthSigningKey(), nil
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired(),
-		jwt.WithAudience("artex-basic-auth"), jwt.WithSubject(cfg.Revision))
+		jwt.WithAudience("behemoth-basic-auth"), jwt.WithSubject(cfg.Revision))
 	return err == nil
 }
 
@@ -123,7 +123,7 @@ func (s *Server) setBasicAuthCookie(w http.ResponseWriter, r *http.Request, cfg 
 	if cfg.Enabled {
 		now := time.Now()
 		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"artex-basic-auth"},
+			Subject: cfg.Revision, Audience: jwt.ClaimStrings{"behemoth-basic-auth"},
 			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(basicAuthTTL)),
 		}).SignedString(s.basicAuthSigningKey())
 		if err != nil {
@@ -174,8 +174,8 @@ func (s *Server) requireBasicAuth(next http.Handler) http.Handler {
 			// Background requests use Bearer auth. Challenging them with Basic
 			// can trap the browser in repeated native dialogs. Let the client
 			// reload the current page once to renew only the outer session.
-			w.Header().Set("X-Artex-Auth", "basic")
-			if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Artex-Auth") {
+			w.Header().Set("X-Behemoth-Auth", "basic")
+			if dynamicAuthHeaderName != "" && !strings.EqualFold(dynamicAuthHeaderName, "X-Behemoth-Auth") {
 				w.Header().Set(dynamicAuthHeaderName, "basic")
 			}
 			if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/basic-auth/check" || r.URL.Path == "/api/health" {

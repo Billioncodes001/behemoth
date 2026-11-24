@@ -1,14 +1,14 @@
-# ARTEX Feature Enhancement Plan: emp3r0r Integration & New Offensive Capabilities
+# BEHEMOTH Feature Enhancement Plan: emp3r0r Integration & New Offensive Capabilities
 
 ## Executive Summary
 
-This document outlines the integration of offensive capabilities from [emp3r0r](https://github.com/jm33-m0/emp3r0r) (v5) into ARTEX, along with entirely new features for autonomous security patch monitoring, exploit generation, and SOC-evasive operations.
+This document outlines the integration of offensive capabilities from [emp3r0r](https://github.com/jm33-m0/emp3r0r) (v5) into BEHEMOTH, along with entirely new features for autonomous security patch monitoring, exploit generation, and SOC-evasive operations.
 
 ---
 
-## Part 1: Current ARTEX Capability Audit
+## Part 1: Current BEHEMOTH Capability Audit
 
-### Already Implemented in ARTEX
+### Already Implemented in BEHEMOTH
 
 | Category | Capability | Location |
 |----------|-----------|----------|

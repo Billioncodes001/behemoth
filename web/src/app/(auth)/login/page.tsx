@@ -33,7 +33,7 @@ export default function LoginPage() {
   const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
   const [turnstileVerifiedKeys, setTurnstileVerifiedKeys] = useState(false);
   const [rayId, setRayId] = useState("8e4c19a2f0b31d42");
-  const [hostLabel, setHostLabel] = useState("artex.local");
+  const [hostLabel, setHostLabel] = useState("behemoth.local");
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const widgetRenderedRef = useRef(false);
 
@@ -52,8 +52,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setHostLabel(window.location.hostname || "artex.local");
-      if (sessionStorage.getItem("artex_turnstile_ok") === "1") {
+      setHostLabel(window.location.hostname || "behemoth.local");
+      if (sessionStorage.getItem("behemoth_turnstile_ok") === "1") {
         setTurnstileState("passed");
       }
     }
@@ -70,7 +70,7 @@ export default function LoginPage() {
         }
         if (
           st.turnstile_enabled === false ||
-          (typeof window !== "undefined" && sessionStorage.getItem("artex_turnstile_ok") === "1")
+          (typeof window !== "undefined" && sessionStorage.getItem("behemoth_turnstile_ok") === "1")
         ) {
           if (token) {
             window.location.replace("/function/tasks");
@@ -102,7 +102,7 @@ export default function LoginPage() {
         setTurnstileState("success");
         await new Promise((r) => setTimeout(r, 850));
         if (typeof window !== "undefined") {
-          sessionStorage.setItem("artex_turnstile_ok", "1");
+          sessionStorage.setItem("behemoth_turnstile_ok", "1");
         }
         if (token) {
           window.location.replace("/function/tasks");
@@ -136,7 +136,7 @@ export default function LoginPage() {
             const v = await api.turnstileVerify(cfToken, navigator.userAgent);
             if (v?.ray_id) setRayId(v.ray_id);
             if (typeof window !== "undefined") {
-              sessionStorage.setItem("artex_turnstile_ok", "1");
+              sessionStorage.setItem("behemoth_turnstile_ok", "1");
             }
             const existingToken = auth.getToken();
             if (existingToken) {
@@ -192,7 +192,7 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const { token } = await api.login("ARTEX", password);
+      const { token } = await api.login("BEHEMOTH", password);
       auth.setToken(token);
       window.location.replace("/function/tasks");
     } catch {
@@ -275,7 +275,7 @@ export default function LoginPage() {
           <div className="absolute size-60 rounded-full border border-primary-foreground/15" />
           <div className="absolute size-40 rounded-full border border-primary-foreground/20" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="ARTEX" width={160} height={160} className="relative brightness-0 invert" />
+          <img src="/logo.png" alt="BEHEMOTH" width={160} height={160} className="relative brightness-0 invert" />
         </div>
       </div>
 
@@ -289,7 +289,7 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="username">{t("auth.username")}</Label>
-              <Input id="username" value="ARTEX" readOnly className="bg-muted text-muted-foreground" />
+              <Input id="username" value="BEHEMOTH" readOnly className="bg-muted text-muted-foreground" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="password">{t("auth.password")}</Label>

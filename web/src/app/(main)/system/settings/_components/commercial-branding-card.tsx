@@ -25,12 +25,12 @@ export function CommercialBrandingCard() {
   const [licenseInput, setLicenseInput] = React.useState("");
   const [savingLicense, setSavingLicense] = React.useState(false);
 
-  const [brandName, setBrandName] = React.useState("ARTEX");
+  const [brandName, setBrandName] = React.useState("BEHEMOTH");
   const [brandTagline, setBrandTagline] = React.useState(
     "Autonomous AI Security & Penetration Testing Platform",
   );
   const [companyFooter, setCompanyFooter] = React.useState(
-    "Prepared by ARTEX Autonomous Security Operations",
+    "Prepared by BEHEMOTH Autonomous Security Operations",
   );
   const [reportClassification, setReportClassification] = React.useState(
     "CONFIDENTIAL — AUTHORIZED SECURITY ASSESSMENT",
@@ -46,7 +46,7 @@ export function CommercialBrandingCard() {
     setLicenseError(st.license_error || "");
     setClaims(st.claims || null);
     if (st.branding) {
-      setBrandName(st.branding.brand_name || "ARTEX");
+      setBrandName(st.branding.brand_name || "BEHEMOTH");
       setBrandTagline(st.branding.brand_tagline || "");
       setCompanyFooter(st.branding.company_footer || "");
       setReportClassification(st.branding.report_classification || "");
@@ -64,7 +64,7 @@ export function CommercialBrandingCard() {
   const handleActivateLicense = async (clear = false) => {
     const key = clear ? "" : licenseInput.trim();
     if (!clear && !key) {
-      toast.warning("Paste an ARTEX-LIC-... license key first.");
+      toast.warning("Paste an BEHEMOTH-LIC-... license key first.");
       return;
     }
     setSavingLicense(true);
@@ -88,7 +88,7 @@ export function CommercialBrandingCard() {
     setSavingBranding(true);
     try {
       const st = await api.commercial.updateBranding({
-        brand_name: brandName.trim() || "ARTEX",
+        brand_name: brandName.trim() || "BEHEMOTH",
         brand_tagline: brandTagline.trim(),
         company_footer: companyFooter.trim(),
         report_classification: reportClassification.trim(),
@@ -103,7 +103,7 @@ export function CommercialBrandingCard() {
     }
   };
 
-  const cliSnippet = `./artex --generate-license --license-customer "Acme Corp" --license-tier Enterprise --license-days 365`;
+  const cliSnippet = `./behemoth --generate-license --license-customer "Acme Corp" --license-tier Enterprise --license-days 365`;
 
   return (
     <Card>
@@ -158,7 +158,7 @@ export function CommercialBrandingCard() {
 
           <div className="flex flex-wrap gap-2">
             <Input
-              placeholder="ARTEX-LIC-eyJjdXN0b21lciI6..."
+              placeholder="BEHEMOTH-LIC-eyJjdXN0b21lciI6..."
               value={licenseInput}
               onChange={(e) => setLicenseInput(e.target.value)}
               className="min-w-[240px] flex-1 font-mono text-xs"
@@ -209,7 +209,7 @@ export function CommercialBrandingCard() {
               <Input
                 value={brandName}
                 onChange={(e) => setBrandName(e.target.value)}
-                placeholder="ARTEX"
+                placeholder="BEHEMOTH"
                 className="text-sm"
               />
             </div>

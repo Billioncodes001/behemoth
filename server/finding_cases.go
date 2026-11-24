@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/intercept"
 	actool "github.com/Autumn-27/norma/tool"
 )
 

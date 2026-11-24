@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 const (
-	licenseTokenPrefix          = "ARTEX-LIC-"
-	defaultVendorSigningSecret  = "artex-commercial-vendor-signing-key-v2-2026"
+	licenseTokenPrefix          = "BEHEMOTH-LIC-"
+	defaultVendorSigningSecret  = "behemoth-commercial-vendor-signing-key-v2-2026"
 	settingLicenseKey           = "commercial_license_key"
 	settingBrandName            = "commercial_brand_name"
 	settingBrandTagline         = "commercial_brand_tagline"
@@ -29,7 +29,7 @@ const (
 	settingSupportURL           = "commercial_support_url"
 )
 
-// CommercialLicenseClaims is the signed payload inside an ARTEX-LIC-* license key.
+// CommercialLicenseClaims is the signed payload inside an BEHEMOTH-LIC-* license key.
 type CommercialLicenseClaims struct {
 	Customer   string `json:"customer"`
 	Tier       string `json:"tier"` // Starter | Professional | Enterprise
@@ -48,13 +48,13 @@ type BrandingConfig struct {
 }
 
 func licenseSigningSecret() []byte {
-	if s := strings.TrimSpace(os.Getenv("ARTEX_LICENSE_SIGNING_SECRET")); s != "" {
+	if s := strings.TrimSpace(os.Getenv("BEHEMOTH_LICENSE_SIGNING_SECRET")); s != "" {
 		return []byte(s)
 	}
 	return []byte(defaultVendorSigningSecret)
 }
 
-// GenerateCommercialLicense creates a cryptographically signed ARTEX-LIC-* key for a customer.
+// GenerateCommercialLicense creates a cryptographically signed BEHEMOTH-LIC-* key for a customer.
 func GenerateCommercialLicense(customer, tier string, validDays, maxWorkers int) (string, *CommercialLicenseClaims, error) {
 	customer = strings.TrimSpace(customer)
 	if customer == "" {
@@ -89,7 +89,7 @@ func GenerateCommercialLicense(customer, tier string, validDays, maxWorkers int)
 	return licenseTokenPrefix + payloadB64 + "." + sig, claims, nil
 }
 
-// VerifyCommercialLicense validates the HMAC-SHA256 signature and expiration of an ARTEX-LIC-* key.
+// VerifyCommercialLicense validates the HMAC-SHA256 signature and expiration of an BEHEMOTH-LIC-* key.
 func VerifyCommercialLicense(rawKey string) (*CommercialLicenseClaims, error) {
 	key := strings.TrimSpace(rawKey)
 	if !strings.HasPrefix(key, licenseTokenPrefix) {
@@ -126,9 +126,9 @@ func VerifyCommercialLicense(rawKey string) (*CommercialLicenseClaims, error) {
 
 func (s *Server) currentBranding() BrandingConfig {
 	cfg := BrandingConfig{
-		BrandName:            "ARTEX",
+		BrandName:            "BEHEMOTH",
 		BrandTagline:         "Autonomous AI Security & Penetration Testing Platform",
-		CompanyFooter:        "Prepared by ARTEX Autonomous Security Operations",
+		CompanyFooter:        "Prepared by BEHEMOTH Autonomous Security Operations",
 		ReportClassification: "CONFIDENTIAL — AUTHORIZED SECURITY ASSESSMENT",
 		SupportURL:           "",
 	}
@@ -156,10 +156,10 @@ func (s *Server) currentBranding() BrandingConfig {
 
 func (s *Server) commercialStatusPayload() map[string]any {
 	branding := s.currentBranding()
-	requireLicense := strings.EqualFold(strings.TrimSpace(os.Getenv("ARTEX_REQUIRE_LICENSE")), "true") ||
-		strings.TrimSpace(os.Getenv("ARTEX_REQUIRE_LICENSE")) == "1"
+	requireLicense := strings.EqualFold(strings.TrimSpace(os.Getenv("BEHEMOTH_REQUIRE_LICENSE")), "true") ||
+		strings.TrimSpace(os.Getenv("BEHEMOTH_REQUIRE_LICENSE")) == "1"
 
-	rawKey := strings.TrimSpace(os.Getenv("ARTEX_LICENSE_KEY"))
+	rawKey := strings.TrimSpace(os.Getenv("BEHEMOTH_LICENSE_KEY"))
 	if s != nil && s.m != nil && s.m.pg != nil {
 		if dbKey, ok, _ := s.m.pg.GetSetting(settingLicenseKey); ok && strings.TrimSpace(dbKey) != "" {
 			rawKey = strings.TrimSpace(dbKey)

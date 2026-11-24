@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
-	"github.com/Autumn-27/artex/traffic"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
+	"github.com/Autumn-27/behemoth/traffic"
 )
 
 const (

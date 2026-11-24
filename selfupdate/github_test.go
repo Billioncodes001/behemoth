@@ -23,8 +23,8 @@ func TestFetchLatestUsesForkRelease(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{
 			"tag_name":"v0.3.16",
 			"assets":[
-				{"name":"artex-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/Billioncodes001/myartex/releases/download/v0.3.16/artex-0.3.16-linux-arm64.zip"},
-				{"name":"SHA256SUMS","browser_download_url":"https://github.com/Billioncodes001/myartex/releases/download/v0.3.16/SHA256SUMS"}
+				{"name":"behemoth-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/Billioncodes001/mybehemoth/releases/download/v0.3.16/behemoth-0.3.16-linux-arm64.zip"},
+				{"name":"SHA256SUMS","browser_download_url":"https://github.com/Billioncodes001/mybehemoth/releases/download/v0.3.16/SHA256SUMS"}
 			]
 		}`))}, nil
 	})}
@@ -63,7 +63,7 @@ func TestUpdateUserAgent(t *testing.T) {
 		{"Captured-UA/1.0", "Captured-UA/1.0"},
 	} {
 		t.Run(tc.env, func(t *testing.T) {
-			t.Setenv("ARTEX_HTTP_USER_AGENT", tc.env)
+			t.Setenv("BEHEMOTH_HTTP_USER_AGENT", tc.env)
 			calls := 0
 			client := &http.Client{Transport: releaseTransport(func(req *http.Request) (*http.Response, error) {
 				calls++
@@ -78,8 +78,8 @@ func TestUpdateUserAgent(t *testing.T) {
 			if _, err := FetchLatest(context.Background(), client); err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"SHA256SUMS", "artex.zip"} {
-				body, err := get(context.Background(), client, "https://github.com/RuoJi6/ARTEX/releases/download/v0.3.17/"+name)
+			for _, name := range []string{"SHA256SUMS", "behemoth.zip"} {
+				body, err := get(context.Background(), client, "https://github.com/RuoJi6/BEHEMOTH/releases/download/v0.3.17/"+name)
 				if err != nil {
 					t.Fatal(err)
 				}

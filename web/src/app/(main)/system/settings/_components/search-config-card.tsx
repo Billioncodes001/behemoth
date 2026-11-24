@@ -35,7 +35,7 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
     const k: Record<string, string> = {};
     ENGINES.forEach(e => {
       if (e.key) {
-        const s = localStorage.getItem("artex_search_" + e.type);
+        const s = localStorage.getItem("behemoth_search_" + e.type);
         if (s) k[e.type] = s;
       }
     });
@@ -55,7 +55,7 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
     setSaving(type);
     try {
       await api.search.saveConfig({ engine: type, api_key: val });
-      localStorage.setItem("artex_search_" + type, val);
+      localStorage.setItem("behemoth_search_" + type, val);
       toast.success(`${type.toUpperCase()} search configuration saved`);
       onRefresh();
     } catch (e) {

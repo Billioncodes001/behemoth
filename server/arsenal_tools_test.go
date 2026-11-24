@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/server/patchmonitor"
-	"github.com/Autumn-27/artex/server/tools"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/intercept"
+	"github.com/Autumn-27/behemoth/server/patchmonitor"
+	"github.com/Autumn-27/behemoth/server/tools"
 )
 
 func TestEnsureDefaultWordlistsAndListSecurityArsenal(t *testing.T) {
@@ -43,9 +43,9 @@ func TestEnsureDefaultWordlistsAndListSecurityArsenal(t *testing.T) {
 }
 
 func TestStandaloneFindingReportUpdateAndInterceptRuleGovernance(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
+	dsn := os.Getenv("BEHEMOTH_PG_DSN")
 	if dsn == "" {
-		t.Skip("requires isolated ARTEX_PG_DSN")
+		t.Skip("requires isolated BEHEMOTH_PG_DSN")
 	}
 	pg, err := db.Open(dsn)
 	if err != nil {
@@ -62,15 +62,15 @@ func TestStandaloneFindingReportUpdateAndInterceptRuleGovernance(t *testing.T) {
 
 	// 1) Insert a standalone Chat finding (node_id IS NULL, task_id IS NULL) and update its report.
 	var fid int64
-	if err := pg.QueryRow(`INSERT INTO findings(vulnclass, name, severity, summary, evidence, status) VALUES('Misconfiguration', 'Cleartext HTTP', 'medium', 'HTTP exposed', 'curl -I http://example.com', 'pending') RETURNING id`).Scan(&fid); err != nil {
+	if err := pg.QueryRow(`INSERT INTO findings(vulnclass, name, severity, summary, evidence, status) VALUES('Misconfiguration', 'Clebehemotht HTTP', 'medium', 'HTTP exposed', 'curl -I http://example.com', 'pending') RETURNING id`).Scan(&fid); err != nil {
 		t.Fatalf("insert standalone finding: %v", err)
 	}
-	repRes, err := s.toolUpdateFindingReport().Call(context.Background(), json.RawMessage(`{"finding_id":`+i64s(fid)+`,"report":"## Overview\n\nVerified cleartext HTTP exposure."}`), nil)
+	repRes, err := s.toolUpdateFindingReport().Call(context.Background(), json.RawMessage(`{"finding_id":`+i64s(fid)+`,"report":"## Overview\n\nVerified clebehemotht HTTP exposure."}`), nil)
 	if err != nil || repRes.IsError {
 		t.Fatalf("update_finding_report failed on standalone finding id=%d: err=%v res=%+v", fid, err, repRes)
 	}
 	updatedFinding, err := pg.GetFinding(fid)
-	if err != nil || updatedFinding == nil || !strings.Contains(updatedFinding.Report, "Verified cleartext HTTP exposure") {
+	if err != nil || updatedFinding == nil || !strings.Contains(updatedFinding.Report, "Verified clebehemotht HTTP exposure") {
 		t.Fatalf("standalone finding report not persisted: err=%v finding=%+v", err, updatedFinding)
 	}
 

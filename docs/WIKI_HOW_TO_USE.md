@@ -1,13 +1,13 @@
-# ARTEX — Operator Wiki & How-To Guide
+# BEHEMOTH — Operator Wiki & How-To Guide
 
-This guide covers the end-to-end operational workflow of ARTEX, from initial LLM setup to launching engagements via Chat or Tasks, managing proxies and stealth settings, and exporting deliverable reports.
+This guide covers the end-to-end operational workflow of BEHEMOTH, from initial LLM setup to launching engagements via Chat or Tasks, managing proxies and stealth settings, and exporting deliverable reports.
 
 ---
 
 ## 1. Initial Login & LLM Profile Setup
 
 1. **Sign In**:
-   - On first visit (`http://<your-domain-or-ip>`), set your administrator password on the `/setup` screen (or log in with username **`ARTEX`** at `/login`).
+   - On first visit (`http://<your-domain-or-ip>`), set your administrator password on the `/setup` screen (or log in with username **`BEHEMOTH`** at `/login`).
    - To reset the administrator password from the server terminal at any time:
      ```bash
      ./setup.sh reset-password -p 'NewStrongPassword!'
@@ -22,7 +22,7 @@ This guide covers the end-to-end operational workflow of ARTEX, from initial LLM
 
 ## 2. Launching Engagements via Chat (`/chat`)
 
-The fastest way to operate ARTEX is directly through **Chat** (`/chat`):
+The fastest way to operate BEHEMOTH is directly through **Chat** (`/chat`):
 
 - **Default Agent (`Auto`)**:
   - `Auto` is the Lead Autonomous Operator & Orchestrator. Simply describe your target and objective:

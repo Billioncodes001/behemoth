@@ -34,7 +34,7 @@ func runImplantE2E(t *testing.T, o BuildOpts, argv []string, need []string) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, err := m.AddTask(im.ID, CmdShell, "echo artex-e2e-ok", 20); err != nil {
+	if _, err := m.AddTask(im.ID, CmdShell, "echo behemoth-e2e-ok", 20); err != nil {
 		t.Fatalf("AddTask: %v", err)
 	}
 
@@ -56,7 +56,7 @@ func runImplantE2E(t *testing.T, o BuildOpts, argv []string, need []string) {
 	for time.Now().Before(deadline) {
 		if res := m.Results(im.ID, 5); len(res) == 1 {
 			out := res[0].Output
-			if out != "artex-e2e-ok\n" && out != "artex-e2e-ok" {
+			if out != "behemoth-e2e-ok\n" && out != "behemoth-e2e-ok" {
 				t.Fatalf("unexpected output: %q (err %q, exit %d)", out, res[0].Error, res[0].Exit)
 			}
 			if got, _ := m.Get(im.ID); got.Status() != "active" {

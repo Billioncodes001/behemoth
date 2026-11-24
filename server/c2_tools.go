@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/c2"
-	"github.com/Autumn-27/artex/server/targets"
+	"github.com/Autumn-27/behemoth/c2"
+	"github.com/Autumn-27/behemoth/server/targets"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
 // c2PublicBaseURL resolves the callback base URL advertised to implants:
-// ARTEX_C2_PUBLIC_URL wins, then a plain http://127.0.0.1 fallback the
+// BEHEMOTH_C2_PUBLIC_URL wins, then a plain http://127.0.0.1 fallback the
 // operator should override.
 func c2PublicBaseURL() string {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_C2_PUBLIC_URL")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_C2_PUBLIC_URL")); v != "" {
 		return v
 	}
 	if addr := c2.ListenAddr(); addr != "" {
@@ -58,7 +58,7 @@ func (s *Server) c2Manager() *c2.Manager {
 }
 
 // startC2ListenerLocked serves the beacon endpoints + console on a dedicated
-// listener when ARTEX_C2_ADDR is set. Callers hold s.c2Mu.
+// listener when BEHEMOTH_C2_ADDR is set. Callers hold s.c2Mu.
 func (s *Server) startC2ListenerLocked() {
 	addr := c2.ListenAddr()
 	if addr == "" || s.c2Handler == nil {
@@ -75,7 +75,7 @@ func (s *Server) startC2ListenerLocked() {
 	}
 	s.c2srv = srv
 	go func() {
-		cert, key := os.Getenv("ARTEX_C2_TLS_CERT"), os.Getenv("ARTEX_C2_TLS_KEY")
+		cert, key := os.Getenv("BEHEMOTH_C2_TLS_CERT"), os.Getenv("BEHEMOTH_C2_TLS_KEY")
 		var serr error
 		if cert != "" && key != "" {
 			serr = srv.ServeTLS(ln, cert, key)
@@ -152,7 +152,7 @@ func (s *Server) seedC2ProxyToolsV1() {
 
 func (s *Server) toolC2BuildImplant() actool.CoreTool {
 	return wrTool("c2_build_implant",
-		"Generate a self-contained C2 implant (bash, python3, or powershell) with a malleable beacon profile, optional install-time persistence, and install helpers; registers it with the ARTEX C2 listener.",
+		"Generate a self-contained C2 implant (bash, python3, or powershell) with a malleable beacon profile, optional install-time persistence, and install helpers; registers it with the BEHEMOTH C2 listener.",
 		objSchema(map[string]any{
 			"label":         strParam("Operator label for the implant (optional)"),
 			"platform":      strParam("Target platform: linux (default) or windows"),
@@ -163,7 +163,7 @@ func (s *Server) toolC2BuildImplant() actool.CoreTool {
 			"sleep_seconds": map[string]any{"type": "integer", "description": "Base check-in interval in seconds (default 30, max 86400)"},
 			"jitter_pct":    map[string]any{"type": "integer", "description": "Sleep jitter percent (default 20, max 80)"},
 			"persistence":   strParam("Install-time persistence: none (default), systemd|cron (linux), schtasks (windows)"),
-			"base_url":      strParam("Callback base URL, e.g. https://c2.example.com (default ARTEX_C2_PUBLIC_URL or local listener)"),
+			"base_url":      strParam("Callback base URL, e.g. https://c2.example.com (default BEHEMOTH_C2_PUBLIC_URL or local listener)"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			mgr := s.c2Manager()
@@ -301,7 +301,7 @@ func (s *Server) toolC2Deploy() actool.CoreTool {
 
 func (s *Server) toolC2Agents() actool.CoreTool {
 	return roTool("c2_agents",
-		"List ARTEX C2 implants with live status (registered/active/stale/killed), host info, and the operator console URL/token.",
+		"List BEHEMOTH C2 implants with live status (registered/active/stale/killed), host info, and the operator console URL/token.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			mgr := s.c2Manager()

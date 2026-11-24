@@ -141,7 +141,7 @@ func randomShortHex(nBytes int) string {
 
 func (s *Server) toolProxiedTCPRelay() actool.CoreTool {
 	return wrTool("proxied_tcp_relay",
-		"Verify TCP service connectivity through the active ARTEX outbound proxy or open a managed localhost (127.0.0.1) TCP relay so standard clients (psql, mysql, redis-cli, curl) connect cleanly without raw socket scripts or exposed proxy credentials.",
+		"Verify TCP service connectivity through the active BEHEMOTH outbound proxy or open a managed localhost (127.0.0.1) TCP relay so standard clients (psql, mysql, redis-cli, curl) connect cleanly without raw socket scripts or exposed proxy credentials.",
 		objSchema(map[string]any{
 			"action":          strParam("Operation: check_port | open_relay | list_relays | close_relay"),
 			"host":            strParam("Target hostname or IP (required for check_port and open_relay)"),

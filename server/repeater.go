@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 	repeaterDefaultTimeout = 30_000
 	repeaterMinTimeout     = 1_000
 	repeaterMaxTimeout     = 120_000
-	repeaterAllowLocalEnv  = "ARTEX_REPEATER_ALLOW_LOCAL"
+	repeaterAllowLocalEnv  = "BEHEMOTH_REPEATER_ALLOW_LOCAL"
 )
 
 var repeaterHopByHop = map[string]struct{}{

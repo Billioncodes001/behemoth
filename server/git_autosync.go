@@ -82,7 +82,7 @@ func (s *Server) handleMaintenanceStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) configuredWebhookSecret() string {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_WEBHOOK_SECRET")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_WEBHOOK_SECRET")); v != "" {
 		return v
 	}
 	if s != nil && s.m != nil && s.m.pg != nil {
@@ -97,7 +97,7 @@ func verifyGitWebhookAuth(r *http.Request, secret string, body []byte) bool {
 	if secret == "" {
 		return true
 	}
-	if tok := strings.TrimSpace(r.Header.Get("X-Artex-Webhook-Token")); tok != "" {
+	if tok := strings.TrimSpace(r.Header.Get("X-Behemoth-Webhook-Token")); tok != "" {
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(secret)) == 1 {
 			return true
 		}
@@ -266,7 +266,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 
 	if manual {
 		// Stash any local tracked edits during an explicit webhook/manual sync so fast-forward succeeds cleanly.
-		_ = exec.CommandContext(ctx, "git", "stash", "push", "--quiet", "-m", "artex-manual-sync-"+time.Now().UTC().Format("20060102T150405Z")).Run()
+		_ = exec.CommandContext(ctx, "git", "stash", "push", "--quiet", "-m", "behemoth-manual-sync-"+time.Now().UTC().Format("20060102T150405Z")).Run()
 	}
 
 	shortRemote := remoteSHA
@@ -296,14 +296,14 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				(cd web && npm install --no-audit --no-fund)
 			fi
 			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist)
-			if [ -f /etc/nginx/sites-enabled/artex.conf ]; then
+			if [ -f /etc/nginx/sites-enabled/behemoth.conf ]; then
 				# Nginx fronts the embedded Go binary on :8787 directly; reclaim any idle :3000 Node server RAM.
-				if [ -f /tmp/artex-web.pid ]; then
-					kill "$(cat /tmp/artex-web.pid)" 2>/dev/null || true
-					rm -f /tmp/artex-web.pid
+				if [ -f /tmp/behemoth-web.pid ]; then
+					kill "$(cat /tmp/behemoth-web.pid)" 2>/dev/null || true
+					rm -f /tmp/behemoth-web.pid
 				fi
 				if command -v tmux >/dev/null 2>&1; then
-					tmux kill-window -t artex:frontend 2>/dev/null || true
+					tmux kill-window -t behemoth:frontend 2>/dev/null || true
 				fi
 			elif pgrep -f "next start" >/dev/null 2>&1; then
 				(cd web && npm run build)
@@ -311,9 +311,9 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		fi
 		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.4.0)"
 		BUILD_VER="${BUILD_VER#v}"
-		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o artex.new ./cmd/artex
-		mv -f artex.new artex
-		chmod +x artex
+		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o behemoth.new ./cmd/behemoth
+		mv -f behemoth.new behemoth
+		chmod +x behemoth
 	`, needNpmInstall))
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("build failed: %v (%s)", err, firstLine(string(out), 300))
@@ -324,7 +324,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	}
 
 	setMaintenanceOutcome("updated_restarting", "")
-	setMaintenanceUpdating(true, "Restarting ARTEX services to apply update ("+shortRemote+")...", shortRemote)
+	setMaintenanceUpdating(true, "Restarting BEHEMOTH services to apply update ("+shortRemote+")...", shortRemote)
 	log.Printf("[git-sync] Update %s built successfully. Signaling supervisor to restart...", shortRemote)
 	time.AfterFunc(1500*time.Millisecond, func() {
 		requestRestart()

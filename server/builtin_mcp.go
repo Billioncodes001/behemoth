@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 // seedRecommendedPlatformDefaultsAndMCPsV1 enables high-insight platform & agent
@@ -178,7 +178,7 @@ ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET 
 }
 
 const vulnIntelMCPScript = `#!/usr/bin/env python3
-"""ARTEX Built-in Vulnerability & Exploitability Intelligence MCP Server (JSON-RPC 2.0 over stdio)."""
+"""BEHEMOTH Built-in Vulnerability & Exploitability Intelligence MCP Server (JSON-RPC 2.0 over stdio)."""
 import json
 import sys
 import urllib.parse
@@ -186,7 +186,7 @@ import urllib.request
 import ssl
 
 SSL_CTX = ssl.create_default_context()
-UA = "ARTEX-VulnIntel-MCP/2.2 (+https://github.com/Billioncodes001/myartex)"
+UA = "BEHEMOTH-VulnIntel-MCP/2.2 (+https://github.com/Billioncodes001/mybehemoth)"
 
 def http_json(url, method="GET", payload=None, timeout=15):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -370,7 +370,7 @@ if __name__ == "__main__":
 `
 
 const reconOSINTMCPScript = `#!/usr/bin/env python3
-"""ARTEX Built-in Passive Recon, CT Logs, TLS, Wayback & Security.txt MCP Server."""
+"""BEHEMOTH Built-in Passive Recon, CT Logs, TLS, Wayback & Security.txt MCP Server."""
 import json
 import os
 import re
@@ -381,7 +381,7 @@ import urllib.parse
 import urllib.request
 
 SSL_CTX = ssl.create_default_context()
-UA = "Mozilla/5.0 (compatible; ARTEX-ReconOSINT-MCP/2.3)"
+UA = "Mozilla/5.0 (compatible; BEHEMOTH-ReconOSINT-MCP/2.3)"
 
 def http_get(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -580,7 +580,7 @@ if __name__ == "__main__":
 `
 
 const webSecAnalyzerMCPScript = `#!/usr/bin/env python3
-"""ARTEX Built-in Web Security Header, JWT, JS Bundle & CORS Analyzer MCP Server."""
+"""BEHEMOTH Built-in Web Security Header, JWT, JS Bundle & CORS Analyzer MCP Server."""
 import base64
 import json
 import re

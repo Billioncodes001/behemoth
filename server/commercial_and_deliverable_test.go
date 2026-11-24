@@ -12,7 +12,7 @@ import (
 func TestCommercialLicensingBrandingAndDeliverableReportExport(t *testing.T) {
 	// 1. Offline cryptographic license generation & verification
 	licKey, claims, err := GenerateCommercialLicense("Acme Cyber Defense Ltd", "Enterprise", 365, 16)
-	if err != nil || !strings.HasPrefix(licKey, "ARTEX-LIC-") {
+	if err != nil || !strings.HasPrefix(licKey, "BEHEMOTH-LIC-") {
 		t.Fatalf("GenerateCommercialLicense failed: err=%v key=%q", err, licKey)
 	}
 	verified, err := VerifyCommercialLicense(licKey)

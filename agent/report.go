@@ -132,7 +132,7 @@ type GeneratorConfig struct {
 // NewGenerator creates a new report generator.
 func NewGenerator(config GeneratorConfig) *Generator {
 	if config.Title == "" {
-		config.Title = "ARTEX Pentest Report"
+		config.Title = "BEHEMOTH Pentest Report"
 	}
 	return &Generator{config: config}
 }

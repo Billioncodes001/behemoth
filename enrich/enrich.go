@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
 
 	"github.com/miekg/dns"
 	"github.com/projectdiscovery/dnsx/libs/dnsx"

@@ -16,7 +16,7 @@ const MOCK_LOGS: LogLine[] = [
     ts: "2026-07-26T03:55:00Z",
     level: "info",
     tag: "engine",
-    text: "ARTEX v0.1.0 backend listening on :8787 (workers=3)",
+    text: "BEHEMOTH v0.1.0 backend listening on :8787 (workers=3)",
   },
   {
     seq: 2,
@@ -195,7 +195,7 @@ export default function LogsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `artex-system-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.log`;
+    a.download = `behemoth-system-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.log`;
     document.body.appendChild(a);
     a.click();
     a.remove();

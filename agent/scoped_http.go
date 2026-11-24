@@ -118,7 +118,7 @@ func runScopedHTTP(ctx context.Context, g *ScopeGuard, in json.RawMessage) actoo
 		req.Header.Set(k, v)
 	}
 	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", "ARTEX/scope-guard")
+		req.Header.Set("User-Agent", "BEHEMOTH/scope-guard")
 	}
 
 	client := g.HTTPClient(timeout)

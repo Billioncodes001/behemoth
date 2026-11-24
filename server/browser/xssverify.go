@@ -43,7 +43,7 @@ type XSSVerifyResult struct {
 
 // defaultXSSTestPayload sets a window marker inside the same event handler that
 // fires the alert, so DOM confirmation works even when dialogs are suppressed.
-const defaultXSSTestPayload = `<svg/onload="window.__artexXss=true;alert('artex_xss_probe')">`
+const defaultXSSTestPayload = `<svg/onload="window.__behemothXss=true;alert('behemoth_xss_probe')">`
 
 // VerifyXSS executes a JS payload against a URL in headless Chrome and reports
 // whether it demonstrably executed (alert dialog fired, DOM marker set, and/or
@@ -143,7 +143,7 @@ func (c *ChromeDP) runXSSProbe(ctx context.Context, req XSSVerifyRequest, res XS
 	}
 
 	var domMarker, rawReflection bool
-	domMarker, evalErr := chromedp.Run(runCtx, chromedp.Evaluate[bool](`window.__artexXss === true`))
+	domMarker, evalErr := chromedp.Run(runCtx, chromedp.Evaluate[bool](`window.__behemothXss === true`))
 	if evalErr != nil {
 		res.Error = evalErr.Error()
 	}
@@ -204,7 +204,7 @@ func xssEvidence(r *XSSVerifyResult) string {
 		parts = append(parts, fmt.Sprintf("alert dialog fired (message=%q)", r.DialogMessage))
 	}
 	if r.DOMMarker {
-		parts = append(parts, "in-page JS marker window.__artexXss was set by the payload")
+		parts = append(parts, "in-page JS marker window.__behemothXss was set by the payload")
 	}
 	if r.ReflectionRaw {
 		parts = append(parts, "payload reflected unescaped in the live DOM")

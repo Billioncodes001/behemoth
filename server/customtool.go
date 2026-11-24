@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -475,7 +475,7 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 
 func newFailClosedHTTPTransport() *http.Transport {
 	blockDial := func(_ context.Context, _, _ string) (net.Conn, error) {
-		return nil, fmt.Errorf("ARTEX Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct connection blocked")
+		return nil, fmt.Errorf("BEHEMOTH Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct connection blocked")
 	}
 	return &http.Transport{
 		Proxy:          nil,

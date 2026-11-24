@@ -14,11 +14,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/guard"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/intercept/jev"
-	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/guard"
+	"github.com/Autumn-27/behemoth/intercept"
+	"github.com/Autumn-27/behemoth/intercept/jev"
+	"github.com/Autumn-27/behemoth/llmrec"
 	"github.com/Autumn-27/norma/llm"
 )
 

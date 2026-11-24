@@ -16,12 +16,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Autumn-27/artex/agent"
-	pgdb "github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/enrich"
-	"github.com/Autumn-27/artex/guard"
-	"github.com/Autumn-27/artex/intercept"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/behemoth/agent"
+	pgdb "github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/enrich"
+	"github.com/Autumn-27/behemoth/guard"
+	"github.com/Autumn-27/behemoth/intercept"
+	"github.com/Autumn-27/behemoth/traffic"
 	actool "github.com/Autumn-27/norma/tool"
 )
 

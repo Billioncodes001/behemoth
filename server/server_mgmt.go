@@ -22,11 +22,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Autumn-27/artex/agent"
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/intercept/jev"
-	"github.com/Autumn-27/artex/llmhttp"
-	"github.com/Autumn-27/artex/traffic"
+	"github.com/Autumn-27/behemoth/agent"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/intercept/jev"
+	"github.com/Autumn-27/behemoth/llmhttp"
+	"github.com/Autumn-27/behemoth/traffic"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/skill"
 )
@@ -1589,7 +1589,7 @@ func skillRelPath(file string) (string, string) {
 		return "", "invalid path: must be relative with no empty segments"
 	}
 	// 4. Normalize as a URL/API path, not as a host filesystem path. API paths
-	//    always use '/', including when ARTEX runs on Windows. Filesystem calls
+	//    always use '/', including when BEHEMOTH runs on Windows. Filesystem calls
 	//    below accept this canonical form through filepath.Join.
 	clean := path.Clean(file)
 	if clean == "." || path.IsAbs(clean) || strings.HasPrefix(clean, "..") {

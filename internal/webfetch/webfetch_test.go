@@ -36,7 +36,7 @@ func TestIdentityAcrossRoutes(t *testing.T) {
 	for _, ua := range []string{"", "Captured-UA/1.0"} {
 		for _, route := range []string{"direct", "proxy", "fallback"} {
 			t.Run(route+"/"+ua, func(t *testing.T) {
-				t.Setenv("ARTEX_HTTP_USER_AGENT", ua)
+				t.Setenv("BEHEMOTH_HTTP_USER_AGENT", ua)
 				var targetCalls, proxyCalls atomic.Int32
 				var mu sync.Mutex
 				var selected string
@@ -79,7 +79,7 @@ func TestIdentityAcrossRoutes(t *testing.T) {
 					}
 					req := r.Clone(r.Context())
 					req.RequestURI = ""
-					// A forwarding proxy must preserve absence, like ARTEX's sink.
+					// A forwarding proxy must preserve absence, like BEHEMOTH's sink.
 					if _, present := req.Header["User-Agent"]; !present {
 						req.Header.Set("User-Agent", "")
 					}
@@ -119,7 +119,7 @@ func TestIdentityAcrossRoutes(t *testing.T) {
 }
 
 func TestTLSAndStaticAssetGuard(t *testing.T) {
-	t.Setenv("ARTEX_HTTP_USER_AGENT", "Captured-UA/1.0")
+	t.Setenv("BEHEMOTH_HTTP_USER_AGENT", "Captured-UA/1.0")
 	var calls atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -147,7 +147,7 @@ func TestTLSAndStaticAssetGuard(t *testing.T) {
 }
 
 func TestIdentitySelectedForEachCall(t *testing.T) {
-	t.Setenv("ARTEX_HTTP_USER_AGENT", "Before-Tool-Creation")
+	t.Setenv("BEHEMOTH_HTTP_USER_AGENT", "Before-Tool-Creation")
 	tool := New(actool.WebFetchConfig{})
 	seen := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +156,7 @@ func TestIdentitySelectedForEachCall(t *testing.T) {
 	}))
 	defer server.Close()
 	for _, want := range []string{"First-Call", "Second-Call"} {
-		t.Setenv("ARTEX_HTTP_USER_AGENT", want)
+		t.Setenv("BEHEMOTH_HTTP_USER_AGENT", want)
 		if result := callFetch(t, tool, server.URL, false); result.IsError {
 			t.Fatal(result.Flatten())
 		}

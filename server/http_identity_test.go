@@ -22,7 +22,7 @@ func TestTargetHTTPIdentityOverrides(t *testing.T) {
 			{name: "explicit-empty", env: "Environment-UA/1.0", headers: map[string]string{"User-Agent": ""}},
 		} {
 			t.Run(route+"/"+tc.name, func(t *testing.T) {
-				t.Setenv("ARTEX_HTTP_USER_AGENT", tc.env)
+				t.Setenv("BEHEMOTH_HTTP_USER_AGENT", tc.env)
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if got := r.UserAgent(); tc.name == "default" && !strings.HasPrefix(got, "Mozilla/5.0 ") {
 						t.Errorf("random UA missing: %q", got)

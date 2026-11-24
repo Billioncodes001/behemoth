@@ -76,12 +76,12 @@ export function ReportTab({ taskId }: { taskId: string }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `artex-task-${taskId}-full-report.md`;
+    a.download = `behemoth-task-${taskId}-full-report.md`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    toast.success(`Downloaded artex-task-${taskId}-full-report.md`);
+    toast.success(`Downloaded behemoth-task-${taskId}-full-report.md`);
   }
 
   async function generateAllFindingReports() {

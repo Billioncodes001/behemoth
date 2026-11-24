@@ -1,5 +1,5 @@
 // Package agent implements IOC (Indicators of Compromise) collection and management.
-// Inspired by NukeRat's IOC collection system, adapted for ARTEX's pentest workflow.
+// Inspired by NukeRat's IOC collection system, adapted for BEHEMOTH's pentest workflow.
 package agent
 
 import (

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 )
 
 // scriptedProbe answers only for the URLs listed as alive; everything else fails

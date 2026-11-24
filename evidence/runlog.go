@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 // RunLog is a tamper-evident, append-only JSONL record of one agent run's

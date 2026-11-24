@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 )
 
 // Artifact (loot) storage. Every dump / text / screenshot / archive an agent

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	"github.com/Autumn-27/behemoth/db"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 )
 
 func TestAllForensicAndMCPToolsRouteThroughEnabledProxyWithoutServerIPLeak(t *testing.T) {

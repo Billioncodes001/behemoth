@@ -47,7 +47,7 @@ def user_agent(value=None):
     """Explicit value > environment > random sample; explicit empty omits UA."""
     explicit = value is not None
     if value is None:
-        value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
+        value = os.environ.get("BEHEMOTH_HTTP_USER_AGENT", "")
     value = value.strip(" ")
     if not all(32 <= ord(c) <= 126 for c in value):
         return secrets.choice(USER_AGENTS)
@@ -108,7 +108,7 @@ def main():
     ap.add_argument("--cookie", default=""); ap.add_argument("--max", type=int, default=200)
     ap.add_argument("--depth", type=int, default=4); ap.add_argument("--delay", type=float, default=0.1)
     ap.add_argument("--include", default=""); ap.add_argument("--exclude", default="logout|signout|delete|remove|destroy")
-    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or random browser sample")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: BEHEMOTH_HTTP_USER_AGENT or random browser sample")
     args = ap.parse_args()
     ua = user_agent(args.user_agent)
     base = args.base if args.base.startswith("http") else "https://" + args.base

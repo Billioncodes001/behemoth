@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Autumn-27/artex/agent"
-	proxyv2 "github.com/Autumn-27/artex/server/proxy/v2"
+	"github.com/Autumn-27/behemoth/agent"
+	proxyv2 "github.com/Autumn-27/behemoth/server/proxy/v2"
 )
 
 func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {

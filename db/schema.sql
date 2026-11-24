@@ -1,4 +1,4 @@
--- ARTEX PostgreSQL schema (单一数据源)
+-- BEHEMOTH PostgreSQL schema (单一数据源)
 -- 幂等：可重复执行（IF NOT EXISTS / OR REPLACE / DROP TRIGGER IF EXISTS）。
 
 -- =====================================================================
@@ -1694,7 +1694,7 @@ CREATE INDEX IF NOT EXISTS idx_task_intelligence_assets ON task_intelligence USI
 ALTER TABLE task_intelligence ADD COLUMN IF NOT EXISTS credential_analysis JSONB;
 
 -- =====================================================================
--- MCP server (ARTEX 作为 MCP 服务端，供外部智能体编排任务)
+-- MCP server (BEHEMOTH 作为 MCP 服务端，供外部智能体编排任务)
 --   api_tokens       访问令牌：长期、可吊销、可限权，只存 SHA-256，明文仅创建时返回一次
 --   api_token_tasks  令牌建过的任务，用于并发/每小时限额
 --   mcp_audit_log    每次 tools/call 的审计记录

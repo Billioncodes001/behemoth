@@ -72,7 +72,7 @@ func isGoRunDir(dir string) bool {
 }
 
 // Path returns the config file path. Resolution order:
-//  1. env ARTEX_CONFIG (explicit override)
+//  1. env BEHEMOTH_CONFIG (explicit override)
 //  2. ./config.json in the current working directory (running from the project
 //     dir — robust no matter where `go run` placed the temp/cached binary)
 //  3. config.json next to the executable (a distributed binary keeps it beside)
@@ -80,7 +80,7 @@ func isGoRunDir(dir string) bool {
 // The first existing file wins. If none exist, the CWD path is returned so the
 // "not found" message points at the project dir the user most likely expected.
 func Path() string {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_CONFIG")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_CONFIG")); v != "" {
 		return v
 	}
 	var candidates []string
@@ -110,12 +110,12 @@ func Load() Config {
 
 // SkillDir returns the skill root directory with precedence:
 //
-//	env ARTEX_SKILL_DIR  >  config file (skill_dir)  >  BaseDir()/skills
+//	env BEHEMOTH_SKILL_DIR  >  config file (skill_dir)  >  BaseDir()/skills
 //
 // The directory is created if it does not exist.
 func SkillDir() string {
 	var d string
-	if v := strings.TrimSpace(os.Getenv("ARTEX_SKILL_DIR")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SKILL_DIR")); v != "" {
 		d = v
 	} else if v := strings.TrimSpace(Load().SkillDir); v != "" {
 		d = v
@@ -128,30 +128,30 @@ func SkillDir() string {
 
 // PostgresDSN resolves the connection string with precedence:
 //
-//	env ARTEX_PG_DSN  >  config file (database.dsn, or assembled from fields)
+//	env BEHEMOTH_PG_DSN  >  config file (database.dsn, or assembled from fields)
 //
 // There is NO built-in fallback: when neither source supplies a database config,
 // it returns an error naming the config path it inspected, so startup fails loudly
 // instead of silently connecting to a wrong default. source describes where the
 // DSN came from (for startup logging).
 func PostgresDSN() (dsn, source string, err error) {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_PG_DSN")); v != "" {
-		return v, "environment variable ARTEX_PG_DSN", nil
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_PG_DSN")); v != "" {
+		return v, "environment variable BEHEMOTH_PG_DSN", nil
 	}
-	if h := strings.TrimSpace(os.Getenv("ARTEX_PG_HOST")); h != "" {
-		port, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("ARTEX_PG_PORT")))
+	if h := strings.TrimSpace(os.Getenv("BEHEMOTH_PG_HOST")); h != "" {
+		port, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("BEHEMOTH_PG_PORT")))
 		envDB := Database{
 			Host:     h,
 			Port:     port,
-			User:     strings.TrimSpace(os.Getenv("ARTEX_PG_USER")),
-			Password: os.Getenv("ARTEX_PG_PASSWORD"),
-			DBName:   strings.TrimSpace(os.Getenv("ARTEX_PG_DB")),
-			SSLMode:  strings.TrimSpace(os.Getenv("ARTEX_PG_SSLMODE")),
+			User:     strings.TrimSpace(os.Getenv("BEHEMOTH_PG_USER")),
+			Password: os.Getenv("BEHEMOTH_PG_PASSWORD"),
+			DBName:   strings.TrimSpace(os.Getenv("BEHEMOTH_PG_DB")),
+			SSLMode:  strings.TrimSpace(os.Getenv("BEHEMOTH_PG_SSLMODE")),
 		}
 		if envDB.DBName == "" {
-			envDB.DBName = "artex"
+			envDB.DBName = "behemoth"
 		}
-		return envDB.buildDSN(), "environment variables ARTEX_PG_*", nil
+		return envDB.buildDSN(), "environment variables BEHEMOTH_PG_*", nil
 	}
 	db := Load().Database
 	if d := strings.TrimSpace(db.DSN); d != "" {
@@ -160,7 +160,7 @@ func PostgresDSN() (dsn, source string, err error) {
 	if db.Host != "" || db.DBName != "" || db.User != "" {
 		return db.buildDSN(), "config file " + Path() + " (database section)", nil
 	}
-	return "", "", fmt.Errorf("database configuration not found: ARTEX_PG_DSN is unset and config file %s does not specify database (dsn or host/user/dbname)", Path())
+	return "", "", fmt.Errorf("database configuration not found: BEHEMOTH_PG_DSN is unset and config file %s does not specify database (dsn or host/user/dbname)", Path())
 }
 
 func (d Database) buildDSN() string {

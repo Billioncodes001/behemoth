@@ -79,7 +79,7 @@ test("Japanese overlays English and falls back to English for uncovered keys", a
   assert.deepEqual(Object.keys(resources.ja.translation).sort(), Object.keys(resources.en.translation).sort());
   const i18n = createAppI18n();
   await i18n.changeLanguage("ja");
-  assert.equal(i18n.t("meta.title"), "ARTEX — 自律型ペネトレーションテストコンソール");
+  assert.equal(i18n.t("meta.title"), "BEHEMOTH — 自律型ペネトレーションテストコンソール");
   assert.equal(i18n.t("nav.dashboard"), "ダッシュボード");
   assert.equal(i18n.t("screen.daa73cf0b37fcb"), "最大ターン数（0 = 無制限）");
   // A key with no Japanese translation falls back to English rather than a stub.
@@ -88,7 +88,7 @@ test("Japanese overlays English and falls back to English for uncovered keys", a
   assert.equal(i18n.t(fallbackKey), resources.en.translation[fallbackKey]);
   // Switching back restores English.
   await i18n.changeLanguage("en");
-  assert.equal(i18n.t("meta.title"), "ARTEX — Autonomous Pentesting Console");
+  assert.equal(i18n.t("meta.title"), "BEHEMOTH — Autonomous Pentesting Console");
 });
 
 test("localized error text keeps raw server details as fallback", async () => {

@@ -62,7 +62,7 @@ type Recognizer func(ctx context.Context, img []byte) ([]string, error)
 
 // TesseractPath resolves the tesseract binary (env override + PATH).
 func TesseractPath() string {
-	if p := strings.TrimSpace(os.Getenv("ARTEX_TESSERACT")); p != "" {
+	if p := strings.TrimSpace(os.Getenv("BEHEMOTH_TESSERACT")); p != "" {
 		return p
 	}
 	if p, err := exec.LookPath("tesseract"); err == nil {
@@ -307,7 +307,7 @@ func SolveImageCaptcha(ctx context.Context, img []byte, req OCRRequest) (OCRResu
 
 	variants := buildVariants(src, req.MaxVariants)
 	counts := map[string]int{}
-	tmp, err := os.CreateTemp("", "artex-captcha-*.png")
+	tmp, err := os.CreateTemp("", "behemoth-captcha-*.png")
 	if err != nil {
 		return res, err
 	}

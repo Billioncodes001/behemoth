@@ -1,6 +1,6 @@
 # Third-party components
 
-ARTEX is distributed with the Go modules listed in `go.mod` / `go.sum` and the
+BEHEMOTH is distributed with the Go modules listed in `go.mod` / `go.sum` and the
 npm packages listed in `web/package.json` / `package-lock.json`. The table below
 covers the direct Go dependencies and the license each publishes with its module
 (verified against the module sources). Indirect dependencies carry the licenses
@@ -40,7 +40,7 @@ Table — MIT; CodeMirror — MIT; AntV G6 — MIT).
 
 ## Design references
 
-- **Mamba RMM** (`rmm/`, reference-only, not linked or imported) — the ARTEX
+- **Mamba RMM** (`rmm/`, reference-only, not linked or imported) — the BEHEMOTH
   C2 capability (`c2/` package) models its semantics (implant registry,
   pending→sent→done task lifecycle, malleable profile paths, per-implant
   secrets, operator console) but is implemented from scratch; no Mamba

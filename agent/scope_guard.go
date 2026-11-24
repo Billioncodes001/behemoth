@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/behemoth/db"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-// Scope enforcement. ARTEX's scope lives in task_scope (root_domain / subdomain /
+// Scope enforcement. BEHEMOTH's scope lives in task_scope (root_domain / subdomain /
 // ip / cidr rows) and is normally only expressed to the model as prompt text —
 // nothing stops a probe at an out-of-scope host, and redirects silently leave the
 // allowlist. This guard turns the same rows into a mechanical boundary for the
@@ -611,9 +611,9 @@ func defaultScopeResolve(host string) []string {
 }
 
 // ScopeRPSFromEnv returns the per-host request rate for scope enforcement. Zero
-// (the default) disables throttling; ARTEX_SCOPE_RPS overrides.
+// (the default) disables throttling; BEHEMOTH_SCOPE_RPS overrides.
 func ScopeRPSFromEnv() float64 {
-	if v := strings.TrimSpace(os.Getenv("ARTEX_SCOPE_RPS")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SCOPE_RPS")); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
 			return f
 		}

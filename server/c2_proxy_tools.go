@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/artex/c2"
+	"github.com/Autumn-27/behemoth/c2"
 	actool "github.com/Autumn-27/norma/tool"
 )
 

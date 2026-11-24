@@ -1,4 +1,4 @@
-// Package proxyv2 implements an enhanced Proxy Pool system for ARTEX,
+// Package proxyv2 implements an enhanced Proxy Pool system for BEHEMOTH,
 // inspired by ProfGinx_custom's anonymity engine.
 package proxyv2
 

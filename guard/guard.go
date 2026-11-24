@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/behemoth/intercept"
 	"github.com/Autumn-27/norma/hook"
 )
 
@@ -123,7 +123,7 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 	return hook.Result{}
 }
 
-// systemBlockMessage frames an intercept block as an ARTEX platform-governance
+// systemBlockMessage frames an intercept block as an BEHEMOTH platform-governance
 // decision so the agent does not mistake it for a target-side defense.
 //
 // The bare reasons ("禁止执行此工具" / "用户拒绝") read exactly like a WAF/403 on
@@ -136,7 +136,7 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 // Audit/history rows keep the raw reason (see Interceptor.Log); only the
 // model-facing tool_result carries this framing.
 func systemBlockMessage(reason string) string {
-	return "[ARTEX Platform Control · Non-Target Defense] This tool call was blocked by an internal platform interception rule. " +
+	return "[BEHEMOTH Platform Control · Non-Target Defense] This tool call was blocked by an internal platform interception rule. " +
 		"Reason: " + reason + ". This operation is prohibited. " +
 		"Do NOT retry or attempt to bypass this blocked operation; pivot immediately to a safe, non-destructive method."
 }

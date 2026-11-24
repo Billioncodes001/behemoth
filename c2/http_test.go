@@ -182,7 +182,7 @@ func TestConsoleAuthAndQueue(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, consolePath+"?t="+tok, nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ARTEX C2") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "BEHEMOTH C2") {
 		t.Fatalf("console page: %d", rec.Code)
 	}
 	// README artifact download.

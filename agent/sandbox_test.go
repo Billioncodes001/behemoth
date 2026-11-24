@@ -11,10 +11,10 @@ import (
 )
 
 func TestSandboxConfigFromEnvDefaults(t *testing.T) {
-	t.Setenv("ARTEX_SANDBOX_IMAGE", "")
-	t.Setenv("ARTEX_SANDBOX_NETWORK", "")
-	t.Setenv("ARTEX_SANDBOX_TIMEOUT", "")
-	t.Setenv("ARTEX_SANDBOX_ARGS", "")
+	t.Setenv("BEHEMOTH_SANDBOX_IMAGE", "")
+	t.Setenv("BEHEMOTH_SANDBOX_NETWORK", "")
+	t.Setenv("BEHEMOTH_SANDBOX_TIMEOUT", "")
+	t.Setenv("BEHEMOTH_SANDBOX_ARGS", "")
 	cfg := SandboxConfigFromEnv("/tmp/work")
 	if cfg.Image != "kalilinux/kali-last-release" || cfg.Network != "host" || cfg.WorkDir != "/tmp/work" {
 		t.Fatalf("defaults = %+v", cfg)
@@ -25,10 +25,10 @@ func TestSandboxConfigFromEnvDefaults(t *testing.T) {
 }
 
 func TestSandboxConfigFromEnvOverrides(t *testing.T) {
-	t.Setenv("ARTEX_SANDBOX_IMAGE", "my/kali:latest")
-	t.Setenv("ARTEX_SANDBOX_NETWORK", "none")
-	t.Setenv("ARTEX_SANDBOX_TIMEOUT", "45")
-	t.Setenv("ARTEX_SANDBOX_ARGS", "--cap-add=NET_RAW --memory=1g")
+	t.Setenv("BEHEMOTH_SANDBOX_IMAGE", "my/kali:latest")
+	t.Setenv("BEHEMOTH_SANDBOX_NETWORK", "none")
+	t.Setenv("BEHEMOTH_SANDBOX_TIMEOUT", "45")
+	t.Setenv("BEHEMOTH_SANDBOX_ARGS", "--cap-add=NET_RAW --memory=1g")
 	cfg := SandboxConfigFromEnv("/work")
 	if cfg.Image != "my/kali:latest" || cfg.Network != "none" || cfg.Timeout != 45*time.Second {
 		t.Fatalf("config = %+v", cfg)
@@ -50,11 +50,11 @@ func TestSandboxDockerArgs(t *testing.T) {
 	}
 }
 
-// End-to-end container run. Opt-in (ARTEX_SANDBOX_TEST=1) because it needs a
+// End-to-end container run. Opt-in (BEHEMOTH_SANDBOX_TEST=1) because it needs a
 // docker daemon and may pull an image.
 func TestSandboxExecOptional(t *testing.T) {
-	if testing.Short() || strings.TrimSpace(os.Getenv("ARTEX_SANDBOX_TEST")) != "1" {
-		t.Skip("set ARTEX_SANDBOX_TEST=1 to run the docker end-to-end test")
+	if testing.Short() || strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_TEST")) != "1" {
+		t.Skip("set BEHEMOTH_SANDBOX_TEST=1 to run the docker end-to-end test")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not installed")

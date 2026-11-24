@@ -75,7 +75,7 @@ import {
   UNASSIGNED_TASK,
 } from "./_components/findings-table";
 
-const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences_v2";
+const FINDING_LIST_PREFERENCE_KEY = "behemoth_finding_list_preferences_v2";
 
 // Views: website = grouped by target website/domain dropdowns (default, latest first);
 // cases = consolidated cases; flat = flat sortable table; grouped = by task; asset = asset tree.

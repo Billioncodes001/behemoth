@@ -48,7 +48,7 @@ def user_agent(value=None):
     """Explicit value > environment > random sample; explicit empty omits UA."""
     explicit = value is not None
     if value is None:
-        value = os.environ.get("ARTEX_HTTP_USER_AGENT", "")
+        value = os.environ.get("BEHEMOTH_HTTP_USER_AGENT", "")
     value = value.strip(" ")
     if not all(32 <= ord(c) <= 126 for c in value):
         return secrets.choice(USER_AGENTS)
@@ -152,7 +152,7 @@ def extract_routes(js_text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base"); ap.add_argument("outdir")
-    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: ARTEX_HTTP_USER_AGENT or random browser sample")
+    ap.add_argument("--user-agent", default=None, help="User-Agent override; default: BEHEMOTH_HTTP_USER_AGENT or random browser sample")
     args = ap.parse_args()
     base, outdir = args.base, args.outdir
     ua = user_agent(args.user_agent)

@@ -1,5 +1,5 @@
 // Adapted from github.com/Autumn-27/norma/tool/webfetch.go at v0.4.3.
-// Keep the SDK tool metadata and fetch/render behavior; use ARTEX's explicit
+// Keep the SDK tool metadata and fetch/render behavior; use BEHEMOTH's explicit
 // HTTP identity for both the proxy attempt and its direct fallback. This local
 // adapter is needed until the SDK exposes request headers in actool.WebFetchConfig.
 package webfetch
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
 	actool "github.com/Autumn-27/norma/tool"
 	"golang.org/x/net/html"
 )

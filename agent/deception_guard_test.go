@@ -18,7 +18,7 @@ func TestSanitizeTargetToolResultBlocksPromptInjectionAndCanaries(t *testing.T) 
 	res := SanitizeTargetToolResult("WebFetch", actool.Text(poisonedEnv))
 	out := res.Flatten()
 
-	if !strings.Contains(out, "[ARTEX ANTI-DECEPTION & MEMORY-POISONING GUARD]") {
+	if !strings.Contains(out, "[BEHEMOTH ANTI-DECEPTION & MEMORY-POISONING GUARD]") {
 		t.Fatalf("expected anti-deception guard banner, got: %s", out)
 	}
 	if !strings.Contains(out, "INDIRECT PROMPT INJECTION / MEMORY-POISONING PAYLOAD DETECTED") {

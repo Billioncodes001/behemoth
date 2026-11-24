@@ -41,7 +41,7 @@ var userAgents = [...]string{
 // sample when unset, empty or malformed. Call once per logical request and reuse
 // the selected value for redirects and retries.
 func UserAgent() string {
-	value := strings.Trim(os.Getenv("ARTEX_HTTP_USER_AGENT"), " ")
+	value := strings.Trim(os.Getenv("BEHEMOTH_HTTP_USER_AGENT"), " ")
 	for _, c := range value {
 		if c < 32 || c > 126 {
 			return randomUserAgent(rand.Reader)

@@ -69,7 +69,7 @@ func TestC2ToolSetRegistered(t *testing.T) {
 
 func TestC2BuildAgentsTaskKillFlow(t *testing.T) {
 	s := newC2TestServer(t)
-	t.Setenv("ARTEX_C2_PUBLIC_URL", "https://c2.example.test")
+	t.Setenv("BEHEMOTH_C2_PUBLIC_URL", "https://c2.example.test")
 
 	out := callC2Tool(t, s, "c2_build_implant", `{"label":"unit","runtime":"bash","beacon_path":"assets/logo.png","resp_path":"assets/logo.bin","sleep_seconds":45}`)
 	imRaw, ok := out["implant"].(map[string]any)

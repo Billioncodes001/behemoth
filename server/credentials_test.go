@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/llmrec"
 	"github.com/Autumn-27/norma/llm"
 )
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/db"
-	"github.com/Autumn-27/artex/mcphttp"
+	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/mcphttp"
 	"github.com/Autumn-27/norma/mcp"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -24,7 +24,7 @@ type mcpClient interface {
 // connectMCP dials one MCP server per its transport. When an outbound proxy URL is
 // active (Proxy Pool or Global Proxy), it injects HTTP_PROXY/HTTPS_PROXY/ALL_PROXY
 // into spawned stdio MCP subprocesses so every MCP tool call exits through the proxy
-// instead of exposing the ARTEX server's real IP.
+// instead of exposing the BEHEMOTH server's real IP.
 func connectMCP(ctx context.Context, m *db.MCPServer, outboundProxyAddr ...string) (mcpClient, error) {
 	px := ""
 	if len(outboundProxyAddr) > 0 {

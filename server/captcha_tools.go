@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/server/captcha"
+	"github.com/Autumn-27/behemoth/server/captcha"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -131,13 +131,13 @@ func solveCaptchaRun(s *Server) func(context.Context, json.RawMessage) (actool.R
 
 		// Enforce Zero-IP-Leak & Fail-Closed Proxy Guard for target-facing CAPTCHA requests
 		// (mode=form and mode=ocr). When the caller omits `proxy`, automatically route through
-		// ARTEX's active OutboundProxyAddr (Exclusive Tor / Proxy Pool / Global Proxy), and
+		// BEHEMOTH's active OutboundProxyAddr (Exclusive Tor / Proxy Pool / Global Proxy), and
 		// abort immediately if the Proxy Pool is in Fail-Closed state with 0 healthy proxies.
 		effectiveProxy := strings.TrimSpace(a.Proxy)
 		usedManagedProxy := false
 		if effectiveProxy == "" && s != nil && s.m != nil {
 			if s.m.IsProxyPoolFailClosed() && strings.TrimSpace(s.m.GlobalProxy()) == "" && mode != "token" {
-				fcErr := fmt.Errorf("ARTEX Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct CAPTCHA request blocked")
+				fcErr := fmt.Errorf("BEHEMOTH Fail-Closed Proxy Guard: all proxies in the enabled Proxy Pool are unhealthy; direct CAPTCHA request blocked")
 				s.handleProxyToolFailure(ctx, fcErr)
 				return jsonResult(map[string]any{"error": fcErr.Error()})
 			}

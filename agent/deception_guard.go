@@ -58,7 +58,7 @@ func stripInvisibleSmugglingRunes(s string) (cleaned string, strippedCount int) 
 }
 
 // defangControlSpoofing neutralizes fake harness/XML control delimiters inside untrusted
-// target responses so HTTP payloads cannot spoof ARTEX system reminders or tool boundaries.
+// target responses so HTTP payloads cannot spoof BEHEMOTH system reminders or tool boundaries.
 func defangControlSpoofing(s string) string {
 	replacer := strings.NewReplacer(
 		"<system-reminder>", "[untrusted-target-text:system-reminder]",
@@ -89,7 +89,7 @@ func countDistinctSecretFamilies(s string) int {
 	return families
 }
 
-// SanitizeTargetToolResult protects all ARTEX agents against Indirect Prompt Injection,
+// SanitizeTargetToolResult protects all BEHEMOTH agents against Indirect Prompt Injection,
 // Agent Memory Poisoning, and Synthetic Honeypot/Canary Traps (such as OrcaRouter Shield,
 // Canarytokens, and poisoned /.env or /.git/config responses).
 func SanitizeTargetToolResult(toolName string, res actool.Result) actool.Result {
@@ -121,7 +121,7 @@ func SanitizeTargetToolResult(toolName string, res actool.Result) actool.Result 
 	}
 
 	if len(alerts) > 0 {
-		banner := "⚠️ [ARTEX ANTI-DECEPTION & MEMORY-POISONING GUARD]\n- " + strings.Join(alerts, "\n- ") + "\n--- BEGIN UNTRUSTED TARGET OUTPUT ---\n"
+		banner := "⚠️ [BEHEMOTH ANTI-DECEPTION & MEMORY-POISONING GUARD]\n- " + strings.Join(alerts, "\n- ") + "\n--- BEGIN UNTRUSTED TARGET OUTPUT ---\n"
 		for i := range outContent {
 			if outContent[i].Type == llm.BlockText {
 				outContent[i].Text = banner + outContent[i].Text + "\n--- END UNTRUSTED TARGET OUTPUT ---"

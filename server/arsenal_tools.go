@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/server/browser"
+	"github.com/Autumn-27/behemoth/server/browser"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -50,7 +50,7 @@ var defaultAPIRoutesWordlist = strings.Join([]string{
 }, "\n") + "\n"
 
 // ensureDefaultWordlists writes built-in reconnaissance & fuzzing wordlists into
-// <dataDir>/wordlists/ (and /usr/share/wordlists/artex if writable) so ffuf,
+// <dataDir>/wordlists/ (and /usr/share/wordlists/behemoth if writable) so ffuf,
 // gobuster, dirb, and custom scripts always have reliable wordlists on every OS.
 func (s *Server) ensureDefaultWordlists() {
 	if s.dataDir == "" {
@@ -58,7 +58,7 @@ func (s *Server) ensureDefaultWordlists() {
 	}
 	dirs := []string{filepath.Join(s.dataDir, "wordlists")}
 	if os.Geteuid() == 0 {
-		dirs = append(dirs, "/usr/share/wordlists/artex")
+		dirs = append(dirs, "/usr/share/wordlists/behemoth")
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -76,7 +76,7 @@ func (s *Server) ensureDefaultWordlists() {
 	if os.Geteuid() == 0 {
 		if _, err := os.Stat("/usr/share/wordlists/dirb/common.txt"); os.IsNotExist(err) {
 			_ = os.MkdirAll("/usr/share/wordlists/dirb", 0o755)
-			_ = os.Symlink("/usr/share/wordlists/artex/common.txt", "/usr/share/wordlists/dirb/common.txt")
+			_ = os.Symlink("/usr/share/wordlists/behemoth/common.txt", "/usr/share/wordlists/dirb/common.txt")
 		}
 	}
 	if runtime.GOOS == "linux" {
@@ -140,7 +140,7 @@ func (s *Server) resolveWordlistPaths() map[string]string {
 		{
 			key: "common_web",
 			paths: []string{
-				"/usr/share/wordlists/artex/common.txt",
+				"/usr/share/wordlists/behemoth/common.txt",
 				"/usr/share/wordlists/dirb/common.txt",
 				"/usr/share/seclists/Discovery/Web-Content/common.txt",
 				filepath.Join(s.dataDir, "wordlists", "common.txt"),
@@ -149,7 +149,7 @@ func (s *Server) resolveWordlistPaths() map[string]string {
 		{
 			key: "api_routes",
 			paths: []string{
-				"/usr/share/wordlists/artex/api-routes.txt",
+				"/usr/share/wordlists/behemoth/api-routes.txt",
 				filepath.Join(s.dataDir, "wordlists", "api-routes.txt"),
 			},
 		},
@@ -185,7 +185,7 @@ func (s *Server) arsenalTools() []actool.CoreTool {
 
 func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 	return roTool("list_security_arsenal",
-		"Inspect all offensive security CLI binaries, structured Tool Catalog scanners, and fuzzing wordlists currently installed and ready on this ARTEX host.",
+		"Inspect all offensive security CLI binaries, structured Tool Catalog scanners, and fuzzing wordlists currently installed and ready on this BEHEMOTH host.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			cliNames := []string{
@@ -232,7 +232,7 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 
 func (s *Server) toolRunSecurityTool() actool.CoreTool {
 	return wrTool("run_security_tool",
-		"Execute a structured built-in scanner from the ARTEX Tool Catalog (e.g. nmap-scan, subfinder, httpx-probe, gobuster-scan, ffuf-fuzz, dirb-scan, nikto-scan, nuclei-scan, sqlmap-inject) with automatic argument assembly and parsed output.",
+		"Execute a structured built-in scanner from the BEHEMOTH Tool Catalog (e.g. nmap-scan, subfinder, httpx-probe, gobuster-scan, ffuf-fuzz, dirb-scan, nikto-scan, nuclei-scan, sqlmap-inject) with automatic argument assembly and parsed output.",
 		objSchema(map[string]any{
 			"tool_id":         strParam("Catalog tool ID (e.g. nmap-scan, subfinder, httpx-probe, gobuster-scan, ffuf-fuzz, dirb-scan, nikto-scan, nuclei-scan, sqlmap-inject)"),
 			"params":          map[string]any{"type": "object", "description": "Key-value parameters for the tool (e.g. {\"target\":\"example.com\"} or {\"url\":\"https://example.com/FUZZ\",\"wordlist\":\"...\"})"},
@@ -272,7 +272,7 @@ func (s *Server) toolRunSecurityTool() actool.CoreTool {
 				strParams["wordlist"] = wls["common_web"]
 			}
 
-			// Auto-inject the ARTEX private nuclei template repo (fed by verified
+			// Auto-inject the BEHEMOTH private nuclei template repo (fed by verified
 			// Patch Monitor exploits) when the caller didn't specify templates.
 			if a.ToolID == "nuclei-scan" {
 				if tpl, ok := strParams["templates"]; !ok || strings.TrimSpace(tpl) == "" {
@@ -312,7 +312,7 @@ func (s *Server) toolRunSecurityTool() actool.CoreTool {
 		})
 }
 
-// customNucleiTemplateDir returns the ARTEX private nuclei template directory
+// customNucleiTemplateDir returns the BEHEMOTH private nuclei template directory
 // (fed by verified Patch Monitor exploits) when it exists and is non-empty.
 func (s *Server) customNucleiTemplateDir() string {
 	if s.patchMon == nil {
@@ -335,7 +335,7 @@ func (s *Server) toolVerifyXSSExecution() actool.CoreTool {
 		objSchema(map[string]any{
 			"url":             strParam("Target URL. The payload is appended as query parameter ?<param>=<payload> when 'param' is given; otherwise the payload must already be embedded in this URL"),
 			"param":           strParam("Optional query parameter name to inject the payload into (e.g. 'q', 'search', 'name')"),
-			"payload":         strParam("Optional JS payload; default is <svg/onload=\"window.__artexXss=true;alert('artex_xss_probe')\">"),
+			"payload":         strParam("Optional JS payload; default is <svg/onload=\"window.__behemothXss=true;alert('behemoth_xss_probe')\">"),
 			"timeout_seconds": map[string]any{"type": "integer", "description": "Optional execution wait in seconds (default 30, max 90)"},
 		}, "url"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {

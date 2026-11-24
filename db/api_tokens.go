@@ -30,7 +30,7 @@ const (
 
 const (
 	// APITokenPrefix makes a leaked token recognisable to secret scanners.
-	APITokenPrefix       = "artex_mcp_"
+	APITokenPrefix       = "behemoth_mcp_"
 	MaxAPITokenNameRunes = 80
 	MaxAPITokenCompanies = 50
 	MaxAPITokenLimit     = 10000

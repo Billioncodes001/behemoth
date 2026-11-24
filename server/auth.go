@@ -87,10 +87,10 @@ func loadOrCreateJWTKey(keyDir, dataDir string) ([]byte, error) {
 	return buf, nil
 }
 
-// signJWT issues a 7-day HS256 token for user ARTEX.
+// signJWT issues a 7-day HS256 token for user BEHEMOTH.
 func signJWT(key []byte) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Subject:   "ARTEX",
+		Subject:   "BEHEMOTH",
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}).SignedString(key)
@@ -143,12 +143,12 @@ func (s *Server) noteLoginFailure(r *http.Request, key string) {
 }
 
 // extractToken reads the JWT from Authorization: Bearer header,
-// artex_token cookie, or ?token= query param (for SSE connections).
+// behemoth_token cookie, or ?token= query param (for SSE connections).
 func extractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if c, err := r.Cookie("artex_token"); err == nil && c.Value != "" {
+	if c, err := r.Cookie("behemoth_token"); err == nil && c.Value != "" {
 		return c.Value
 	}
 	return r.URL.Query().Get("token")
@@ -188,7 +188,7 @@ func verifyTurnstileSecretKey(secretKey string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	form := url.Values{
 		"secret":   {secretKey},
-		"response": {"artex-secret-key-validation-probe"},
+		"response": {"behemoth-secret-key-validation-probe"},
 	}
 	resp, err := client.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", form)
 	if err != nil {
@@ -456,7 +456,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	if s.loginLockout(w, r, ip) {
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(req.Username), []byte("ARTEX")) != 1 {
+	if subtle.ConstantTimeCompare([]byte(req.Username), []byte("BEHEMOTH")) != 1 {
 		s.noteLoginFailure(r, ip)
 		writeProductError(w, 401, "invalid_credentials", "Incorrect username or password", nil)
 		return

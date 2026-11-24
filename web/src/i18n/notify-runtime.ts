@@ -3,7 +3,7 @@ import type { TFunction } from "i18next";
 import { localizedError } from "./errors";
 import { notifyMessages } from "./notify-messages";
 
-// Only recognize messages owned by ARTEX. Provider responses remain verbatim.
+// Only recognize messages owned by BEHEMOTH. Provider responses remain verbatim.
 const messages: Record<string, string> = {
   "The notification configuration response is incomplete. Refresh to try again.": "notify.runtime.invalidMeta",
 };

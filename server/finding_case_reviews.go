@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/behemoth/intercept"
 	actool "github.com/Autumn-27/norma/tool"
 )
 

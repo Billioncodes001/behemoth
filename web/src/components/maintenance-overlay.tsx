@@ -39,7 +39,7 @@ export function MaintenanceOverlay() {
         if (disposed) return;
         if (wasUpdatingRef.current) {
           // Expected brief disconnect while binary swaps and restarts
-          setPhase("Restarting ARTEX server with updated build — reconnecting...");
+          setPhase("Restarting BEHEMOTH server with updated build — reconnecting...");
           timer = setTimeout(poll, 1500);
         } else {
           timer = setTimeout(poll, 15000);

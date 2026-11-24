@@ -45,7 +45,7 @@ func DefaultExecutorConfig() ExecutorConfig {
 		MaxConcurrent:  5,
 		DefaultTimeout: 10 * time.Minute,
 		MaxOutputSize:  10 * 1024 * 1024,
-		WorkingDir:     "/tmp/artex-tools",
+		WorkingDir:     "/tmp/behemoth-tools",
 	}
 }
 

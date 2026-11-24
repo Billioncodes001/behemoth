@@ -1,6 +1,6 @@
-# ARTEX — Production Deployment & Administration Guide
+# BEHEMOTH — Production Deployment & Administration Guide
 
-This guide explains how to deploy, expose on a custom domain, and maintain ARTEX on an Ubuntu server or via Docker Compose.
+This guide explains how to deploy, expose on a custom domain, and maintain BEHEMOTH on an Ubuntu server or via Docker Compose.
 
 ---
 
@@ -11,7 +11,7 @@ This guide explains how to deploy, expose on a custom domain, and maintain ARTEX
 - **Disk**: 20+ GB SSD (stores PostgreSQL data, recorded HTTP traffic blobs, screenshots, and task workspace artifacts)
 - **Network Ports**:
   - `80` / `443` (Public HTTP/HTTPS via Nginx reverse proxy)
-  - `8787` (ARTEX Core API & Embedded UI — bound behind Nginx or accessible directly)
+  - `8787` (BEHEMOTH Core API & Embedded UI — bound behind Nginx or accessible directly)
   - `8788` (`127.0.0.1:8788` local MITM traffic-recording proxy for worker processes)
   - `3000` (Next.js Web UI server when running in `tmux` multi-service mode)
   - `9222` (`127.0.0.1:9222` local headless Chrome DevTools endpoint)
@@ -37,9 +37,9 @@ sudo ./setup.sh full --domain pentest.yourdomain.com --ssl
 2. Installs offensive CLI tools (`nmap`, `sqlmap`, `nikto`, `dirb`, `whatweb`, `hydra`, `dnsutils`, `whois`, `netcat-openbsd`, `socat`) and headless `chromium` / `google-chrome`.
 3. Installs **Go 1.26** and **Node.js 20 LTS** if not already installed.
 4. Installs global **Playwright MCP & CLI** (`@playwright/mcp`, `@playwright/cli`) for browser automation and report step screenshots.
-5. Starts PostgreSQL, provisions the `artex` database and credentials, and generates `config.json` (preserving any existing `config.json`).
-6. Builds both the static frontend bundle (`server/webui/dist`) and the Next.js server runtime (`web/.next`), then compiles the single `./artex` binary.
-7. Starts all services in a `tmux` session (`artex`) and configures Nginx on port 80/443.
+5. Starts PostgreSQL, provisions the `behemoth` database and credentials, and generates `config.json` (preserving any existing `config.json`).
+6. Builds both the static frontend bundle (`server/webui/dist`) and the Next.js server runtime (`web/.next`), then compiles the single `./behemoth` binary.
+7. Starts all services in a `tmux` session (`behemoth`) and configures Nginx on port 80/443.
 
 ---
 
@@ -53,7 +53,7 @@ sudo ./setup.sh full --domain pentest.yourdomain.com --ssl
 ./start.sh status
 
 # Attach to the running tmux session:
-tmux attach -t artex
+tmux attach -t behemoth
 # (Inside tmux: Ctrl-B then 0 = backend, 1 = frontend, 2 = logs; Ctrl-B then D to detach)
 
 # Link or change your custom domain on Nginx at any time:
@@ -75,7 +75,7 @@ sudo ./start.sh domain pentest.yourdomain.com --ssl
   ```bash
   ./setup.sh update
   ```
-  Pulls the latest repository changes, rebuilds the frontend and `./artex` binary, and restarts the services. Database schema migrations run automatically on startup.
+  Pulls the latest repository changes, rebuilds the frontend and `./behemoth` binary, and restarts the services. Database schema migrations run automatically on startup.
 
 - **Reset Administrator Password**:
   ```bash

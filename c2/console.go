@@ -162,7 +162,7 @@ var consoleTmpl = template.Must(template.New("console").Parse(consoleHTML))
 // consoleHTML is the single-page operator UI. It polls /data every 5s and
 // queues commands via /cmd; auth rides on the ?t= token.
 const consoleHTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>ARTEX C2</title>
+<html><head><meta charset="utf-8"><title>BEHEMOTH C2</title>
 <style>
 body{font-family:system-ui,sans-serif;margin:2rem;background:#111;color:#ddd}
 table{border-collapse:collapse;width:100%;margin:1rem 0}
@@ -173,7 +173,7 @@ button{cursor:pointer}
 .active{background:#14532d}.stale{background:#713f12}.registered{background:#1e3a8a}.killed{background:#450a0a}
 pre{background:#1a1a1a;padding:.6rem;max-width:60rem;overflow:auto}
 </style></head><body>
-<h1>ARTEX C2 console</h1>
+<h1>BEHEMOTH C2 console</h1>
 <h2>Implants</h2>
 <table id="implants"></table>
 <h2>Queue command</h2>

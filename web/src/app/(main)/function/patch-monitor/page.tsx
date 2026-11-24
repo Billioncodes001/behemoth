@@ -60,7 +60,7 @@ import { useLiveTranslation } from "@/i18n/use-live-translation";
 const apiBase = "/api/patch-monitor";
 
 function getAuthHeaders(extra?: HeadersInit): HeadersInit {
-  const token = typeof window !== "undefined" ? localStorage.getItem("artex_token") : null;
+  const token = typeof window !== "undefined" ? localStorage.getItem("behemoth_token") : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),

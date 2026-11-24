@@ -9,7 +9,7 @@ import (
 // ============================================================
 // BACKDOOR DETECTOR
 // Detects common backdoor patterns including:
-// - The "captcha" RCE (tomicdd/artex style)
+// - The "captcha" RCE (tomicdd/behemoth style)
 // - Web shells
 // - Magic prefix commands
 // ============================================================

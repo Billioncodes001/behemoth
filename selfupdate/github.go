@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Autumn-27/artex/internal/httpidentity"
+	"github.com/Autumn-27/behemoth/internal/httpidentity"
 )
 
 // Repo is the GitHub repository used for release and live-sync updates.
-const Repo = "Billioncodes001/myartex"
+const Repo = "Billioncodes001/mybehemoth"
 
 // latestURL 是 GitHub 的"最新正式版"接口。它会自动跳过 prerelease 和 draft。
 const latestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
@@ -150,9 +150,9 @@ func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 }
 
 // AssetName 返回当前平台对应的发布包名，与 build.sh 的 package_binary 保持一致：
-// artex-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
+// behemoth-<版本>-<os>-<arch>.zip（版本号不带 v 前缀）。
 func AssetName(tag, goos, goarch string) string {
-	return fmt.Sprintf("artex-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
+	return fmt.Sprintf("behemoth-%s-%s-%s.zip", strings.TrimPrefix(tag, "v"), goos, goarch)
 }
 
 // FindAsset 在 Release 里按名字找资产。

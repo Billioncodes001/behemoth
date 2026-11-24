@@ -86,7 +86,7 @@ func isWebVuln(v Vulnerability) bool {
 }
 
 // AutoMatchAuthorizedTargets correlates tracked vulnerabilities & generated exploits against
-// ARTEX's authorized `assets` inventory (domains, subdomains, web services, IPs, tech fingerprints)
+// BEHEMOTH's authorized `assets` inventory (domains, subdomains, web services, IPs, tech fingerprints)
 // and automatically enrolls matching in-scope targets into `exploit_targets`.
 func (m *Monitor) AutoMatchAuthorizedTargets(vulns []Vulnerability) ([]AutoMatchEntry, error) {
 	if m == nil || m.db == nil {
@@ -127,7 +127,7 @@ func (m *Monitor) AutoMatchAuthorizedTargets(vulns []Vulnerability) ([]AutoMatch
 		byHostPort[key] = et
 	}
 
-	// Query authorized assets registered in ARTEX's assets inventory
+	// Query authorized assets registered in BEHEMOTH's assets inventory
 	rows, err := m.db.Query(`
 		SELECT id, type, COALESCE(domain, ''), COALESCE(root_domain, ''), COALESCE(ip, ''),
 		       port, COALESCE(url, ''), COALESCE(service_type, ''), COALESCE(service_name, ''),
@@ -386,7 +386,7 @@ func (m *Monitor) EnrollNotificationCandidates(technology, cveOrIssue string, ca
 		// Passive read-only header & RFC 9116 security.txt lookup
 		detectedHeader := tech
 		if req, rerr := http.NewRequest(http.MethodGet, origin, nil); rerr == nil {
-			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ARTEX-AdvisoryNotifier/2.2)")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; BEHEMOTH-AdvisoryNotifier/2.2)")
 			if resp, derr := client.Do(req); derr == nil {
 				srv := strings.TrimSpace(resp.Header.Get("Server"))
 				xpb := strings.TrimSpace(resp.Header.Get("X-Powered-By"))
@@ -455,7 +455,7 @@ func lookupSecurityTxtContact(client *http.Client, origin, host string) string {
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ARTEX-SecurityTxtLookup/2.2)")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; BEHEMOTH-SecurityTxtLookup/2.2)")
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
