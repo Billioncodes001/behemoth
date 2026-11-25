@@ -19,8 +19,8 @@ import (
 type SearchEngineType string
 
 const (
-	// EngineGoogle is Google Custom Search.
-	EngineGoogle SearchEngineType = "google"
+	// EngineFirecrawl is the Firecrawl search API (cloud or self-hosted).
+	EngineFirecrawl SearchEngineType = "firecrawl"
 	// EngineDuckDuckGo is DuckDuckGo HTML search.
 	EngineDuckDuckGo SearchEngineType = "duckduckgo"
 	// EngineTavily is Tavily AI-powered search.
@@ -90,11 +90,11 @@ type SearchEngine interface {
 
 // Config holds configuration for all search engines.
 type Config struct {
-	Google struct {
-		APIKey  string `json:"api_key"`
-		CSEID   string `json:"cse_id"`
+	Firecrawl struct {
+		APIKey  string `json:"api_key"`            // optional for self-hosted instances
+		BaseURL string `json:"base_url,omitempty"` // empty = hosted API
 		Enabled bool   `json:"enabled"`
-	} `json:"google"`
+	} `json:"firecrawl"`
 
 	DuckDuckGo struct {
 		Enabled bool `json:"enabled"`

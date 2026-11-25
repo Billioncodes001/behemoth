@@ -323,11 +323,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Initialize Multi-Engine Web Search (Pentagi-inspired)
 	searchCfg := search.DefaultConfig()
 	// Load search config from environment first, then DB settings override
-	if apiKey := os.Getenv("SEARCH_GOOGLE_API_KEY"); apiKey != "" {
-		searchCfg.Google.APIKey = apiKey
+	if apiKey := os.Getenv("SEARCH_FIRECRAWL_API_KEY"); apiKey != "" {
+		searchCfg.Firecrawl.APIKey = apiKey
 	}
-	if cseID := os.Getenv("SEARCH_GOOGLE_CSE_ID"); cseID != "" {
-		searchCfg.Google.CSEID = cseID
+	if firecrawlURL := os.Getenv("SEARCH_FIRECRAWL_URL"); firecrawlURL != "" {
+		searchCfg.Firecrawl.BaseURL = firecrawlURL
 	}
 	if apiKey := os.Getenv("SEARCH_TAVILY_API_KEY"); apiKey != "" {
 		searchCfg.Tavily.APIKey = apiKey
@@ -339,19 +339,18 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		searchCfg.Brave.APIKey = apiKey
 	}
 	if m.pg != nil {
-		if v, ok, _ := m.pg.GetSetting("search_google_api_key"); ok && strings.TrimSpace(v) != "" {
+		if v, ok, _ := m.pg.GetSetting("search_firecrawl_api_key"); ok && strings.TrimSpace(v) != "" {
 			if parts := strings.SplitN(strings.TrimSpace(v), "|", 2); len(parts) == 2 {
-				searchCfg.Google.APIKey = strings.TrimSpace(parts[0])
-				searchCfg.Google.CSEID = strings.TrimSpace(parts[1])
-			} else if parts := strings.SplitN(strings.TrimSpace(v), ":", 2); len(parts) == 2 {
-				searchCfg.Google.APIKey = strings.TrimSpace(parts[0])
-				searchCfg.Google.CSEID = strings.TrimSpace(parts[1])
+				searchCfg.Firecrawl.APIKey = strings.TrimSpace(parts[0])
+				searchCfg.Firecrawl.BaseURL = strings.TrimSpace(parts[1])
+			} else if strings.HasPrefix(strings.TrimSpace(v), "http") {
+				searchCfg.Firecrawl.BaseURL = strings.TrimSpace(v)
 			} else {
-				searchCfg.Google.APIKey = strings.TrimSpace(v)
+				searchCfg.Firecrawl.APIKey = strings.TrimSpace(v)
 			}
 		}
-		if v, ok, _ := m.pg.GetSetting("search_google_cse_id"); ok && strings.TrimSpace(v) != "" {
-			searchCfg.Google.CSEID = strings.TrimSpace(v)
+		if v, ok, _ := m.pg.GetSetting("search_firecrawl_base_url"); ok && strings.TrimSpace(v) != "" {
+			searchCfg.Firecrawl.BaseURL = strings.TrimSpace(v)
 		}
 		if v, ok, _ := m.pg.GetSetting("search_tavily_api_key"); ok && strings.TrimSpace(v) != "" {
 			searchCfg.Tavily.APIKey = strings.TrimSpace(v)
@@ -368,10 +367,20 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 			searchCfg.Brave.APIKey = strings.TrimSpace(v)
 		}
 	}
-	searchCfg.Google.Enabled = searchCfg.Google.APIKey != "" && searchCfg.Google.CSEID != ""
+	searchCfg.Firecrawl.Enabled = searchCfg.Firecrawl.APIKey != "" || searchCfg.Firecrawl.BaseURL != ""
 	searchCfg.Tavily.Enabled = searchCfg.Tavily.APIKey != ""
 	searchCfg.SearXNG.Enabled = searchCfg.SearXNG.URL != ""
 	searchCfg.Brave.Enabled = searchCfg.Brave.APIKey != ""
+	// Auto-pick up the self-hosted SearXNG instance provisioned by setup.sh on
+	// this host (Docker container bound to 127.0.0.1:8888) so agents get free
+	// meta-search with zero manual configuration.
+	if !searchCfg.SearXNG.Enabled {
+		if localURL := search.DetectLocalSearXNG(); localURL != "" {
+			searchCfg.SearXNG.URL = localURL
+			searchCfg.SearXNG.Enabled = true
+			log.Printf("[search] Local SearXNG instance detected at %s — self-hosted meta-search enabled", localURL)
+		}
+	}
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
 	search.SetProxyProvider(s.m.OutboundProxyAddr)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
@@ -6537,6 +6546,12 @@ func (s *Server) handleSearchEngines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats := s.searchOrchestrator.GetStats()
+	// Surface the auto-detected local SearXNG instance so the settings UI can
+	// offer a one-click "use local instance" shortcut.
+	if localURL := search.DetectLocalSearXNG(); localURL != "" {
+		stats["searxng_local_url"] = localURL
+		stats["searxng_local_detected"] = true
+	}
 	writeJSON(w, http.StatusOK, stats)
 }
 
@@ -6720,8 +6735,16 @@ func (s *Server) handleSearchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.m != nil && s.m.pg != nil {
 		switch eng {
-		case "google":
-			_ = s.m.pg.SetSetting("search_google_api_key", val)
+		case "firecrawl":
+			// val may be "API_KEY|BASE_URL", a bare base URL, or an API key.
+			apiKey, baseURL := val, ""
+			if parts := strings.SplitN(val, "|", 2); len(parts) == 2 {
+				apiKey, baseURL = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			} else if strings.HasPrefix(val, "http") {
+				apiKey, baseURL = "", val
+			}
+			_ = s.m.pg.SetSetting("search_firecrawl_api_key", apiKey)
+			_ = s.m.pg.SetSetting("search_firecrawl_base_url", baseURL)
 		case "tavily":
 			_ = s.m.pg.SetSetting("search_tavily_api_key", val)
 			on, backend, _, _, _ := s.m.WebSearch()

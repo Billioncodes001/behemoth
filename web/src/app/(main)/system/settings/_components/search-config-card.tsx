@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import type { SearchEngineType, SearchEnginesStatus } from "@/lib/types";
 
 const ENGINES = [
-  { type: "google" as SearchEngineType, label: "Google CSE", desc: "Google Programmable Search", key: true, keyLabel: "API Key + CSE ID", env: "SEARCH_GOOGLE_API_KEY" },
+  { type: "firecrawl" as SearchEngineType, label: "Firecrawl", desc: "Search + crawl API (cloud or self-hosted)", key: true, keyLabel: "API Key | Base URL", env: "SEARCH_FIRECRAWL_API_KEY" },
   { type: "duckduckgo" as SearchEngineType, label: "DuckDuckGo", desc: "Free HTML search (no key)", key: false, keyLabel: "", env: "" },
   { type: "tavily" as SearchEngineType, label: "Tavily AI", desc: "AI-powered search", key: true, keyLabel: "API Key", env: "SEARCH_TAVILY_API_KEY" },
   { type: "brave" as SearchEngineType, label: "Brave", desc: "Brave Search API", key: true, keyLabel: "API Key", env: "SEARCH_BRAVE_API_KEY" },
@@ -48,8 +48,10 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
       toast.warning(`Please enter a value for ${type} before saving.`);
       return;
     }
-    if (type === "google" && !val.includes("|") && !val.includes(":")) {
-      toast.warning("For Google CSE, please enter both API Key and CSE ID separated by '|' (e.g. AIzaSy...|cx_id).");
+    if (type === "firecrawl" && val.startsWith("http") && (val.includes("|") || !val.includes(" "))) {
+      // A bare base URL is valid for self-hosted Firecrawl instances (no API key).
+    } else if (type === "firecrawl" && val && !val.startsWith("http") && !val.includes("|")) {
+      toast.warning("For Firecrawl enter an API key (fc-...), a self-hosted base URL (http://host:3002), or both as 'key|url'.");
       return;
     }
     setSaving(type);
@@ -142,7 +144,7 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
                 </div>
                 <div className="flex gap-2">
                   <Input
-                    type={e.type === "searxng" ? "url" : "password"}
+                    type={e.type === "searxng" || e.type === "firecrawl" ? "url" : "password"}
                     placeholder={e.keyLabel}
                     value={keys[e.type] || ""}
                     onChange={ev => setKeys(p => ({ ...p, [e.type]: ev.target.value }))}
@@ -155,6 +157,23 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
                     {testing === e.type ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test"}
                   </Button>
                 </div>
+                {e.type === "searxng" && enginesStatus?.searxng_local_url && (() => {
+                  const localURL = enginesStatus.searxng_local_url;
+                  return (
+                    <button
+                      type="button"
+                      className="text-xs text-emerald-600 dark:text-emerald-400 underline underline-offset-2"
+                      onClick={() => setKeys(p => ({ ...p, searxng: localURL }))}
+                    >
+                      Local instance detected at {localURL} — click to fill
+                    </button>
+                  );
+                })()}
+                {e.type === "firecrawl" && (
+                  <p className="text-xs text-muted-foreground">
+                    Cloud: paste your fc-… key. Self-hosted: enter the base URL (e.g. http://127.0.0.1:3002) — no key needed.
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">Env: {e.env}</p>
               </div>
             ) : (
@@ -167,10 +186,10 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
         <details className="text-xs">
           <summary className="text-muted-foreground cursor-pointer">Search Modes &amp; Fallback Chains</summary>
           <div className="mt-3 space-y-2 text-muted-foreground">
-            <div><strong>General:</strong> Tavily -&gt; Google -&gt; DuckDuckGo -&gt; SearXNG</div>
-            <div><strong>Exploit:</strong> Sploitus -&gt; Google -&gt; DuckDuckGo -&gt; Tavily</div>
-            <div><strong>Technical:</strong> Tavily -&gt; Google -&gt; SearXNG -&gt; DuckDuckGo</div>
-            <div><strong>OSINT:</strong> DuckDuckGo -&gt; Google -&gt; SearXNG -&gt; Tavily</div>
+            <div><strong>General:</strong> Tavily -&gt; SearXNG (self-hosted) -&gt; Firecrawl -&gt; DuckDuckGo -&gt; Brave</div>
+            <div><strong>Exploit:</strong> Sploitus -&gt; SearXNG -&gt; Firecrawl -&gt; Brave -&gt; DuckDuckGo -&gt; Tavily</div>
+            <div><strong>Technical:</strong> Tavily -&gt; SearXNG -&gt; Firecrawl -&gt; Brave -&gt; DuckDuckGo</div>
+            <div><strong>OSINT:</strong> SearXNG -&gt; Firecrawl -&gt; Brave -&gt; DuckDuckGo -&gt; Tavily</div>
           </div>
         </details>
       </CardContent>

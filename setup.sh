@@ -13,6 +13,7 @@
 #   ./setup.sh update                                    # Pull & rebuild/update deployment
 #   ./setup.sh arsenal                                   # Re-provision offensive CLI arsenal
 #   sudo ./setup.sh gpu                                  # Provision GPU cracking stack (driver, CUDA/OpenCL, hashcat, john-jumbo)
+#   sudo ./setup.sh searxng                              # Provision self-hosted SearXNG meta-search (127.0.0.1:8888, auto-enabled in BEHEMOTH)
 #   ./setup.sh reset-password [-p 'NewPass!']            # Reset BEHEMOTH admin password in DB
 # ============================================================================
 set -euo pipefail
@@ -232,6 +233,71 @@ install_gpu_cracking_stack() {
   ok "GPU stack ready — set BEHEMOTH_SANDBOX_GPUS=all to expose the GPU to sandbox_exec"
 }
 
+# install_searxng provisions the self-hosted SearXNG meta-search as a local
+# Docker container bound to 127.0.0.1:8888. Idempotent: a healthy instance is
+# left untouched; an existing but stopped container is restarted. The BEHEMOTH
+# server auto-detects and enables the instance at startup (SEARCH_SEARXNG_URL).
+install_searxng() {
+  [[ "${BEHEMOTH_SEARXNG:-1}" == "0" ]] && { info "BEHEMOTH_SEARXNG=0 — skipping local SearXNG"; return 0; }
+  if curl -fsS --max-time 3 http://127.0.0.1:8888/healthz >/dev/null 2>&1; then
+    ok "SearXNG meta-search already running at http://127.0.0.1:8888"
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    info "Installing Docker (required for the local SearXNG meta-search)..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y -qq docker.io >/dev/null 2>&1 \
+      || curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 \
+      || { warn "Docker install failed — skipping local SearXNG (set SEARCH_SEARXNG_URL manually)"; return 0; }
+  fi
+  systemctl enable --now docker >/dev/null 2>&1 || true
+  if ! docker info >/dev/null 2>&1; then
+    warn "Docker daemon not reachable — skipping local SearXNG (set SEARCH_SEARXNG_URL manually)"
+    return 0
+  fi
+
+  local cfg_dir="/opt/behemoth/searxng"
+  mkdir -p "$cfg_dir"
+  if [[ ! -f "$cfg_dir/settings.yml" ]]; then
+    cat > "$cfg_dir/settings.yml" <<SEARXNG_EOF
+use_default_settings: true
+server:
+  secret_key: "$(rand_secret)$(rand_secret)"
+  limiter: false
+  base_url: http://localhost:8888/
+search:
+  formats:
+    - html
+    - json
+SEARXNG_EOF
+    chmod 600 "$cfg_dir/settings.yml"
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -qx 'behemoth-searxng'; then
+    info "Starting existing behemoth-searxng container..."
+    docker start behemoth-searxng >/dev/null 2>&1 || true
+  else
+    info "Pulling and starting SearXNG (local meta-search on 127.0.0.1:8888)..."
+    docker rm -f behemoth-searxng >/dev/null 2>&1 || true
+    docker run -d --name behemoth-searxng --restart unless-stopped \
+      -p 127.0.0.1:8888:8080 \
+      -v "$cfg_dir:/etc/searxng:rw" \
+      -e SEARXNG_BASE_URL=http://localhost:8888/ \
+      searxng/searxng:latest >/dev/null || { warn "Failed to start SearXNG container"; return 0; }
+  fi
+
+  local i
+  for i in $(seq 1 15); do
+    if curl -fsS --max-time 3 http://127.0.0.1:8888/healthz >/dev/null 2>&1; then
+      ok "SearXNG meta-search running at http://127.0.0.1:8888 — BEHEMOTH auto-enables it at startup"
+      return 0
+    fi
+    sleep 2
+  done
+  warn "SearXNG container started but not healthy yet — BEHEMOTH picks it up once /healthz responds"
+}
+
 install_golang() {
   local req_ver="1.26.10"
   export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
@@ -408,7 +474,7 @@ while [[ $# -gt 0 ]]; do
     --domain|-d) DOMAIN="${2:-_}"; shift 2 ;;
     --ssl|--tls) ENABLE_SSL=1; shift ;;
     -p|--new-password) NEWPASS="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) shift ;;
   esac
 done
@@ -418,6 +484,7 @@ case "$CMD" in
     banner
     require_root
     install_system_deps
+    install_searxng
     install_golang
     install_nodejs
     install_playwright_globals
@@ -459,6 +526,7 @@ case "$CMD" in
     banner
     git pull --ff-only || warn "git pull skipped or non-fast-forward"
     build_behemoth
+    install_searxng
     ./start.sh all
     ;;
   arsenal)
@@ -470,11 +538,16 @@ case "$CMD" in
     require_root gpu
     install_gpu_cracking_stack
     ;;
+  searxng)
+    banner
+    require_root searxng
+    install_searxng
+    ;;
   reset-password)
     banner
     reset_admin_password "$NEWPASS"
     ;;
   *)
-    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

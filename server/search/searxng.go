@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -127,4 +128,44 @@ func (s *SearXNGSearchEngine) getCategories(mode SearchMode) string {
 	default:
 		return "general"
 	}
+}
+
+var (
+	localSearXNGMu      sync.Mutex
+	localSearXNGURL     string
+	localSearXNGChecked time.Time
+)
+
+// DetectLocalSearXNG probes the well-known local SearXNG endpoint provisioned
+// by setup.sh (Docker container bound to 127.0.0.1:8888). The result is cached
+// for 60 seconds so per-request probes stay cheap. Returns "" when no local
+// instance answers.
+func DetectLocalSearXNG() string {
+	localSearXNGMu.Lock()
+	defer localSearXNGMu.Unlock()
+	if !localSearXNGChecked.IsZero() && time.Since(localSearXNGChecked) < 60*time.Second {
+		return localSearXNGURL
+	}
+	localSearXNGChecked = time.Now()
+	localSearXNGURL = ""
+	for _, base := range []string{"http://127.0.0.1:8888", "http://localhost:8888"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		resp, err := httpClient.Do(req)
+		cancel()
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			localSearXNGURL = base
+			break
+		}
+	}
+	return localSearXNGURL
 }

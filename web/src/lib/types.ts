@@ -2407,7 +2407,7 @@ export interface SecurityCheckResponse {
 // ============================================================
 
 export type SearchMode = "general" | "news" | "exploit" | "technical" | "osint";
-export type SearchEngineType = "google" | "duckduckgo" | "tavily" | "searxng" | "brave" | "sploitus";
+export type SearchEngineType = "firecrawl" | "duckduckgo" | "tavily" | "searxng" | "brave" | "sploitus";
 
 export interface SearchResultItem {
   title: string;
@@ -2436,6 +2436,8 @@ export interface SearchEnginesStatus {
   available_engines: number;
   engine_status: Record<SearchEngineType, boolean>;
   searxng_url?: string;
+  searxng_local_url?: string;
+  searxng_local_detected?: boolean;
 }
 
 export interface SearchRequest {

@@ -36,7 +36,7 @@ Unlike linear AI wrappers, BEHEMOTH models every engagement as a live **Explorat
 | **MITM Traffic Capture & Built-In Repeater** | Dedicated recording proxy (`127.0.0.1:8788`) captures all agent HTTP/HTTPS traffic, binds packets directly to vulnerability findings, and supports manual replay/fuzzing in the built-in **HTTP Repeater**. |
 | **Unified Proxy Pool v2 & GeoIP Rotation** | Manage HTTP/HTTPS/SOCKS4/SOCKS5 proxy pools with automatic GeoIP country/city resolution, latency EMA scoring, health checks, and `round_robin` / `random` / `least_used` rotation synchronized across all agents and Browser MCP. |
 | **Stealth, Anti-Detection & IOC Protection** | Dynamic User-Agent rotation, HTTP header randomization, JA3/TLS fingerprint spoofing, offensive intent reframing (`agent/security.go`), and IOC IP/scanner filtering. |
-| **Multi-Engine Security Search** | Integrated search orchestrator across **DuckDuckGo**, **Sploitus / GitHub PoC & Exploit Advisories**, **Google CSE**, **Tavily AI**, and **SearXNG**. |
+| **Multi-Engine Security Search** | Integrated search orchestrator across **DuckDuckGo**, **Sploitus / GitHub PoC & Exploit Advisories**, **Firecrawl** (cloud or self-hosted), **Tavily AI**, **Brave**, and a **self-hosted SearXNG** meta-search instance auto-provisioned on the same host by `setup.sh` (agents pick it up automatically). |
 
 ---
 

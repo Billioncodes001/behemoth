@@ -42,6 +42,11 @@ services:
       BEHEMOTH_C2_SECRET: ${BEHEMOTH_C2_SECRET:-}
       BEHEMOTH_C2_TLS_CERT: ${BEHEMOTH_C2_TLS_CERT:-}
       BEHEMOTH_C2_TLS_KEY: ${BEHEMOTH_C2_TLS_KEY:-}
+      SEARCH_FIRECRAWL_API_KEY: ${SEARCH_FIRECRAWL_API_KEY:-}
+      SEARCH_FIRECRAWL_URL: ${SEARCH_FIRECRAWL_URL:-}
+      SEARCH_TAVILY_API_KEY: ${SEARCH_TAVILY_API_KEY:-}
+      SEARCH_BRAVE_API_KEY: ${SEARCH_BRAVE_API_KEY:-}
+      SEARCH_SEARXNG_URL: ${SEARCH_SEARXNG_URL:-http://searxng:8080}
     ports:
       - "8787:8787"
       - "127.0.0.1:8788:8788"
@@ -54,6 +59,28 @@ services:
       # 把项目根目录的 skills 挂进容器（覆盖镜像内置的 /app/skills）；
       # 改 skill 无需重建镜像，容器读的就是宿主机这份。
       - ./skills:/app/skills
+    depends_on:
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Self-hosted SearXNG meta-search — free, no API key, used automatically by
+  # the multi-engine search orchestrator (SEARCH_SEARXNG_URL defaults to it).
+  searxng:
+    image: searxng/searxng:latest
+    volumes:
+      - ./deploy/searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888/
+      INSTANCE_NAME: behemoth-searxng
+    ports:
+      # Bind to loopback only — the meta-search is internal infrastructure.
+      - "127.0.0.1:8888:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
 volumes:

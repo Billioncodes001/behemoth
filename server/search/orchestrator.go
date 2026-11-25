@@ -35,9 +35,13 @@ func NewOrchestrator(cfg *Config) *Orchestrator {
 // registerEngines creates engine instances based on config.
 func (o *Orchestrator) registerEngines() {
 	cfg := o.config
-	if cfg.Google.Enabled && cfg.Google.APIKey != "" && cfg.Google.CSEID != "" {
-		o.engines[EngineGoogle] = NewGoogleSearchEngine(cfg.Google.APIKey, cfg.Google.CSEID)
-		log.Printf("[search] Google search enabled")
+	if cfg.Firecrawl.Enabled && (cfg.Firecrawl.APIKey != "" || cfg.Firecrawl.BaseURL != "") {
+		o.engines[EngineFirecrawl] = NewFirecrawlSearchEngine(cfg.Firecrawl.APIKey, cfg.Firecrawl.BaseURL, true)
+		if cfg.Firecrawl.BaseURL != "" {
+			log.Printf("[search] Firecrawl search enabled (self-hosted: %s)", cfg.Firecrawl.BaseURL)
+		} else {
+			log.Printf("[search] Firecrawl search enabled (hosted API)")
+		}
 	}
 	if cfg.DuckDuckGo.Enabled {
 		o.engines[EngineDuckDuckGo] = NewDuckDuckGoSearchEngine(true)
@@ -62,12 +66,14 @@ func (o *Orchestrator) registerEngines() {
 }
 
 // setupFallbackChains defines priority order for each search mode.
+// SearXNG ranks high because it runs self-hosted on the same host (free, fast,
+// no rate limits) once the local instance is detected.
 func (o *Orchestrator) setupFallbackChains() {
-	o.fallbackChains[ModeGeneral] = []SearchEngineType{EngineTavily, EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG}
-	o.fallbackChains[ModeNews] = []SearchEngineType{EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
-	o.fallbackChains[ModeExploit] = []SearchEngineType{EngineSploitus, EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineTavily}
-	o.fallbackChains[ModeTechnical] = []SearchEngineType{EngineTavily, EngineGoogle, EngineBrave, EngineSearXNG, EngineDuckDuckGo}
-	o.fallbackChains[ModeOSINT] = []SearchEngineType{EngineGoogle, EngineBrave, EngineDuckDuckGo, EngineSearXNG, EngineTavily}
+	o.fallbackChains[ModeGeneral] = []SearchEngineType{EngineTavily, EngineSearXNG, EngineFirecrawl, EngineDuckDuckGo, EngineBrave}
+	o.fallbackChains[ModeNews] = []SearchEngineType{EngineSearXNG, EngineFirecrawl, EngineBrave, EngineDuckDuckGo, EngineTavily}
+	o.fallbackChains[ModeExploit] = []SearchEngineType{EngineSploitus, EngineSearXNG, EngineFirecrawl, EngineBrave, EngineDuckDuckGo, EngineTavily}
+	o.fallbackChains[ModeTechnical] = []SearchEngineType{EngineTavily, EngineSearXNG, EngineFirecrawl, EngineBrave, EngineDuckDuckGo}
+	o.fallbackChains[ModeOSINT] = []SearchEngineType{EngineSearXNG, EngineFirecrawl, EngineBrave, EngineDuckDuckGo, EngineTavily}
 }
 
 // Search executes a search using the appropriate fallback chain (or a specific requested engine).
@@ -159,20 +165,23 @@ func (o *Orchestrator) UpdateEngine(engine string, value string) {
 	defer o.mu.Unlock()
 	val := strings.TrimSpace(value)
 	switch SearchEngineType(strings.ToLower(strings.TrimSpace(engine))) {
-	case EngineGoogle:
-		// Accept "API_KEY|CSE_ID" or "API_KEY:CSE_ID" or just API_KEY
+	case EngineFirecrawl:
+		// Accept "API_KEY|BASE_URL", "API_KEY:BASE_URL", a bare base URL, or just an API key.
+		apiKey, baseURL := "", ""
 		if parts := strings.SplitN(val, "|", 2); len(parts) == 2 {
-			o.config.Google.APIKey = strings.TrimSpace(parts[0])
-			o.config.Google.CSEID = strings.TrimSpace(parts[1])
-		} else if parts := strings.SplitN(val, ":", 2); len(parts) == 2 {
-			o.config.Google.APIKey = strings.TrimSpace(parts[0])
-			o.config.Google.CSEID = strings.TrimSpace(parts[1])
+			apiKey, baseURL = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		} else if parts := strings.SplitN(val, ":", 2); len(parts) == 2 && strings.HasPrefix(val, "http") {
+			apiKey, baseURL = "", val
+		} else if strings.HasPrefix(val, "http") {
+			baseURL = val
 		} else {
-			o.config.Google.APIKey = val
+			apiKey = val
 		}
-		o.config.Google.Enabled = o.config.Google.APIKey != "" && o.config.Google.CSEID != ""
-		if !o.config.Google.Enabled {
-			delete(o.engines, EngineGoogle)
+		o.config.Firecrawl.APIKey = apiKey
+		o.config.Firecrawl.BaseURL = baseURL
+		o.config.Firecrawl.Enabled = apiKey != "" || baseURL != ""
+		if !o.config.Firecrawl.Enabled {
+			delete(o.engines, EngineFirecrawl)
 		}
 	case EngineTavily:
 		o.config.Tavily.APIKey = val
@@ -233,7 +242,7 @@ func (o *Orchestrator) GetAvailableEngines() []SearchEngineType {
 func (o *Orchestrator) GetStats() map[string]interface{} {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	allTypes := []SearchEngineType{EngineGoogle, EngineDuckDuckGo, EngineTavily, EngineSearXNG, EngineBrave, EngineSploitus}
+	allTypes := []SearchEngineType{EngineFirecrawl, EngineDuckDuckGo, EngineTavily, EngineSearXNG, EngineBrave, EngineSploitus}
 	engineStatus := make(map[string]bool, len(allTypes))
 	availableCount := 0
 	for _, t := range allTypes {
@@ -249,6 +258,7 @@ func (o *Orchestrator) GetStats() map[string]interface{} {
 		"available_engines":        availableCount,
 		"engine_status":            engineStatus,
 		"searxng_url":              o.config.SearXNG.URL,
+		"firecrawl_url":            o.config.Firecrawl.BaseURL,
 	}
 }
 

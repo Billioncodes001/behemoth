@@ -686,8 +686,8 @@ func (s *Server) unconfiguredSearchEngines() []string {
 	if !em["tavily"] {
 		missing = append(missing, "Tavily AI (SEARCH_TAVILY_API_KEY)")
 	}
-	if !em["google"] {
-		missing = append(missing, "Google CSE (API Key | CSE ID)")
+	if !em["firecrawl"] {
+		missing = append(missing, "Firecrawl (SEARCH_FIRECRAWL_API_KEY)")
 	}
 	if !em["searxng"] {
 		missing = append(missing, "SearXNG Instance URL")
@@ -877,11 +877,11 @@ func (s *Server) toolSearchIOSExploits() actool.CoreTool {
 
 func (s *Server) toolMultiEngineSearch() actool.CoreTool {
 	return roTool("multi_engine_search",
-		"Execute a multi-engine intelligence search across DuckDuckGo, Sploitus Exploit DB, Google CSE, Tavily AI, and SearXNG with automatic fallback chains.",
+		"Execute a multi-engine intelligence search across DuckDuckGo, Sploitus Exploit DB, Firecrawl, Tavily AI, and the self-hosted SearXNG instance with automatic fallback chains.",
 		objSchema(map[string]any{
 			"query":       strParam("Search query (e.g. 'CVE-2024-3094 PoC', 'site:target.com ext:env')"),
 			"mode":        strParam("Search mode: general | exploit | technical | osint | news (default: general)"),
-			"engine":      strParam("Optional specific engine override: duckduckgo | sploitus | google | tavily | searxng"),
+			"engine":      strParam("Optional specific engine override: duckduckgo | sploitus | firecrawl | tavily | searxng"),
 			"site_filter": strParam("Optional domain filter (e.g. target.com)"),
 			"max_results": map[string]any{"type": "integer", "description": "Max results (default 10)"},
 		}, "query"),

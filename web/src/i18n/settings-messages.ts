@@ -119,8 +119,8 @@ export const settingsMessages = {
     "mcp server access token agent orchestration external bot audit allowlist whitelist source ip",
   ],
   "settings.keywords.search": [
-    "搜索 引擎 Google DuckDuckGo Tavily SearXNG Brave Sploitus 多引擎 Web Search",
-    "search engine google duckduckgo tavily searxng brave sploitus multi-engine web search pentagi",
+    "搜索 引擎 Firecrawl DuckDuckGo Tavily SearXNG Brave Sploitus 多引擎 Web Search",
+    "search engine firecrawl google duckduckgo tavily searxng brave sploitus multi-engine web search pentagi",
   ],
   "settings.keywords.browser": [
     "浏览器 截图 内容抓取 Chrome 自动化 Browser screenshot content scraper automation",

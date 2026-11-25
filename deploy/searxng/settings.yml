@@ -1,0 +1,15 @@
+# SearXNG settings for BEHEMOTH's internal meta-search.
+# `use_default_settings` keeps upstream engine defaults; we only override what
+# the multi-engine orchestrator needs (JSON output, no limiter/redis).
+use_default_settings: true
+
+server:
+  # Fixed deployment secret; rotate if this file is ever exposed.
+  secret_key: "behemoth-searxng-internal-2026"
+  limiter: false
+  base_url: http://localhost:8888/
+
+search:
+  formats:
+    - html
+    - json

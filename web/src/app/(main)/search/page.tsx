@@ -22,7 +22,7 @@ const MODES: { value: SearchMode }[] = [
 const ENGINE_LABELS: Record<SearchEngineType, string> = {
   duckduckgo: "DuckDuckGo",
   sploitus: "Sploitus (Exploit/PoC)",
-  google: "Google CSE",
+  firecrawl: "Firecrawl",
   tavily: "Tavily AI",
   searxng: "SearXNG",
   brave: "Brave",

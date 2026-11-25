@@ -107,6 +107,24 @@ tools.
 
 Code: `agent/sandbox.go`.
 
+### 3.1 Search engines (Firecrawl + self-hosted SearXNG)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEARCH_FIRECRAWL_API_KEY` | — | Firecrawl API key (cloud). Optional for self-hosted instances. |
+| `SEARCH_FIRECRAWL_URL` | `https://api.firecrawl.dev` | Firecrawl base URL — point it at a self-hosted instance (e.g. `http://127.0.0.1:3002`). |
+| `SEARCH_TAVILY_API_KEY` | — | Tavily AI search key. |
+| `SEARCH_BRAVE_API_KEY` | — | Brave Search API key. |
+| `SEARCH_SEARXNG_URL` | auto | Leave empty: the server auto-detects the local SearXNG that `./setup.sh` provisions on `127.0.0.1:8888` and enables it. |
+| `BEHEMOTH_SEARXNG` | `1` | Set to `0` to skip SearXNG provisioning in `setup.sh full` / `update`. |
+
+`sudo ./setup.sh searxng` (also runs automatically from `full` and `update`)
+starts a `behemoth-searxng` Docker container bound to `127.0.0.1:8888` with the
+loopback-only port, JSON format enabled and the rate limiter off. On startup the
+server probes `/healthz` on `127.0.0.1:8888` and enables the engine without any
+manual configuration; agents then rank SearXNG near the top of every fallback
+chain (free, fast, no per-query quota).
+
 ---
 
 ## 4. Mock / scenario provider (offline demos and CI)
