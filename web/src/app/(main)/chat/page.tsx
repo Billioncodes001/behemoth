@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 
 import { ApprovalExecutionFocus, useApprovalFocus, useApprovalHistory } from "@/components/approval-execution-focus";
+import { Markdown } from "@/components/markdown";
 import { MentionTextarea } from "@/components/mention-textarea";
 import { SideQuestionButton, SideQuestionWorkspace } from "@/components/side-question-workspace";
 import { TodoPopover } from "@/components/todo-popover";
@@ -598,6 +599,12 @@ function ChatView({
     }
     return null;
   }, [messages]);
+  const [liveDelta, setLiveDelta] = React.useState<{
+    kind: "thinking" | "text";
+    text: string;
+    summary: string;
+  } | null>(null);
+  const [liveThinkingOpen, setLiveThinkingOpen] = React.useState(false);
 
   // reset + load whenever the selected conversation changes. Load only the LATEST
   // page on open — a long thread's final answer sits at the very end, so the newest
@@ -610,6 +617,8 @@ function ChatView({
     hasMoreRef.current = false;
     setHasMore(false);
     setMessages([]);
+    setLiveDelta(null);
+    setLiveThinkingOpen(false);
     setHistoryLoaded(false);
     setRunning(false);
     let live = true;
@@ -641,11 +650,85 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // poll while a turn is running: pull new steps after the cursor.
+  // Real-time SSE token & step stream while a turn is running, backed by a lightweight
+  // safety poll so mock mode and non-SSE reverse proxies remain 100% reliable.
   React.useEffect(() => {
-    if (!running) return;
+    if (!running) {
+      setLiveDelta(null);
+      return;
+    }
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
+    let sseConnected = false;
+    let es: EventSource | null = null;
+
+    if (typeof EventSource !== "undefined" && process.env.NEXT_PUBLIC_MOCK !== "1") {
+      try {
+        es = api.conversationStream(conv.id);
+        es.onopen = () => {
+          sseConnected = true;
+        };
+        es.addEventListener("delta", (ev: MessageEvent) => {
+          if (!live) return;
+          try {
+            const d = JSON.parse(ev.data);
+            if (!d?.kind || !d?.text) {
+              setLiveDelta(null);
+            } else if (d.kind === "thinking" || d.kind === "text") {
+              setLiveDelta({ kind: d.kind, text: String(d.text), summary: String(d.summary || "") });
+            }
+          } catch {
+            /* ignore malformed frame */
+          }
+        });
+        es.addEventListener("activity", (ev: MessageEvent) => {
+          if (!live) return;
+          try {
+            const item = JSON.parse(ev.data) as Activity;
+            if (item && typeof item.seq === "number") {
+              setMessages((prev) => mergeActivities(prev, [item]));
+              cursorRef.current = Math.max(cursorRef.current, item.seq);
+              if (item.kind === "thinking" || item.kind === "text" || item.kind === "result" || item.kind === "tool_use") {
+                setLiveDelta(null);
+              }
+            }
+          } catch {
+            /* ignore malformed frame */
+          }
+        });
+        es.addEventListener("status", (ev: MessageEvent) => {
+          if (!live) return;
+          try {
+            const st = JSON.parse(ev.data);
+            if (st && st.running === false) {
+              setLiveDelta(null);
+              void api
+                .conversationMessages(conv.id, cursorRef.current)
+                .then((r) => {
+                  if (!live) return;
+                  if (r.items.length) {
+                    setMessages((prev) => mergeActivities(prev, r.items));
+                  }
+                  cursorRef.current = Math.max(cursorRef.current, r.cursor);
+                  setRunning(r.running);
+                  if (!r.running) onTitleMaybeChanged();
+                })
+                .catch(() => {
+                  if (live) {
+                    setRunning(false);
+                    onTitleMaybeChanged();
+                  }
+                });
+            }
+          } catch {
+            /* ignore */
+          }
+        });
+      } catch {
+        es = null;
+      }
+    }
+
     const tick = async () => {
       let keepPolling = true;
       try {
@@ -657,18 +740,23 @@ function ChatView({
         cursorRef.current = Math.max(cursorRef.current, r.cursor);
         keepPolling = r.running;
         setRunning(r.running);
-        if (!r.running) onTitleMaybeChanged(); // first-turn auto-title landed
+        if (!r.running) {
+          setLiveDelta(null);
+          onTitleMaybeChanged(); // first-turn auto-title landed
+        }
       } catch {
         /* transient — keep polling */
       } finally {
-        // Slow responses must not overlap another poll with the same cursor.
-        if (live && keepPolling) timer = setTimeout(() => void tick(), 1000);
+        // Poll less frequently when SSE is actively delivering real-time frames.
+        const pollMs = sseConnected ? 2500 : 800;
+        if (live && keepPolling) timer = setTimeout(() => void tick(), pollMs);
       }
     };
     void tick();
     return () => {
       live = false;
       clearTimeout(timer);
+      if (es) es.close();
     };
   }, [running, conv.id, onTitleMaybeChanged]);
 
@@ -750,7 +838,7 @@ function ChatView({
     if (approvalFocus.state || !atBottomRef.current) return;
     const vp = viewport();
     if (vp) vp.scrollTop = vp.scrollHeight;
-  }, [messages, running, viewport, approvalFocus.state]);
+  }, [messages, liveDelta, running, viewport, approvalFocus.state]);
 
   // Per-conversation token total, live — same accounting as the main-agent
   // console: completed runs' `result` sum + the in-progress run's latest `usage`.
@@ -897,6 +985,37 @@ function ChatView({
                 fetchDetail={fetchDetail}
                 focusedSeq={focusHistory.ready ? approvalFocus.state?.source?.seq : undefined}
               />
+              {running && liveDelta?.kind === "thinking" && (
+                <div className="mt-2 rounded-md border border-border/60 bg-muted/25 px-3 py-1.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setLiveThinkingOpen((v) => !v)}
+                    className="flex w-full items-center gap-1.5 text-left text-muted-foreground hover:text-foreground"
+                  >
+                    {liveThinkingOpen ? (
+                      <ChevronDownIcon className="size-3.5 shrink-0" />
+                    ) : (
+                      <ChevronRightIcon className="size-3.5 shrink-0" />
+                    )}
+                    <Loader2Icon className="size-3 shrink-0 animate-spin text-primary" />
+                    <span className="shrink-0 font-medium">Reasoning</span>
+                    <span className="truncate text-muted-foreground/80">
+                      {liveDelta.summary || "Analyzing next step..."}
+                    </span>
+                  </button>
+                  {liveThinkingOpen && (
+                    <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words border-t border-border/50 pt-2 font-mono text-[11px] text-muted-foreground">
+                      {liveDelta.text}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {running && liveDelta?.kind === "text" && (
+                <div className="mt-3 rounded-lg border border-primary/20 bg-card px-4 py-3 text-sm shadow-xs">
+                  <Markdown text={liveDelta.text} />
+                  <span className="mt-1 inline-block h-3.5 w-1.5 animate-pulse rounded-xs bg-primary align-middle" />
+                </div>
+              )}
             </>
           )}
         </div>

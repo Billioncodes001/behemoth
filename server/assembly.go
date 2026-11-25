@@ -87,9 +87,45 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !directVisible && !skillGated {
 					continue // neither directly visible nor referenced by a visible skill
 				}
+				var pxFn func() string
+				if len(outboundProxyFn) > 0 {
+					pxFn = outboundProxyFn[0]
+				}
+				// FAST ZERO-COLD-START PATH: when tool metadata is already cached in
+				// PostgreSQL (mcp_tools_cache), register lightweight lazyMCPTool stubs
+				// in 0ms without spawning npx/python3 subprocesses! The server is only
+				// dialed if the agent actually searches or invokes one of its tools.
+				if cachedTools, cerr := pg.MCPToolsDetailed(m.ID); cerr == nil && len(cachedTools) > 0 {
+					mCopy := m
+					lazyConn := newLazyMCPConnection(mCopy, pxFn)
+					closers = append(closers, lazyConn)
+					for _, cachedTool := range cachedTools {
+						tName := strings.TrimSpace(cachedTool.Name)
+						if tName == "" {
+							continue
+						}
+						if !strings.HasPrefix(tName, "mcp__") {
+							tName = "mcp__" + m.Name + "__" + tName
+						}
+						if m.Name == browserMCPName && isBrowserScreenshotTool(tName) &&
+							!pg.GetBool(settingBrowserScreenshot, false) {
+							continue
+						}
+						lt := &lazyMCPTool{name: tName, desc: cachedTool.Description, conn: lazyConn}
+						extra = append(extra, lt)
+						allNames = append(allNames, tName)
+						serverTools[m.Name] = append(serverTools[m.Name], tName)
+						if directVisible && !skillGated {
+							globalNames = append(globalNames, tName)
+							globalSet[tName] = true
+						}
+					}
+					continue
+				}
+
 				var mcpProxy string
-				if len(outboundProxyFn) > 0 && outboundProxyFn[0] != nil {
-					mcpProxy = outboundProxyFn[0]()
+				if pxFn != nil {
+					mcpProxy = pxFn()
 				}
 				cl, err := connectMCP(ctx, m, mcpProxy)
 				if err != nil {
@@ -102,7 +138,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					log.Printf("[mcp] %s tools/list failed: %v", m.Name, err)
 					continue
 				}
+				toCache := make([]db.MCPTool, 0, len(ts))
 				for _, t := range ts {
+					toCache = append(toCache, db.MCPTool{Name: t.Name(), Description: t.Description()})
 					// Expose Playwright's screenshot tool to all browser-enabled agents (auto,
 					// pentest, worker, reporter, retester) whenever Browser Screenshots is enabled.
 					if m.Name == browserMCPName && isBrowserScreenshotTool(t.Name()) &&
@@ -118,6 +156,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 						globalSet[t.Name()] = true
 					}
 					// skill-gated tools stay out of globalNames; unlocked via unlockSkill()
+				}
+				if len(toCache) > 0 {
+					_ = pg.SaveMCPTools(m.ID, toCache)
 				}
 			}
 		}

@@ -689,6 +689,29 @@ func isResumeTokenLimitMsg(m llm.Message) bool {
 	return strings.HasPrefix(t, "Output token limit hit.")
 }
 
+func isOpenAIReasoningFamily(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	// Strip provider prefix on OpenRouter-style IDs (e.g. "openai/gpt-5.4")
+	if idx := strings.LastIndexByte(m, '/'); idx >= 0 {
+		m = m[idx+1:]
+	}
+	return strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "gpt-5")
+}
+
+func hasSuspiciousPseudoToolPrefix(s string) bool {
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	for _, pfx := range []string{"<think", "<tool_call", "<function=", "[called tool"} {
+		if strings.HasPrefix(lower, pfx) || (len(lower) < len(pfx) && strings.HasPrefix(pfx, lower)) {
+			return true
+		}
+	}
+	return strings.Contains(s, "[Called tool ") || strings.Contains(s, "<tool_call>") || strings.Contains(s, "<function=") || strings.Contains(strings.ToLower(s), "<think>")
+}
+
 func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
 	if len(req.Tools) > 128 {
 		filtered := make([]llm.ToolSchema, 0, len(primaryChatTools))
@@ -1005,10 +1028,10 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						break
 					}
 					if buffering {
-						// Once text clearly represents a long structured final answer without pseudo-tool syntax,
-						// start streaming it live to the user.
+						// Stream clean prose live as soon as the first ~28 chars confirm there is no
+						// raw <think> / <tool_call> / <function= / [Called tool ...] prefix!
 						curTxt := textBuf.String()
-						if len(curTxt) >= 350 && !strings.Contains(curTxt, "[Called tool ") && !strings.Contains(curTxt, "<tool_call>") && !strings.Contains(curTxt, "<function=") && !strings.Contains(strings.ToLower(curTxt), "<think>") {
+						if len(curTxt) >= 28 && !hasSuspiciousPseudoToolPrefix(curTxt) {
 							if !flushBuffered() {
 								cancelStream()
 								return
@@ -1019,10 +1042,14 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 						}
 					}
 				case llm.SEThinkingDelta, llm.SEThinkingSignature, llm.SEMessageStart:
-					if buffering {
-						bufferedEvs = append(bufferedEvs, ev)
-						continue
+					// Native thinking & message-start events NEVER carry pseudo-tool text —
+					// yield them immediately with 0ms buffering for instant TTFT!
+					emittedAny = true
+					if !yield(ev, nil) {
+						cancelStream()
+						return
 					}
+					continue
 				case llm.SEMessageDelta:
 					if !flushTool() {
 						cancelStream()

@@ -8,12 +8,19 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
-// NewClient builds an HTTP client for an LLM endpoint. Supported proxies are
-// http, https, and socks5, matching the profile configuration contract.
+// NewClient builds an HTTP client for an LLM endpoint with high-concurrency
+// HTTP/2 & TLS keep-alive pooling so parallel Planner/Worker/Chat/Judge calls
+// reuse warm connections instead of repeating TCP+TLS handshakes.
 func NewClient(rawProxy string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 128
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 120 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ForceAttemptHTTP2 = true
 	rawProxy = strings.TrimSpace(rawProxy)
 	if rawProxy == "" {
 		transport.Proxy = nil

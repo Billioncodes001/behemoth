@@ -438,8 +438,13 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	if ua.Detail == "" {
 		ua.Detail = msg
 	}
-	if _, err := pg.AppendConvActivity(c.ID, ua); err != nil {
+	if uid, err := pg.AppendConvActivity(c.ID, ua); err != nil {
 		log.Printf("[conv %d] append user msg failed: %v", c.ID, err)
+	} else {
+		ua.ID = uid
+		ua.CreatedAt = time.Now()
+		globalConvStreamHub.publish(c.ID, "activity", activityDTO(ua))
+		globalConvStreamHub.publish(c.ID, "status", map[string]any{"running": true})
 	}
 	if c.Title == "" || c.Title == "新对话" || c.Title == "New Conversation" {
 		title := firstLine(msg, 40)
@@ -597,6 +602,8 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	defer func() {
 		if !isLiveUpdateReloadContext(ctx) {
 			s.unregisterActiveTurn(busyKey)
+			globalConvStreamHub.publish(c.ID, "delta", map[string]any{"kind": "", "text": "", "summary": ""})
+			globalConvStreamHub.publish(c.ID, "status", map[string]any{"running": false})
 		}
 		cancel(agent.AbortChatTurnFinished)
 		s.chatMu.Lock()
@@ -694,6 +701,15 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		}
 	}
 	log.Printf("[chat] Conversation #%d (%s) started turn: %s", c.ID, c.AgentKey, firstLine(msg, 120))
+	globalConvStreamHub.publish(c.ID, "status", map[string]any{"running": true})
+	ctx = agent.WithLiveDeltaCallback(ctx, func(kind, text, summary string) {
+		globalConvStreamHub.publish(c.ID, "delta", map[string]any{
+			"kind":    kind,
+			"text":    text,
+			"summary": summary,
+			"worker":  c.AgentKey,
+		})
+	})
 	emittedErrorResult := false
 	emit := func(rec db.Activity) {
 		if rec.Kind == "result" && rec.IsError {
@@ -702,8 +718,14 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		if rec.Tool != "" {
 			log.Printf("[chat] Conversation #%d (%s) tool=%s summary=%s", c.ID, c.AgentKey, rec.Tool, firstLine(rec.Summary, 120))
 		}
-		if _, err := pg.AppendConvActivity(c.ID, rec); err != nil {
+		if aid, err := pg.AppendConvActivity(c.ID, rec); err != nil {
 			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
+		} else {
+			rec.ID = aid
+			if rec.CreatedAt.IsZero() {
+				rec.CreatedAt = time.Now()
+			}
+			globalConvStreamHub.publish(c.ID, "activity", activityDTO(rec))
 		}
 	}
 	var chatErr error
@@ -735,10 +757,10 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 		log.Printf("[chat] Conversation #%d (%s) error: %v", c.ID, c.AgentKey, chatErr)
 		if errors.Is(context.Cause(ctx), agent.AbortPausedByProxy) && !emittedErrorResult {
 			msgText := "Stopped: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect your server IP — fix/replace your proxies, enable the built-in free Tor Network, or disable Proxy Pool in System -> Proxy Pool to continue."
-			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
+			emit(db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
 				Summary: msgText, Detail: msgText})
 		} else if ctx.Err() == nil && !emittedErrorResult {
-			_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
+			emit(db.Activity{Worker: c.AgentKey, Kind: "result", IsError: true,
 				Summary: "Execution error: " + chatErr.Error(), Detail: chatErr.Error()})
 		}
 	} else {

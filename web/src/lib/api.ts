@@ -1820,6 +1820,7 @@ export const api = {
   },
   conversationMsgDetail: (id: number, seq: number) =>
     get<{ detail: string }>(`/conversations/${id}/messages/${seq}`).then((r) => r.detail ?? ""),
+  conversationStream: (id: number) => openSSE(`/conversations/${id}/stream`),
   sendConversationMessage: (id: number, message: string, attachments?: ChatAttachment[]) =>
     post<{ status: string }>(`/conversations/${id}/messages`, { message, attachments }),
   stopConversation: (id: number) => post<{ status: string }>(`/conversations/${id}/stop`, {}),

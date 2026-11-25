@@ -180,6 +180,25 @@ func rewriteOutboundChatCompletions(orig []byte, isGeminiEndpoint bool) (rewritt
 	}
 
 	modified := false
+	// Fast-lane reasoning cap for OpenAI reasoning models (o1/o3/o4/gpt-5): when the
+	// profile has no explicit reasoning_effort override and this turn is a mid-loop
+	// tool-continuation step (last message has role=="tool"), default reasoning_effort
+	// to "low" so routine tool steps respond in ~1-2s instead of 15-30s.
+	if !isGeminiEndpoint && isOpenAIReasoningFamily(modelStr) {
+		if _, hasEffort := root["reasoning_effort"]; !hasEffort {
+			if _, hasTools := root["tools"]; hasTools {
+				if rawMsgs, ok := root["messages"]; ok {
+					var peek []struct {
+						Role string `json:"role"`
+					}
+					if json.Unmarshal(rawMsgs, &peek) == nil && len(peek) > 2 && peek[len(peek)-1].Role == "tool" {
+						root["reasoning_effort"] = json.RawMessage(`"low"`)
+						modified = true
+					}
+				}
+			}
+		}
+	}
 	if rawMsgs, ok := root["messages"]; ok {
 		var msgs []map[string]json.RawMessage
 		if json.Unmarshal(rawMsgs, &msgs) == nil {

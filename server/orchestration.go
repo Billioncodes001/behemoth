@@ -40,6 +40,54 @@ func jsonResult(v any) (actool.Result, error) {
 // withheld, routed via SearchExtraTools/ExecuteExtraTool). Per-agent binding still
 // decides who actually sees any of them.
 //
+// autoDeferredSpecialistTools lists bulky, low-frequency specialist tools whose
+// full JSON schemas are withheld from the per-turn req.Tools payload (cutting
+// per-turn input token bloat by ~60% for faster Time-To-First-Token) while
+// remaining unlocked and advertised in the cached <available-deferred-tools> block.
+var autoDeferredSpecialistTools = map[string]bool{
+	"c2_build_implant":                         true,
+	"c2_deploy":                                true,
+	"c2_agents":                                true,
+	"c2_task":                                  true,
+	"c2_results":                               true,
+	"c2_kill":                                  true,
+	"c2_proxy_open":                            true,
+	"c2_proxy_close":                           true,
+	"c2_proxy_list":                            true,
+	"check_patch_feeds":                        true,
+	"add_patch_watch_feed":                     true,
+	"discover_affected_sites_for_notification": true,
+	"match_vuln_targets":                       true,
+	"generate_vuln_exploit":                    true,
+	"update_exploit_target_status":             true,
+	"sync_nuclei_templates":                    true,
+	"list_finding_cases":                       true,
+	"get_finding_case":                         true,
+	"update_finding_case":                      true,
+	"create_skill":                             true,
+	"update_skill_file":                        true,
+	"create_custom_tool":                       true,
+	"update_custom_tool":                       true,
+	"delete_custom_tool":                       true,
+	"create_mcp_server":                        true,
+	"list_intercept_rules":                     true,
+	"update_intercept_rule":                    true,
+	"get_worker_trace":                         true,
+	"list_worker_traces":                       true,
+	"search_worker_traces":                     true,
+	"get_task_node_detail":                     true,
+	"proxied_tcp_relay":                        true,
+	"create_callback_listener":                 true,
+	"poll_callback_events":                     true,
+	"audit_frontend_api_surface":               true,
+	"verify_endpoint_idempotency":              true,
+	"audit_source_routes":                      true,
+	"list_proxy_scrape_sources":                true,
+	"add_proxy_scrape_source":                  true,
+	"remove_proxy_scrape_source":               true,
+	"verify_and_import_scraped_proxies":        true,
+}
+
 //nolint:unused // used as the hostTools provider in wireAgentAugment
 func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	tools := append(s.m.HostTools(), s.orchestrationTools()...)
@@ -48,17 +96,39 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 	custom, err := s.customTools()
 	if err != nil {
 		log.Printf("[custom-tool] 加载失败: %v", err)
-		return tools, nil
+	} else {
+		tools = append(tools, custom...)
 	}
-	tools = append(tools, custom...)
-	// deferred custom tools → name -> its bound agent keys. ToolAugment turns a
+	// deferred tools → name -> its bound agent keys. ToolAugment turns a
 	// name into a deferred entry only for agents it's actually bound to (so we don't
 	// advertise a tool the per-agent binding will drop from the callable set).
 	deferred := map[string][]string{}
-	rows, _ := s.m.pg.ListCustomTools()
-	for _, t := range rows {
-		if t.Deferred && t.Enabled {
-			deferred[t.Key] = t.Agents
+	if s.m != nil && s.m.pg != nil {
+		rows, _ := s.m.pg.ListCustomTools()
+		for _, t := range rows {
+			if t.Deferred && t.Enabled {
+				deferred[t.Key] = t.Agents
+			}
+		}
+		allCatalog, _ := s.m.pg.ListTools()
+		for _, ct := range allCatalog {
+			if !ct.Enabled || !autoDeferredSpecialistTools[ct.Key] {
+				continue
+			}
+			// Keep specialist tools inline for their dedicated specialist agent!
+			var filteredAgents []string
+			for _, ag := range ct.Agents {
+				if ag == "proxy_harvester" && strings.Contains(ct.Key, "proxy_scrape") {
+					continue
+				}
+				if ag == "patch_researcher" && (strings.Contains(ct.Key, "patch") || strings.Contains(ct.Key, "vuln")) {
+					continue
+				}
+				filteredAgents = append(filteredAgents, ag)
+			}
+			if len(filteredAgents) > 0 {
+				deferred[ct.Key] = filteredAgents
+			}
 		}
 	}
 	return tools, deferred

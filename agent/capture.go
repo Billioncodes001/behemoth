@@ -17,6 +17,29 @@ import (
 
 var activeToolExecutions atomic.Int64
 
+type liveDeltaKey struct{}
+
+// LiveDeltaFunc receives ephemeral in-progress streaming snapshots (kind="thinking"|"text")
+// during a model turn so SSE subscribers see tokens in real time with zero extra DB rows.
+// An empty kind ("") clears the ephemeral preview right before the persisted Activity emits.
+type LiveDeltaFunc func(kind, text, summary string)
+
+// WithLiveDeltaCallback attaches an ephemeral live token-streaming callback to ctx.
+func WithLiveDeltaCallback(ctx context.Context, fn LiveDeltaFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, liveDeltaKey{}, fn)
+}
+
+func liveDeltaFrom(ctx context.Context) LiveDeltaFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(liveDeltaKey{}).(LiveDeltaFunc)
+	return fn
+}
+
 // ActiveToolExecutions returns the number of agent tool invocations currently mid-flight
 // across all running chat, planner, and worker sessions so live updates can wait for a
 // clean step boundary before swapping the binary.
@@ -76,6 +99,8 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 	var tbuf strings.Builder
 	var tkind string
 	var turnEnded bool
+	deltaCB := liveDeltaFrom(ctx)
+	var lastDeltaEmit time.Time
 	flush := func() {
 		turnEnded = false
 		if tbuf.Len() == 0 {
@@ -85,6 +110,10 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		k := tkind
 		tbuf.Reset()
 		tkind = ""
+		lastDeltaEmit = time.Time{}
+		if deltaCB != nil {
+			deltaCB("", "", "")
+		}
 		if s != "" {
 			rec(db.Activity{Kind: k, Summary: firstLine(s, 200), Detail: s})
 		}
@@ -100,8 +129,17 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		if tkind != "" && tkind != kind {
 			flush()
 		}
+		isFirstChunk := tbuf.Len() == 0
 		tkind = kind
 		tbuf.WriteString(text)
+		if deltaCB != nil {
+			now := time.Now()
+			if isFirstChunk || now.Sub(lastDeltaEmit) >= 45*time.Millisecond {
+				lastDeltaEmit = now
+				cur := tbuf.String()
+				deltaCB(kind, cur, firstLine(cur, 200))
+			}
+		}
 	}
 	lastTool := &runTrace{startedAt: time.Now()}
 	var lastUsage *llm.Usage
@@ -200,6 +238,9 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 					}
 				}
 				flush() // flush any trailing thinking / non-final text
+				if deltaCB != nil {
+					deltaCB("", "", "")
+				}
 				if isLiveUpdateReloadCtx(ctx) && (ev.Terminal.Reason == harness.ReasonAbortedTools || ev.Terminal.Reason == harness.ReasonAbortedStreaming || ev.Terminal.Err != nil) {
 					u := ev.Terminal.Usage
 					rec(db.Activity{

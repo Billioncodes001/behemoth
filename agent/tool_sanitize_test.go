@@ -281,3 +281,66 @@ func TestStreamInterleavedThinkingDoesNotCorruptToolInput(t *testing.T) {
 		}
 	}
 }
+
+type slowThinkingLiveProvider struct {
+	releasedSecondChunk bool
+}
+
+func (p *slowThinkingLiveProvider) Complete(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	return llm.Message{}, "", llm.Usage{}, nil
+}
+
+func (p *slowThinkingLiveProvider) Stream(_ context.Context, _ llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		// First thinking chunk MUST reach caller BEFORE the second chunk is even generated!
+		if !yield(llm.StreamEvent{Type: llm.SEThinkingDelta, Text: "Checking HTTP headers..."}, nil) {
+			return
+		}
+		p.releasedSecondChunk = true
+		if !yield(llm.StreamEvent{Type: llm.SETextDelta, Text: "Here is the live streaming security summary right away."}, nil) {
+			return
+		}
+		_ = yield(llm.StreamEvent{Type: llm.SEMessageDelta, StopReason: "end_turn"}, nil)
+		_ = yield(llm.StreamEvent{Type: llm.SEMessageStop}, nil)
+	}
+}
+
+func TestStreamYieldsThinkingImmediatelyAndFastReasoningCap(t *testing.T) {
+	src := &slowThinkingLiveProvider{}
+	prov := wrapToolSanitizingProvider(src)
+	sawThinkingBeforeSecond := false
+	sawEarlyText := false
+	for ev, err := range prov.Stream(context.Background(), llm.CompletionRequest{
+		Messages: []llm.Message{llm.UserText("hi")},
+	}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == llm.SEThinkingDelta && !src.releasedSecondChunk {
+			sawThinkingBeforeSecond = true
+		}
+		if ev.Type == llm.SETextDelta && ev.Text != "" {
+			sawEarlyText = true
+		}
+	}
+	if !sawThinkingBeforeSecond {
+		t.Fatal("expected SEThinkingDelta to stream with 0ms buffering before subsequent chunks")
+	}
+	if !sawEarlyText {
+		t.Fatal("expected clean SETextDelta >=28 chars to flush immediately")
+	}
+
+	// Verify rewriteOutboundChatCompletions defaults mid-loop tool-continuation turns on GPT-5/o3 to reasoning_effort="low"
+	wireReq := `{"model":"gpt-5.4","tools":[{"type":"function","function":{"name":"Bash"}}],"messages":[{"role":"user","content":"scan"},{"role":"assistant","tool_calls":[{"id":"t1","type":"function","function":{"name":"Bash","arguments":"{}"}}]},{"role":"tool","tool_call_id":"t1","content":"ok"}]}`
+	rewritten, _, _ := rewriteOutboundChatCompletions([]byte(wireReq), false)
+	if !strings.Contains(string(rewritten), `"reasoning_effort":"low"`) {
+		t.Fatalf("expected fast-lane reasoning_effort='low' on tool-result continuation, got %s", string(rewritten))
+	}
+
+	// Explicit user reasoning_effort must never be overridden.
+	wireExplicit := `{"model":"gpt-5.4","reasoning_effort":"high","tools":[{"type":"function","function":{"name":"Bash"}}],"messages":[{"role":"user","content":"scan"},{"role":"assistant","tool_calls":[{"id":"t1","type":"function","function":{"name":"Bash","arguments":"{}"}}]},{"role":"tool","tool_call_id":"t1","content":"ok"}]}`
+	rewrittenExp, _, _ := rewriteOutboundChatCompletions([]byte(wireExplicit), false)
+	if !strings.Contains(string(rewrittenExp), `"reasoning_effort":"high"`) {
+		t.Fatalf("expected explicit reasoning_effort='high' preserved, got %s", string(rewrittenExp))
+	}
+}
