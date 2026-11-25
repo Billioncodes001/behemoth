@@ -27,6 +27,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { notificationError } from "@/i18n/notify-runtime";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
+import { formatWhen } from "@/lib/time-format";
 import type { AgentRequest, AgentRequestKind, AgentRequestStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -81,7 +82,7 @@ function splitRecommendation(details: string): { body: string; recommendation: s
 }
 
 export default function AgentRequestsPage() {
-  const { t, liveT } = useLiveTranslation();
+  const { t, liveT, i18n } = useLiveTranslation();
   const [tab, setTab] = React.useState<AgentRequestStatus | "all">("new");
   const [kind, setKind] = React.useState<AgentRequestKind | "all">("all");
   const [items, setItems] = React.useState<AgentRequest[]>([]);
@@ -207,7 +208,15 @@ export default function AgentRequestsPage() {
           ) : (
             <div className="flex flex-col gap-3">
               {items.map((req) => (
-                <RequestCard key={req.id} req={req} busy={busyId === req.id} t={t} onAct={act} onRemove={remove} />
+                <RequestCard
+                  key={req.id}
+                  req={req}
+                  busy={busyId === req.id}
+                  t={t}
+                  locale={i18n.resolvedLanguage ?? "en"}
+                  onAct={act}
+                  onRemove={remove}
+                />
               ))}
             </div>
           )}
@@ -237,12 +246,14 @@ function RequestCard({
   req,
   busy,
   t,
+  locale,
   onAct,
   onRemove,
 }: {
   req: AgentRequest;
   busy: boolean;
   t: TFunction;
+  locale: string;
   onAct: (req: AgentRequest, status: AgentRequestStatus) => Promise<void>;
   onRemove: (req: AgentRequest) => Promise<void>;
 }) {
@@ -267,7 +278,11 @@ function RequestCard({
           {t(`agentRequests.urgency.${req.urgency}`)}
         </Badge>
         <span className="truncate text-sm font-medium">{req.title}</span>
-        <span className="ml-auto shrink-0 text-muted-foreground text-xs">{req.agent_key}</span>
+        {req.agent_key && (
+          <span className="ml-auto shrink-0 rounded-full border px-2 py-0.5 text-muted-foreground text-xs">
+            {req.agent_key}
+          </span>
+        )}
       </div>
 
       <div className="mt-2 flex flex-col gap-2">
@@ -299,7 +314,9 @@ function RequestCard({
             {t("agentRequests.task")} #{req.task_id}
           </Link>
         )}
-        <span className="text-muted-foreground text-xs">{req.created_at}</span>
+        <time dateTime={req.created_at} title={req.created_at} className="text-muted-foreground text-xs">
+          {formatWhen(req.created_at, locale)}
+        </time>
         <div className="ml-auto flex flex-wrap gap-1.5">
           {req.status !== "new" && req.status !== "dismissed" && (
             <Button variant="outline" size="sm" disabled={busy} onClick={() => void onAct(req, "new")}>
