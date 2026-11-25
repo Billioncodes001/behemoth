@@ -187,7 +187,11 @@ func run() int {
 	case <-ctx.Done():
 	case <-server.RestartRequested():
 		code = selfupdate.ExitRestart
-		shutdown(agent.AbortShutdown)
+		if server.IsLiveUpdateRestart() {
+			shutdown(agent.AbortLiveUpdateReload)
+		} else {
+			shutdown(agent.AbortShutdown)
+		}
 	}
 
 	log.Println("shutting down...")

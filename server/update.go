@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/behemoth/selfupdate"
@@ -24,14 +25,25 @@ import (
 
 // restartCh is closed when upgrade is ready or rollback completes; main then exits via ExitRestart.
 var (
-	restartOnce sync.Once
-	restartCh   = make(chan struct{})
+	restartOnce       sync.Once
+	restartCh         = make(chan struct{})
+	liveUpdateRestart atomic.Bool
 )
 
 // RestartRequested returns a channel that closes when we should exit and let the daemon restart us.
 func RestartRequested() <-chan struct{} { return restartCh }
 
+// IsLiveUpdateRestart reports whether the pending restart is a live-update binary
+// hot-swap (so active agents checkpoint cleanly and auto-resume on boot without
+// emitting a red shutdown interruption banner).
+func IsLiveUpdateRestart() bool { return liveUpdateRestart.Load() }
+
 func requestRestart() { restartOnce.Do(func() { close(restartCh) }) }
+
+func requestLiveUpdateRestart() {
+	liveUpdateRestart.Store(true)
+	requestRestart()
+}
 
 // bootState captures the result of selfupdate.Bootstrap at startup (upgrade succeeded /
 // just rolled back / staged file was discarded), injected by main, exposed to frontend
@@ -321,9 +333,10 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[update] %s → %s 已暂存，即将退出以完成换装", current, rel.TagName)
+		s.persistActiveTurnsForLiveUpdate()
 		// 留一点时间把最后一条进度推给前端，再触发退出。
 		time.Sleep(1500 * time.Millisecond)
-		requestRestart()
+		requestLiveUpdateRestart()
 	}()
 
 	writeJSON(w, 202, map[string]any{"ok": true, "target": rel.TagName})
@@ -342,8 +355,9 @@ func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[update] 已手动回滚到上一版本，即将退出以完成切换")
 	writeJSON(w, 202, map[string]any{"ok": true})
 	go func() {
+		s.persistActiveTurnsForLiveUpdate()
 		time.Sleep(500 * time.Millisecond)
-		requestRestart()
+		requestLiveUpdateRestart()
 	}()
 }
 

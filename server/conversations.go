@@ -243,6 +243,7 @@ type conversationDeleteItem struct {
 
 func (s *Server) cancelConversation(id int64) {
 	busyKey := s.convBusyKey(id)
+	s.unregisterActiveTurn(busyKey)
 	s.chatMu.Lock()
 	cancel := s.chatCancel[busyKey]
 	s.chatMu.Unlock()
@@ -380,6 +381,7 @@ func (s *Server) pgStopConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	busyKey := s.convBusyKey(c.ID)
+	s.unregisterActiveTurn(busyKey)
 	s.chatMu.Lock()
 	cancel := s.chatCancel[busyKey]
 	s.chatMu.Unlock()
@@ -543,6 +545,15 @@ func isTransientConversationError(err error) bool {
 // conversation_activities. Shared by the chat HTTP handler and the P3 scheduler.
 // busyKey clears when the run ends (best-effort in-flight marker).
 func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMessage ...string) {
+	if c != nil {
+		s.registerActiveTurn(persistedInFlightTurn{
+			Kind:           "conversation",
+			BusyKey:        busyKey,
+			ConversationID: c.ID,
+			AgentKey:       c.AgentKey,
+			OriginalMsg:    msg,
+		})
+	}
 	ctx, cancel := s.conversationRunContext(c.ID, busyKey)
 	// Only the human-message handler supplies this field, before adding the
 	// attachment manifest. Scheduler/retest prompts must not be labelled as users.
@@ -557,6 +568,15 @@ func (s *Server) runConversation(c *db.Conversation, msg, busyKey string, userMe
 // fire-and-forget chat path; the P3 trigger queue calls it directly so it can wait
 // for completion before starting the next queued fire for the same agent.
 func (s *Server) runConversationSync(c *db.Conversation, msg, busyKey string) {
+	if c != nil {
+		s.registerActiveTurn(persistedInFlightTurn{
+			Kind:           "conversation",
+			BusyKey:        busyKey,
+			ConversationID: c.ID,
+			AgentKey:       c.AgentKey,
+			OriginalMsg:    msg,
+		})
+	}
 	ctx, cancel := s.conversationRunContext(c.ID, busyKey)
 	s.runConversationTurn(ctx, cancel, c, msg, busyKey)
 }
@@ -575,6 +595,9 @@ func (s *Server) conversationRunContext(id int64, busyKey string) (context.Conte
 
 func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelCauseFunc, c *db.Conversation, msg, busyKey string) {
 	defer func() {
+		if !isLiveUpdateReloadContext(ctx) {
+			s.unregisterActiveTurn(busyKey)
+		}
 		cancel(agent.AbortChatTurnFinished)
 		s.chatMu.Lock()
 		delete(s.chatBusy, busyKey)

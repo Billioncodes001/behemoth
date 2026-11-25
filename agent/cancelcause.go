@@ -69,6 +69,8 @@ var (
 	// Process-level and per-run hard backstop.
 	AbortShutdown = cause("shutdown", "Backend process shutting down",
 		"The backend process received SIGINT or SIGTERM and is restarting, updating, or shutting down. All active Agents are cancelled; any remaining running intents are reset to open on restart")
+	AbortLiveUpdateReload = cause("live_update_reload", "Applying live platform update",
+		"BEHEMOTH is applying a live repository update and seamlessly reloading this session onto the updated runtime from its saved transcript")
 	AbortRunHardTimeout = cause("run_hard_timeout", "Per-run hard timeout triggered",
 		"A single run exceeded both its soft wall-clock budget and grace period, indicating a model request or tool call hung without returning and prevented normal turn-boundary wrap-up. Inspect the last pending tool call before interruption")
 )

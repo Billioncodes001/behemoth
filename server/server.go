@@ -94,13 +94,17 @@ type Server struct {
 	// immediately, so a page reload / proxy timeout can't abort a live run. This
 	// map serializes turns per task — one main-agent run at a time per task, so
 	// concurrent messages don't corrupt the shared exp<id>-main transcript.
-	chatMu   sync.Mutex
-	chatBusy map[string]bool
+	chatMu     sync.Mutex
+	chatBusy   map[string]bool
 	// chatCancel holds the cancel func for each in-flight conversation run (keyed by
 	// convBusyKey), so a manual stop can abort JUST that session's agent run. Set/
 	// cleared alongside chatBusy under chatMu. Aborting a run does NOT touch the P3
 	// trigger queue — the drain goroutine simply proceeds to the next queued fire.
 	chatCancel map[string]context.CancelCauseFunc
+
+	inFlightMu               sync.Mutex
+	activeTurns              map[string]persistedInFlightTurn
+	liveUpdateTurnsPersisted bool
 
 	// triggerQ buffers P3 trigger fires PER AGENT. A per-agent "pump" launches runs up
 	// to a concurrency limit derived from the agent's strategy: serial -> limit 1 (+ optional
@@ -560,7 +564,8 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 		s.seedCredentialProcessor()
 		go s.runCredentialProcessor(s.ctx)
 	}
-	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
+	s.wireInterceptReviewer()     // LLM 兜底审批:未命中拦截规则的命令交给模型判定
+	s.restoreInFlightAgentTurns() // seamlessly resume active Chat & Task-MainAgent sessions across live updates
 	return s
 }
 
@@ -568,17 +573,22 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 // pool supervision to stop before Manager closes the DB.
 func (s *Server) Close() {
 	if s != nil {
-		if s.cancel != nil {
-			s.cancel()
+		closeCause := error(context.Canceled)
+		if IsLiveUpdateRestart() {
+			s.persistActiveTurnsForLiveUpdate()
+			closeCause = agent.AbortLiveUpdateReload
 		}
 		s.chatMu.Lock()
 		for _, cancel := range s.chatCancel {
 			if cancel != nil {
-				cancel(context.Canceled)
+				cancel(closeCause)
 			}
 		}
 		s.chatMu.Unlock()
-		s.engine.Shutdown()
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.engine.ShutdownWithCause(closeCause)
 		s.proxyPoolWG.Wait()
 		if s.c2srv != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -4938,6 +4948,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		ma = s.agentsForTask(t).main
 	}
 	if ma != nil {
+		s.registerActiveTurn(persistedInFlightTurn{
+			Kind:        "task_main",
+			BusyKey:     t.ID,
+			TaskID:      t.ID,
+			MainSeg:     mainSeg,
+			OriginalMsg: req.Message,
+		})
 		// Run the agent on a per-turn cancellable ctx (NOT r.Context()): the turn can
 		// take minutes (multi-tool loop), and binding it to the request lifecycle meant
 		// a page reload / proxy timeout cancelled it mid-run ("context canceled"). The
@@ -4945,6 +4962,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		// handler returns immediately and the browser never needs to hold the request.
 		go func() {
 			defer func() {
+				if !isLiveUpdateReloadContext(ctx) {
+					s.unregisterActiveTurn(t.ID)
+				}
 				s.finishTaskChat(t.ID, cancel)
 			}()
 			// emit every step (thinking/tool_use/tool_result/text/result) so the main
@@ -4977,6 +4997,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelTaskChat(taskID string, cause error) bool {
+	s.unregisterActiveTurn(taskID)
 	s.chatMu.Lock()
 	cancel := s.chatCancel[taskID]
 	if cancel != nil {

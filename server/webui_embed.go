@@ -12,7 +12,9 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,13 +30,24 @@ import (
 var webuiDist embed.FS
 
 type cachedEmbeddedAsset struct {
-	raw   []byte
-	gz    []byte
-	ctype string
-	etag  string
+	raw     []byte
+	gz      []byte
+	ctype   string
+	etag    string
+	modUnix int64
+	size    int64
 }
 
 var webuiAssetCache sync.Map // map[string]*cachedEmbeddedAsset
+
+// ClearWebUICache flushes the in-memory compressed asset cache after a live
+// frontend hot-reload updates server/webui/dist on disk without restarting.
+func ClearWebUICache() {
+	webuiAssetCache.Range(func(k, _ any) bool {
+		webuiAssetCache.Delete(k)
+		return true
+	})
+}
 
 func shouldPrecompressAsset(ext string, size int) bool {
 	if size < 256 {
@@ -76,8 +89,63 @@ func detectAssetContentType(name string, raw []byte) string {
 	return http.DetectContentType(raw)
 }
 
+func buildCachedWebAsset(name string, raw []byte, modUnix, size int64) *cachedEmbeddedAsset {
+	sum := sha256.Sum256(raw)
+	entry := &cachedEmbeddedAsset{
+		raw:     raw,
+		ctype:   detectAssetContentType(name, raw),
+		etag:    `"` + hex.EncodeToString(sum[:8]) + `"`,
+		modUnix: modUnix,
+		size:    size,
+	}
+	if shouldPrecompressAsset(strings.ToLower(path.Ext(name)), len(raw)) {
+		var buf bytes.Buffer
+		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if err == nil {
+			if _, werr := zw.Write(raw); werr == nil && zw.Close() == nil && buf.Len() < len(raw) {
+				entry.gz = buf.Bytes()
+			}
+		}
+	}
+	return entry
+}
+
+// loadLiveDiskWebAsset checks server/webui/dist on disk first so frontend-only
+// Git updates hot-reload in place without restarting the backend process.
+func loadLiveDiskWebAsset(name string) (*cachedEmbeddedAsset, bool) {
+	cleanRel := filepath.FromSlash(strings.TrimPrefix(path.Clean("/"+name), "/"))
+	if cleanRel == "" || cleanRel == "." || strings.Contains(cleanRel, "..") {
+		return nil, false
+	}
+	diskPath := filepath.Join("server", "webui", "dist", cleanRel)
+	st, err := os.Stat(diskPath)
+	if err != nil || st.IsDir() {
+		return nil, false
+	}
+	cacheKey := "disk:" + name
+	modNano := st.ModTime().UnixNano()
+	sz := st.Size()
+	if v, ok := webuiAssetCache.Load(cacheKey); ok {
+		cached := v.(*cachedEmbeddedAsset)
+		if cached.modUnix == modNano && cached.size == sz {
+			return cached, true
+		}
+	}
+	raw, err := os.ReadFile(diskPath)
+	if err != nil {
+		return nil, false
+	}
+	entry := buildCachedWebAsset(name, raw, modNano, sz)
+	webuiAssetCache.Store(cacheKey, entry)
+	return entry, true
+}
+
 func loadEmbeddedAsset(fsys fs.FS, name string) (*cachedEmbeddedAsset, bool) {
-	if v, ok := webuiAssetCache.Load(name); ok {
+	if live, ok := loadLiveDiskWebAsset(name); ok {
+		return live, true
+	}
+	cacheKey := "embed:" + name
+	if v, ok := webuiAssetCache.Load(cacheKey); ok {
 		return v.(*cachedEmbeddedAsset), true
 	}
 	f, err := fsys.Open(name)
@@ -93,22 +161,8 @@ func loadEmbeddedAsset(fsys fs.FS, name string) (*cachedEmbeddedAsset, bool) {
 	if err != nil {
 		return nil, false
 	}
-	sum := sha256.Sum256(raw)
-	entry := &cachedEmbeddedAsset{
-		raw:   raw,
-		ctype: detectAssetContentType(name, raw),
-		etag:  `"` + hex.EncodeToString(sum[:8]) + `"`,
-	}
-	if shouldPrecompressAsset(strings.ToLower(path.Ext(name)), len(raw)) {
-		var buf bytes.Buffer
-		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-		if err == nil {
-			if _, werr := zw.Write(raw); werr == nil && zw.Close() == nil && buf.Len() < len(raw) {
-				entry.gz = buf.Bytes()
-			}
-		}
-	}
-	actual, _ := webuiAssetCache.LoadOrStore(name, entry)
+	entry := buildCachedWebAsset(name, raw, 0, st.Size())
+	actual, _ := webuiAssetCache.LoadOrStore(cacheKey, entry)
 	return actual.(*cachedEmbeddedAsset), true
 }
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -13,6 +14,24 @@ import (
 	"github.com/Autumn-27/norma/harness"
 	"github.com/Autumn-27/norma/llm"
 )
+
+var activeToolExecutions atomic.Int64
+
+// ActiveToolExecutions returns the number of agent tool invocations currently mid-flight
+// across all running chat, planner, and worker sessions so live updates can wait for a
+// clean step boundary before swapping the binary.
+func ActiveToolExecutions() int64 {
+	n := activeToolExecutions.Load()
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+func isLiveUpdateReloadCtx(ctx context.Context) bool {
+	code, _, _, ok := AbortReason(ctx)
+	return ok && code == "live_update_reload"
+}
 
 // captureRun drives one agent turn-to-completion over Session.Prompt and emits a
 // coalesced ActivityRecord per execution step (tool_use / tool_result / text /
@@ -47,6 +66,12 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		}
 	}
 	toolNames := map[string]string{} // tool_use id -> name, to label results
+	inFlightTools := map[string]struct{}{}
+	defer func() {
+		if n := len(inFlightTools); n > 0 {
+			activeToolExecutions.Add(-int64(n))
+		}
+	}()
 
 	var tbuf strings.Builder
 	var tkind string
@@ -87,6 +112,14 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 		if err != nil {
 			flush()
 			if ctx.Err() != nil { // engine/user cancellation, not a provider failure
+				if isLiveUpdateReloadCtx(ctx) {
+					rec(activityWithUsage(db.Activity{
+						Kind:    "thinking",
+						Summary: "Applying live platform update — seamlessly continuing session on updated engine...",
+						Detail:  "Hot-swapping BEHEMOTH runtime to pick up the latest repository update. All completed turns and tool outputs are preserved on disk and execution resumes automatically.",
+					}, lastUsage))
+					return finalText, reason, ctx.Err()
+				}
 				sum, detail := terminalText(ctx, &harness.Terminal{Reason: reason, Err: ctx.Err()}, lastTool)
 				rec(activityWithUsage(db.Activity{Kind: "result", Summary: firstLine(sum, 400), Detail: detail}, lastUsage))
 				return finalText, reason, ctx.Err()
@@ -101,6 +134,10 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 			}
 			flush()
 			toolNames[ev.ToolUse.ID] = ev.ToolUse.Name
+			if _, exists := inFlightTools[ev.ToolUse.ID]; !exists {
+				inFlightTools[ev.ToolUse.ID] = struct{}{}
+				activeToolExecutions.Add(1)
+			}
 			in := string(ev.ToolUse.Input)
 			lastTool.start(ev.ToolUse.ID, ev.ToolUse.Name, in)
 			auditTrace.Start(ev.ToolUse.ID, ev.ToolUse.Name, ev.ToolUse.Input)
@@ -111,6 +148,10 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 				continue
 			}
 			flush()
+			if _, exists := inFlightTools[ev.ToolResult.ToolUseID]; exists {
+				delete(inFlightTools, ev.ToolResult.ToolUseID)
+				activeToolExecutions.Add(-1)
+			}
 			out := blocksText(ev.ToolResult.Content)
 			lastTool.done(ev.ToolResult.ToolUseID)
 			auditTrace.Complete(ev.ToolResult.ToolUseID, out, ev.ToolResult.IsError)
@@ -159,6 +200,24 @@ func captureRunSession(ctx context.Context, s *agentcore.Session, input string, 
 					}
 				}
 				flush() // flush any trailing thinking / non-final text
+				if isLiveUpdateReloadCtx(ctx) && (ev.Terminal.Reason == harness.ReasonAbortedTools || ev.Terminal.Reason == harness.ReasonAbortedStreaming || ev.Terminal.Err != nil) {
+					u := ev.Terminal.Usage
+					rec(db.Activity{
+						Kind:            "thinking",
+						Summary:         "Applying live platform update — seamlessly continuing session on updated engine...",
+						Detail:          "Hot-swapping BEHEMOTH runtime to pick up the latest repository update. All completed turns and tool outputs are preserved on disk and execution resumes automatically.",
+						InputTokens:     &u.InputTokens,
+						OutputTokens:    &u.OutputTokens,
+						CacheReadTokens: &u.CacheReadTokens,
+						CacheWriteTokens: &u.CacheWriteTokens,
+					})
+					if ev.Terminal.Err != nil {
+						rerr = ev.Terminal.Err
+					} else {
+						rerr = ctx.Err()
+					}
+					continue
+				}
 				sum, detail := ev.Terminal.Text, ev.Terminal.Text
 				if sum == "" || ev.Terminal.Reason == harness.ReasonAbortedTools || ev.Terminal.Reason == harness.ReasonAbortedStreaming {
 					sum, detail = terminalText(ctx, ev.Terminal, lastTool)

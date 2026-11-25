@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Autumn-27/behemoth/agent"
 )
 
 const webhookMinCooldown = 20 * time.Second
@@ -268,6 +270,8 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	}
 
 	pkgJSONChanged := false
+	webChanged := false
+	goBackendChanged := false
 	if diffOut, err := exec.CommandContext(ctx, "git", "diff", "--name-only", localSHA+".."+remoteSHA).Output(); err == nil {
 		for _, rel := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
 			rel = strings.TrimSpace(rel)
@@ -277,6 +281,12 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 			if rel == "web/package.json" || rel == "web/package-lock.json" {
 				pkgJSONChanged = true
 			}
+			if strings.HasPrefix(rel, "web/") {
+				webChanged = true
+			}
+			if strings.HasSuffix(rel, ".go") || rel == "go.mod" || rel == "go.sum" || strings.HasPrefix(rel, "db/schema.sql") {
+				goBackendChanged = true
+			}
 			// If an untracked local file exists at an incoming tracked path, back it up so git pull never aborts.
 			if _, stErr := os.Stat(rel); stErr == nil {
 				if lsErr := exec.CommandContext(ctx, "git", "ls-files", "--error-unmatch", rel).Run(); lsErr != nil {
@@ -284,6 +294,10 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				}
 			}
 		}
+	} else {
+		// Conservative fallback if diff inspection failed.
+		goBackendChanged = true
+		webChanged = true
 	}
 
 	if manual {
@@ -295,7 +309,8 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	if len(shortRemote) > 8 {
 		shortRemote = shortRemote[:8]
 	}
-	log.Printf("[git-sync] New repository update detected on origin/main (%s -> %s). Entering maintenance mode and rebuilding...", localSHA[:minInt(8, len(localSHA))], shortRemote)
+	log.Printf("[git-sync] New repository update detected on origin/main (%s -> %s, goBackendChanged=%v, webChanged=%v)...",
+		localSHA[:minInt(8, len(localSHA))], shortRemote, goBackendChanged, webChanged)
 	setMaintenanceUpdating(true, "Pulling latest updates from repository ("+shortRemote+")...", shortRemote)
 
 	if out, err := exec.CommandContext(ctx, "git", "pull", "--ff-only", "origin", "main").CombinedOutput(); err != nil {
@@ -306,14 +321,65 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		return
 	}
 
-	setMaintenanceUpdating(true, "Building updated Web UI & server binary ("+shortRemote+")...", shortRemote)
 	needNpmInstall := "0"
 	if pkgJSONChanged {
 		needNpmInstall = "1"
 	}
+
+	// ZERO-RESTART HOT-RELOAD PATH: when only Web UI, Skills, Docs, or Scripts changed
+	// (no Go backend code modified), rebuild static assets & refresh skills in-place
+	// without restarting the server process — running agents never even pause!
+	if !goBackendChanged {
+		if webChanged {
+			setMaintenanceUpdating(true, "Hot-reloading Web UI assets in place ("+shortRemote+")...", shortRemote)
+			hotWebCmd := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf(`
+				set -e
+				if command -v npm >/dev/null 2>&1 && [ -d web ]; then
+					if [ ! -d web/node_modules ] || [ "%s" = "1" ]; then
+						(cd web && npm install --no-audit --no-fund)
+					fi
+					(cd web && npm run build:static && mkdir -p ../server/webui && rm -rf ../server/webui/dist.next && cp -r out ../server/webui/dist.next && rm -rf ../server/webui/dist.prev && ( [ ! -d ../server/webui/dist ] || mv ../server/webui/dist ../server/webui/dist.prev ) && mv ../server/webui/dist.next ../server/webui/dist && rm -rf ../server/webui/dist.prev)
+				fi
+			`, needNpmInstall))
+			if out, err := hotWebCmd.CombinedOutput(); err != nil {
+				errMsg := fmt.Sprintf("hot web build failed: %v (%s)", err, firstLine(string(out), 300))
+				log.Printf("[git-sync] %s", errMsg)
+				setMaintenanceOutcome("build_failed", errMsg)
+				setMaintenanceUpdating(false, "", "")
+				return
+			}
+			ClearWebUICache()
+		}
+		if s != nil {
+			s.syncDiscoveredSkillsVisibility()
+			s.ensureDefaultWordlists()
+		}
+		if headOut, herr := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output(); herr == nil {
+			maintState.mu.Lock()
+			maintState.CurrentSHA = strings.TrimSpace(string(headOut))
+			maintState.TargetSHA = ""
+			maintState.mu.Unlock()
+		}
+		setMaintenanceOutcome("up_to_date", "")
+		setMaintenanceUpdating(false, "", "")
+		log.Printf("[git-sync] Hot-reloaded %s in place with zero process restart — all running agents & services remained uninterrupted.", shortRemote)
+		return
+	}
+
+	// GO BACKEND BINARY UPDATE PATH: build Web UI only if web/** changed or server/webui/dist is absent,
+	// compile the new binary, wait for active agent tool calls to hit a clean step boundary,
+	// and trigger a seamless live-update handoff (which auto-resumes all running agents on boot).
+	needWebBuild := "0"
+	if webChanged {
+		needWebBuild = "1"
+	} else if _, stErr := os.Stat(filepath.Join("server", "webui", "dist", "index.html")); stErr != nil {
+		needWebBuild = "1"
+	}
+
+	setMaintenanceUpdating(true, "Building updated server binary ("+shortRemote+")...", shortRemote)
 	buildCmd := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf(`
 		set -e
-		if command -v npm >/dev/null 2>&1 && [ -d web ]; then
+		if [ "%s" = "1" ] && command -v npm >/dev/null 2>&1 && [ -d web ]; then
 			if [ ! -d web/node_modules ] || [ "%s" = "1" ]; then
 				(cd web && npm install --no-audit --no-fund)
 			fi
@@ -334,6 +400,11 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				(cd web && npm run build)
 			fi
 		fi
+		# Ensure go:embed all:webui/dist always has a valid directory even on fresh checkouts
+		mkdir -p server/webui/dist
+		if [ ! -f server/webui/dist/index.html ]; then
+			echo "<!doctype html><title>BEHEMOTH</title>" > server/webui/dist/index.html
+		fi
 		BUILD_VER="$(git describe --tags --abbrev=0 2>/dev/null || echo 2.4.0)"
 		BUILD_VER="${BUILD_VER#v}"
 		CGO_ENABLED=0 go build -tags embedui -trimpath -ldflags "-s -w -X main.version=${BUILD_VER}" -o behemoth.new ./cmd/behemoth
@@ -342,7 +413,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		# Legacy keep-alive: pre-rename supervisors and Docker entrypoints still exec ./artex.
 		# rm+cp (not cp in place) avoids ETXTBSY while the old binary is still running.
 		rm -f artex && cp -f behemoth artex 2>/dev/null || true
-	`, needNpmInstall))
+	`, needWebBuild, needNpmInstall))
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("build failed: %v (%s)", err, firstLine(string(out), 300))
 		log.Printf("[git-sync] %s", errMsg)
@@ -351,10 +422,32 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		return
 	}
 
+	if activeTools := agent.ActiveToolExecutions(); activeTools > 0 {
+		setMaintenanceUpdating(true, fmt.Sprintf("Waiting for %d active agent tool step(s) to finish cleanly before hot-swap (%s)...", activeTools, shortRemote), shortRemote)
+		waitForCleanAgentStepBoundary(ctx, 45*time.Second)
+	}
+
+	if s != nil {
+		s.persistActiveTurnsForLiveUpdate()
+	}
 	setMaintenanceOutcome("updated_restarting", "")
-	setMaintenanceUpdating(true, "Restarting BEHEMOTH services to apply update ("+shortRemote+")...", shortRemote)
-	log.Printf("[git-sync] Update %s built successfully. Signaling supervisor to restart...", shortRemote)
-	time.AfterFunc(1500*time.Millisecond, func() {
-		requestRestart()
+	setMaintenanceUpdating(true, "Applying live update & seamlessly resuming active agents ("+shortRemote+")...", shortRemote)
+	log.Printf("[git-sync] Update %s built successfully. Triggering seamless live-update handoff...", shortRemote)
+	time.AfterFunc(800*time.Millisecond, func() {
+		requestLiveUpdateRestart()
 	})
+}
+
+func waitForCleanAgentStepBoundary(ctx context.Context, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		if agent.ActiveToolExecutions() == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }

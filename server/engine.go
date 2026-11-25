@@ -312,13 +312,20 @@ func (e *Engine) StopTask(taskID string) {
 // Shutdown stops all task execution contexts and waits for every task runtime
 // goroutine to exit cleanly before database/filesystem teardown.
 func (e *Engine) Shutdown() {
+	e.ShutdownWithCause(context.Canceled)
+}
+
+func (e *Engine) ShutdownWithCause(cause error) {
 	if e == nil {
 		return
+	}
+	if cause == nil {
+		cause = context.Canceled
 	}
 	e.execMu.Lock()
 	for _, cancel := range e.execCancel {
 		if cancel != nil {
-			cancel(context.Canceled)
+			cancel(cause)
 		}
 	}
 	e.execMu.Unlock()
@@ -1397,7 +1404,7 @@ func taskExecutionPaused(cause error) bool {
 	}
 	switch abort.Code {
 	case "paused_by_schedule", "paused_by_user", "paused_by_orchestrator", "paused_by_proxy", "paused_on_reload", "paused_race_guard",
-		"queued_for_admission", "llm_unavailable_queued", "task_deleted":
+		"queued_for_admission", "llm_unavailable_queued", "task_deleted", "live_update_reload", "shutdown":
 		return true
 	default:
 		return false

@@ -143,7 +143,7 @@ func TestAbortCausesAreWellFormed(t *testing.T) {
 		AbortGoalMet, AbortSettleDrainTimeout, AbortNoResultStop, AbortKilledByPlanner, AbortWorkPausedByUser,
 		AbortWorkCancelledByUser, AbortWorkFinished, AbortPausedRaceGuard,
 		AbortChatStoppedByUser, AbortChatPausedWithTask, AbortChatTurnFinished,
-		AbortShutdown, AbortRunHardTimeout,
+		AbortShutdown, AbortLiveUpdateReload, AbortRunHardTimeout,
 	}
 	seen := map[string]bool{}
 	for _, abort := range all {
@@ -162,6 +162,19 @@ func TestAbortCausesAreWellFormed(t *testing.T) {
 func TestFirstLineCapsByRuneNotByte(t *testing.T) {
 	if got := firstLine(strings.Repeat("恢复", 10), 5); got != "恢复恢复恢…" {
 		t.Fatalf("firstLine split a Unicode character: %q", got)
+	}
+}
+
+func TestLiveUpdateReloadCauseDetection(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(AbortLiveUpdateReload)
+	if !isLiveUpdateReloadCtx(ctx) {
+		t.Fatal("expected isLiveUpdateReloadCtx=true for AbortLiveUpdateReload")
+	}
+	ctxShut, cancelShut := context.WithCancelCause(context.Background())
+	cancelShut(AbortShutdown)
+	if isLiveUpdateReloadCtx(ctxShut) {
+		t.Fatal("expected isLiveUpdateReloadCtx=false for plain AbortShutdown")
 	}
 	if got := firstLine("头\n尾", 100); got != "头" {
 		t.Fatalf("firstLine did not stop at newline: %q", got)
