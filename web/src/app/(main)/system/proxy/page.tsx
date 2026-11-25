@@ -86,7 +86,10 @@ export default function ProxyPoolPage() {
   const [scraperInterval, setScraperInterval] = React.useState("30");
   const [scraperMaxProxies, setScraperMaxProxies] = React.useState("25");
   const [scraperMaxLatency, setScraperMaxLatency] = React.useState("4500");
-  const [scraperProtoMode, setScraperProtoMode] = React.useState<"both" | "socks5" | "http">("both");
+  const [scraperProtoMode, setScraperProtoMode] = React.useState<"both" | "socks5" | "http">("http");
+  const [scraperCountryMode, setScraperCountryMode] = React.useState<"us_preferred" | "us_only" | "all">("us_preferred");
+  const [webshareApiKey, setWebshareApiKey] = React.useState("");
+  const [webshareKeySaved, setWebshareKeySaved] = React.useState(false);
   const [scraperBusy, setScraperBusy] = React.useState(false);
   const scraperConfigHydratedRef = React.useRef(false);
   const logEndRef = React.useRef<HTMLDivElement | null>(null);
@@ -111,6 +114,7 @@ export default function ProxyPoolPage() {
       }
       if (scraperSnap) {
         setScraper(scraperSnap);
+        setWebshareKeySaved(Boolean(scraperSnap.config?.webshare_key_saved));
         if (!scraperConfigHydratedRef.current && scraperSnap.config) {
           scraperConfigHydratedRef.current = true;
           setScraperEnabled(Boolean(scraperSnap.config.enabled));
@@ -119,10 +123,14 @@ export default function ProxyPoolPage() {
           setScraperInterval(String(scraperSnap.config.interval_minutes ?? 30));
           setScraperMaxProxies(String(scraperSnap.config.max_proxies ?? 25));
           setScraperMaxLatency(String(scraperSnap.config.max_latency_ms ?? 4500));
-          const protos = scraperSnap.config.protocols || ["socks5", "http"];
+          const protos = scraperSnap.config.protocols || ["http"];
           if (protos.includes("socks5") && protos.includes("http")) setScraperProtoMode("both");
           else if (protos.includes("socks5")) setScraperProtoMode("socks5");
           else setScraperProtoMode("http");
+          const cm = scraperSnap.config.country_mode;
+          if (cm === "us_only" || cm === "all" || cm === "us_preferred") {
+            setScraperCountryMode(cm);
+          }
         }
       }
       if (poolStats) {
@@ -440,9 +448,12 @@ export default function ProxyPoolPage() {
     }
   };
 
-  const buildScraperConfigPayload = (overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean }>) => {
+  const buildScraperConfigPayload = (
+    overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean; webshare_api_key: string }>,
+  ) => {
     const protocols =
-      scraperProtoMode === "socks5" ? ["socks5"] : scraperProtoMode === "http" ? ["http"] : ["socks5", "http"];
+      scraperProtoMode === "socks5" ? ["socks5"] : scraperProtoMode === "http" ? ["http"] : ["http", "socks5"];
+    const keyToSend = overrides?.webshare_api_key !== undefined ? overrides.webshare_api_key : webshareApiKey.trim();
     return {
       enabled: overrides?.enabled !== undefined ? overrides.enabled : scraperEnabled,
       ai_agent_enabled: overrides?.ai_agent_enabled !== undefined ? overrides.ai_agent_enabled : scraperAIEnabled,
@@ -451,11 +462,13 @@ export default function ProxyPoolPage() {
       max_proxies: Math.max(3, Math.min(100, parseInt(scraperMaxProxies) || 25)),
       max_latency_ms: Math.max(500, Math.min(15000, parseInt(scraperMaxLatency) || 4500)),
       protocols,
+      country_mode: scraperCountryMode,
+      ...(keyToSend ? { webshare_api_key: keyToSend } : {}),
     };
   };
 
   const handleSaveScraperConfig = async (
-    overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean }>,
+    overrides?: Partial<{ enabled: boolean; ai_agent_enabled: boolean; webshare_api_key: string }>,
     silent = false,
   ) => {
     setScraperBusy(true);
@@ -463,6 +476,10 @@ export default function ProxyPoolPage() {
       const payload = buildScraperConfigPayload(overrides);
       const snap = await api.proxyV2.saveScraperConfig(payload);
       setScraper(snap);
+      setWebshareKeySaved(Boolean(snap?.config?.webshare_key_saved));
+      if (webshareApiKey.trim()) {
+        setWebshareApiKey("");
+      }
       if (!silent) {
         toast.success(
           payload.enabled
@@ -1001,7 +1018,7 @@ export default function ProxyPoolPage() {
                   )}
                 </CardTitle>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Combines 16+ live GitHub &amp; API proxy feeds (<code className="bg-muted px-1 rounded">monosans</code>, <code className="bg-muted px-1 rounded">proxifly</code>, <code className="bg-muted px-1 rounded">TheSpeedX</code>, <code className="bg-muted px-1 rounded">ProxyScrape Elite SSL</code>, <code className="bg-muted px-1 rounded">jetkai</code>, <code className="bg-muted px-1 rounded">hideip.me</code>) with 2-stage TCP + strict HTTPS TLS certificate &amp; Elite non-transparent verification, plus the autonomous <strong>Proxy Harvester</strong> AI agent that continuously discovers new feeds.
+                  Crawls 30+ live proxy APIs, premium providers&apos; daily free lists (<code className="bg-muted px-1 rounded">IPRoyal</code>, <code className="bg-muted px-1 rounded">FineProxy</code>, <code className="bg-muted px-1 rounded">Webshare Free Tier</code>), JS-decoded HTML tables (<code className="bg-muted px-1 rounded">US-Proxy</code>, <code className="bg-muted px-1 rounded">ProxyNova US</code>, <code className="bg-muted px-1 rounded">SSLProxies</code>, <code className="bg-muted px-1 rounded">Spys.me</code>), and live JSON APIs (<code className="bg-muted px-1 rounded">GeoNode US</code>, <code className="bg-muted px-1 rounded">ProxyScrape v4 US</code>, <code className="bg-muted px-1 rounded">RoundProxies</code>) — prioritizing fast <strong>HTTP/HTTPS CONNECT</strong> &amp; <strong>United States</strong> exit IPs compatible with 100% of tools.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -1040,12 +1057,13 @@ export default function ProxyPoolPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 {[
                   { label: "Sources Polled", val: scraper?.sources_polled ?? 0 },
                   { label: "Raw Candidates", val: scraper?.candidates_found ?? 0 },
                   { label: "Stage-1 TCP Alive", val: scraper?.tcp_alive ?? 0 },
                   { label: "Stage-2 HTTPS Elite", val: scraper?.https_verified ?? 0 },
+                  { label: "US Exit Verified", val: scraper?.us_verified ?? 0 },
                   { label: "Active in Pool", val: scraper?.added_to_pool ?? 0 },
                 ].map((m) => (
                   <div key={m.label} className="rounded-lg border bg-muted/20 p-3">
@@ -1098,15 +1116,26 @@ export default function ProxyPoolPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
                 <div className="space-y-1.5">
                   <Label className="text-xs">Protocols</Label>
                   <Select value={scraperProtoMode} onValueChange={(v) => setScraperProtoMode(v as any)}>
                     <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="both">SOCKS5 + HTTPS</SelectItem>
+                      <SelectItem value="http">HTTP / HTTPS Only (Universal)</SelectItem>
+                      <SelectItem value="both">HTTP Preferred + SOCKS5</SelectItem>
                       <SelectItem value="socks5">SOCKS5 Only</SelectItem>
-                      <SelectItem value="http">HTTPS Only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Country Targeting</Label>
+                  <Select value={scraperCountryMode} onValueChange={(v) => setScraperCountryMode(v as any)}>
+                    <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="us_preferred">Prefer US First (+ Global Top-Up)</SelectItem>
+                      <SelectItem value="us_only">Strict United States Only</SelectItem>
+                      <SelectItem value="all">All Countries (Fastest Global)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1155,6 +1184,50 @@ export default function ProxyPoolPage() {
                   <Button size="sm" variant="outline" disabled={scraperBusy} onClick={() => void handleSaveScraperConfig()}>
                     Save
                   </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-muted/15 p-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-xs font-medium">Optional Premium Free-Tier API: Webshare (10 Dedicated Datacenter HTTP Proxies)</Label>
+                    {webshareKeySaved && (
+                      <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
+                        API Token Connected
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Paste a free Webshare API token (<code className="bg-muted px-1 rounded">proxy.webshare.io</code> — 10 dedicated fast HTTP proxies, no credit card) to auto-sync them alongside public US/HTTP feeds.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Input
+                    type="password"
+                    placeholder={webshareKeySaved ? "Token saved (enter new to replace)" : "Webshare API Token (optional)"}
+                    className="h-8 text-xs w-60 font-mono"
+                    value={webshareApiKey}
+                    onChange={(e) => setWebshareApiKey(e.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={scraperBusy || !webshareApiKey.trim()}
+                    onClick={() => void handleSaveScraperConfig()}
+                  >
+                    Save Token
+                  </Button>
+                  {webshareKeySaved && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive text-xs"
+                      disabled={scraperBusy}
+                      onClick={() => void handleSaveScraperConfig({ webshare_api_key: "CLEAR" })}
+                    >
+                      Clear
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -1212,6 +1285,9 @@ export default function ProxyPoolPage() {
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium truncate">{src.name}</span>
                           <Badge variant="outline" className="text-[10px] uppercase">{src.protocol}</Badge>
+                          {src.country_hint && (
+                            <Badge variant="secondary" className="text-[10px] uppercase">{src.country_hint}</Badge>
+                          )}
                           {src.added_by_agent && (
                             <Badge variant="secondary" className="text-[10px] gap-0.5">
                               <Sparkles className="w-2.5 h-2.5" /> AI Discovered

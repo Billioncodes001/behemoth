@@ -1510,6 +1510,8 @@ export const api = {
           max_proxies: number;
           max_latency_ms: number;
           protocols: string[];
+          country_mode?: "us_preferred" | "us_only" | "all";
+          webshare_key_saved?: boolean;
         };
         running: boolean;
         ai_running: boolean;
@@ -1518,6 +1520,8 @@ export const api = {
         candidates_found: number;
         tcp_alive: number;
         https_verified: number;
+        us_verified?: number;
+        http_verified?: number;
         added_to_pool: number;
         last_run_at?: string;
         next_run_at?: string;
@@ -1527,6 +1531,8 @@ export const api = {
           name: string;
           url: string;
           protocol: string;
+          country_hint?: string;
+          multi_protocol?: boolean;
           priority: boolean;
           builtin: boolean;
           added_by_agent?: boolean;
@@ -1550,6 +1556,8 @@ export const api = {
       max_proxies: number;
       max_latency_ms: number;
       protocols: string[];
+      country_mode?: "us_preferred" | "us_only" | "all";
+      webshare_api_key?: string;
     }) => put<any>(`/v2/proxy-pool/scraper/config`, cfg),
     runScraperNow: () => post<any>(`/v2/proxy-pool/scraper/run`, {}),
     runScraperAgentNow: () =>
