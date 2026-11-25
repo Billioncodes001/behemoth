@@ -36,11 +36,16 @@ type SandboxConfig struct {
 	WorkDir string
 	// ExtraArgs are appended to `docker run` (e.g. "--cap-add=NET_RAW").
 	ExtraArgs []string
+	// GPUs requests host GPU passthrough when non-empty, e.g. "all" or
+	// "device=0". Requires the NVIDIA container toolkit on the host; empty means
+	// no `--gpus` flag at all (CPU-only hosts behave exactly as before).
+	GPUs string
 }
 
 // SandboxConfigFromEnv reads the sandbox settings from the environment, with
 // safe defaults. env: BEHEMOTH_SANDBOX_IMAGE, BEHEMOTH_SANDBOX_NETWORK,
-// BEHEMOTH_SANDBOX_TIMEOUT (seconds), BEHEMOTH_SANDBOX_ARGS (space-separated).
+// BEHEMOTH_SANDBOX_TIMEOUT (seconds), BEHEMOTH_SANDBOX_ARGS (space-separated),
+// BEHEMOTH_SANDBOX_GPUS ("all", "device=0", "0,1").
 func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	cfg := SandboxConfig{
 		Image:   strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_IMAGE")),
@@ -62,6 +67,7 @@ func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_ARGS")); v != "" {
 		cfg.ExtraArgs = strings.Fields(v)
 	}
+	cfg.GPUs = strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_GPUS"))
 	return cfg
 }
 
@@ -93,6 +99,9 @@ func (c SandboxConfig) dockerArgs(command string) []string {
 		"-w", "/work",
 		"-e", "HOME=/work",
 	}
+	if gpus := strings.TrimSpace(c.GPUs); gpus != "" {
+		args = append(args, "--gpus", gpus)
+	}
 	args = append(args, c.ExtraArgs...)
 	args = append(args, image, "sh", "-lc", command)
 	return args
@@ -102,12 +111,16 @@ func (c SandboxConfig) dockerArgs(command string) []string {
 // the model can learn the sandbox exists; calls fail with a usable message when
 // docker is missing.
 func SandboxExecTool(cfg SandboxConfig) actool.CoreTool {
+	desc := "Run ONE command inside a throwaway Docker container (image " + cfg.Image +
+		", network " + cfg.Network + "), with the workspace mounted at /work. " +
+		"Use it for heavyweight or risky tooling so the host is untouched; use Bash for quick local work, " +
+		"and shell_open for interactive programs. The container is removed after the run."
+	if cfg.GPUs != "" {
+		desc += " A host GPU is passed through (docker --gpus " + cfg.GPUs + "), so CUDA/OpenCL cracker builds (hashcat, john-jumbo) work here."
+	}
 	return actool.Build(actool.Spec{
-		Name: "sandbox_exec",
-		Description: "Run ONE command inside a throwaway Docker container (image " + cfg.Image +
-			", network " + cfg.Network + "), with the workspace mounted at /work. " +
-			"Use it for heavyweight or risky tooling so the host is untouched; use Bash for quick local work, " +
-			"and shell_open for interactive programs. The container is removed after the run.",
+		Name:        "sandbox_exec",
+		Description: desc,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -162,6 +175,9 @@ func runSandboxExec(ctx context.Context, cfg SandboxConfig, in json.RawMessage) 
 		"output":     string(out),
 		"elapsed_ms": elapsed.Milliseconds(),
 		"timed_out":  errors.Is(runCtx.Err(), context.DeadlineExceeded),
+	}
+	if cfg.GPUs != "" {
+		result["gpus"] = cfg.GPUs
 	}
 	var exitErr *exec.ExitError
 	switch {

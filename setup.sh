@@ -11,6 +11,8 @@
 #   ./setup.sh docker                                    # Docker Compose setup
 #   ./setup.sh build [--target os/arch] [--release]      # Build frontend + single binary
 #   ./setup.sh update                                    # Pull & rebuild/update deployment
+#   ./setup.sh arsenal                                   # Re-provision offensive CLI arsenal
+#   sudo ./setup.sh gpu                                  # Provision GPU cracking stack (driver, CUDA/OpenCL, hashcat, john-jumbo)
 #   ./setup.sh reset-password [-p 'NewPass!']            # Reset BEHEMOTH admin password in DB
 # ============================================================================
 set -euo pipefail
@@ -73,6 +75,7 @@ install_system_deps() {
     }
   fi
   install_security_arsenal
+  install_gpu_cracking_stack
   ok "System dependencies and security tools installed"
 }
 
@@ -169,6 +172,64 @@ install_security_arsenal() {
     nuclei -update-templates -silent >/dev/null 2>&1 &
   fi
   ok "Security CLI arsenal ready"
+}
+
+# GPU cracking stack: NVIDIA driver + OpenCL ICD + container toolkit + upstream
+# hashcat + John jumbo (OpenCL). Opt-in: `./setup.sh gpu`, or automatically from
+# `full` when an NVIDIA device is present / BEHEMOTH_GPU=1. Idempotent.
+has_nvidia_gpu() {
+  [[ -n "${BEHEMOTH_GPU:-}" ]] && return 0
+  command -v nvidia-smi >/dev/null 2>&1 && return 0
+  command -v lspci >/dev/null 2>&1 && lspci 2>/dev/null | grep -qiE 'nvidia|3d controller' && return 0
+  return 1
+}
+
+install_gpu_cracking_stack() {
+  has_nvidia_gpu || { info "No NVIDIA GPU detected; skipping GPU stack"; return 0; }
+  info "Provisioning GPU cracking stack (driver, OpenCL, container runtime, hashcat, john-jumbo)..."
+  export DEBIAN_FRONTEND=noninteractive
+
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    apt-get install -y -qq ubuntu-drivers-common >/dev/null 2>&1 || true
+    ubuntu-drivers autoinstall >/dev/null 2>&1 || warn "Driver autoinstall failed — install the NVIDIA driver manually, then rerun"
+  fi
+  apt-get install -y -qq linux-headers-"$(uname -r)" >/dev/null 2>&1 || true
+
+  # OpenCL ICD loader: the driver ships the NVIDIA ICD, we only need the loader.
+  apt-get install -y -qq ocl-icd-libopencl1 clinfo hashcat >/dev/null 2>&1 || true
+
+  # Container GPU passthrough so sandbox_exec can see the device.
+  if ! command -v nvidia-ctk >/dev/null 2>&1; then
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+      | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+      | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+      > /etc/apt/sources.list.d/nvidia-container-toolkit.list 2>/dev/null || true
+    apt-get update -y -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq nvidia-container-toolkit >/dev/null 2>&1 || warn "nvidia-container-toolkit install failed"
+  fi
+  if command -v nvidia-ctk >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+    nvidia-ctk runtime configure --runtime=docker >/dev/null 2>&1 || true
+    systemctl restart docker >/dev/null 2>&1 || true
+  fi
+
+  # John the Ripper jumbo (the distro package is CPU-only and stale).
+  if [[ ! -x /usr/local/bin/john-jumbo ]]; then
+    local build_dir
+    build_dir="$(mktemp -d)"
+    if git clone --depth 1 https://github.com/openwall/john.git "$build_dir/john" >/dev/null 2>&1; then
+      ( cd "$build_dir/john/src" && ./configure >/dev/null 2>&1 && make -s clean >/dev/null 2>&1 && make -sj"$(nproc)" >/dev/null 2>&1 ) || true
+      if [[ -x "$build_dir/john/run/john" ]]; then
+        install -m 0755 "$build_dir/john/run/john" /usr/local/bin/john-jumbo
+        ok "Installed john-jumbo -> /usr/local/bin/john-jumbo"
+      else
+        warn "john-jumbo build failed; distro john stays available"
+      fi
+    fi
+    rm -rf "$build_dir"
+  fi
+
+  ok "GPU stack ready — set BEHEMOTH_SANDBOX_GPUS=all to expose the GPU to sandbox_exec"
 }
 
 install_golang() {
@@ -347,7 +408,7 @@ while [[ $# -gt 0 ]]; do
     --domain|-d) DOMAIN="${2:-_}"; shift 2 ;;
     --ssl|--tls) ENABLE_SSL=1; shift ;;
     -p|--new-password) NEWPASS="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) shift ;;
   esac
 done
@@ -404,11 +465,16 @@ case "$CMD" in
     banner
     install_security_arsenal
     ;;
+  gpu)
+    banner
+    require_root gpu
+    install_gpu_cracking_stack
+    ;;
   reset-password)
     banner
     reset_admin_password "$NEWPASS"
     ;;
   *)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
     ;;
 esac

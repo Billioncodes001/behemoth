@@ -15,12 +15,16 @@ func TestSandboxConfigFromEnvDefaults(t *testing.T) {
 	t.Setenv("BEHEMOTH_SANDBOX_NETWORK", "")
 	t.Setenv("BEHEMOTH_SANDBOX_TIMEOUT", "")
 	t.Setenv("BEHEMOTH_SANDBOX_ARGS", "")
+	t.Setenv("BEHEMOTH_SANDBOX_GPUS", "")
 	cfg := SandboxConfigFromEnv("/tmp/work")
 	if cfg.Image != "kalilinux/kali-last-release" || cfg.Network != "host" || cfg.WorkDir != "/tmp/work" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
 	if cfg.Timeout != 10*time.Minute {
 		t.Fatalf("timeout = %s; want 10m", cfg.Timeout)
+	}
+	if cfg.GPUs != "" {
+		t.Fatalf("gpus = %q; want empty (CPU-only host)", cfg.GPUs)
 	}
 }
 
@@ -29,12 +33,16 @@ func TestSandboxConfigFromEnvOverrides(t *testing.T) {
 	t.Setenv("BEHEMOTH_SANDBOX_NETWORK", "none")
 	t.Setenv("BEHEMOTH_SANDBOX_TIMEOUT", "45")
 	t.Setenv("BEHEMOTH_SANDBOX_ARGS", "--cap-add=NET_RAW --memory=1g")
+	t.Setenv("BEHEMOTH_SANDBOX_GPUS", "all")
 	cfg := SandboxConfigFromEnv("/work")
 	if cfg.Image != "my/kali:latest" || cfg.Network != "none" || cfg.Timeout != 45*time.Second {
 		t.Fatalf("config = %+v", cfg)
 	}
 	if len(cfg.ExtraArgs) != 2 || cfg.ExtraArgs[0] != "--cap-add=NET_RAW" {
 		t.Fatalf("extra args = %v", cfg.ExtraArgs)
+	}
+	if cfg.GPUs != "all" {
+		t.Fatalf("gpus = %q; want all", cfg.GPUs)
 	}
 }
 
@@ -47,6 +55,19 @@ func TestSandboxDockerArgs(t *testing.T) {
 		if !strings.Contains(args, want) {
 			t.Fatalf("docker args %q missing %q", args, want)
 		}
+	}
+	if strings.Contains(args, "--gpus") {
+		t.Fatalf("docker args %q should not request GPUs when unset", args)
+	}
+}
+
+// A configured GPU passthrough must reach docker before the image name, so the
+// flag is a run option and not part of the command.
+func TestSandboxDockerArgsGPUs(t *testing.T) {
+	cfg := SandboxConfig{Image: "img:1", Network: "host", WorkDir: "/data/run", GPUs: "all"}
+	args := cfg.dockerArgs("hashcat -b")
+	if got := strings.Join(args, " "); !strings.Contains(got, "--gpus all img:1 sh -lc hashcat -b") {
+		t.Fatalf("docker args %q missing GPU passthrough before image", got)
 	}
 }
 

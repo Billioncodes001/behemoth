@@ -99,6 +99,7 @@ Environment:
 | `BEHEMOTH_SANDBOX_NETWORK` | `host` | docker network mode (`host`/`bridge`/`none`) |
 | `BEHEMOTH_SANDBOX_TIMEOUT` | `600` | seconds per run |
 | `BEHEMOTH_SANDBOX_ARGS` | — | extra `docker run` flags (e.g. `--cap-add=NET_RAW`) |
+| `BEHEMOTH_SANDBOX_GPUS` | — | GPU passthrough for the container (`all`, `device=0`); needs the NVIDIA container toolkit. See [GPU_HOST.md](GPU_HOST.md) |
 
 If the docker CLI is missing the tool returns a clear "fall back to Bash"
 error. Interactive programs still belong in the existing `shell_*` PTY session
