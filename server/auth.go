@@ -151,6 +151,9 @@ func extractToken(r *http.Request) string {
 	if c, err := r.Cookie("behemoth_token"); err == nil && c.Value != "" {
 		return c.Value
 	}
+	if c, err := r.Cookie("artex_token"); err == nil && c.Value != "" {
+		return c.Value
+	}
 	return r.URL.Query().Get("token")
 }
 

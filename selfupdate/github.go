@@ -14,7 +14,7 @@ import (
 )
 
 // Repo is the GitHub repository used for release and live-sync updates.
-const Repo = "Billioncodes001/mybehemoth"
+const Repo = "Billioncodes001/behemoth"
 
 // latestURL 是 GitHub 的"最新正式版"接口。它会自动跳过 prerelease 和 draft。
 const latestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"

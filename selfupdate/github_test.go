@@ -23,8 +23,8 @@ func TestFetchLatestUsesForkRelease(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{
 			"tag_name":"v0.3.16",
 			"assets":[
-				{"name":"behemoth-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/Billioncodes001/mybehemoth/releases/download/v0.3.16/behemoth-0.3.16-linux-arm64.zip"},
-				{"name":"SHA256SUMS","browser_download_url":"https://github.com/Billioncodes001/mybehemoth/releases/download/v0.3.16/SHA256SUMS"}
+				{"name":"behemoth-0.3.16-linux-arm64.zip","browser_download_url":"https://github.com/Billioncodes001/behemoth/releases/download/v0.3.16/behemoth-0.3.16-linux-arm64.zip"},
+				{"name":"SHA256SUMS","browser_download_url":"https://github.com/Billioncodes001/behemoth/releases/download/v0.3.16/SHA256SUMS"}
 			]
 		}`))}, nil
 	})}

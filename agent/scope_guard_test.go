@@ -248,3 +248,58 @@ func TestScopedHTTPToolSuccess(t *testing.T) {
 		t.Fatal("out-of-scope URL should produce an error result")
 	}
 }
+
+func TestScopeGuardBlocksDNSRebindingAndWrapsSandboxExec(t *testing.T) {
+	g := NewScopeGuard([]string{"*.example.test", "hiddenservice.onion"}, nil, 0)
+	g.SetResolver(func(host string) []string {
+		if host == "rebind.evil.org" {
+			// Dual-A-record DNS rebinding attempt (loopback + external IP)
+			return []string{"127.0.0.1", "203.0.113.99"}
+		}
+		if host == "rebind.example.test" {
+			return []string{"127.0.0.1"}
+		}
+		return []string{"93.184.216.34"}
+	})
+	if d := g.AuthorizeHost("rebind.evil.org", 443); d.Allowed {
+		t.Fatal("dual-A-record DNS rebinding host bypassed ScopeGuard")
+	}
+	if d := g.AuthorizeHost("rebind.example.test", 443); d.Allowed {
+		t.Fatal("in-scope domain resolving to 127.0.0.1 via DNS rebinding must be denied")
+	}
+	if d := g.AuthorizeHost("hiddenservice.onion", 80); !d.Allowed {
+		t.Fatalf("explicit in-scope .onion host should pass AuthorizeHost, got: %s", d.Reason)
+	}
+	if d := g.AuthorizeHost("other.onion", 80); d.Allowed {
+		t.Fatal("out-of-scope .onion host must be denied")
+	}
+
+	// Verify wrapScopeGuardTools wraps sandbox_exec just like Bash.
+	ran := 0
+	tools := wrapScopeGuardTools([]actool.CoreTool{countingTool("sandbox_exec", &ran)}, g)
+	res, err := tools[0].Call(context.Background(), json.RawMessage(`{"command":"nmap -sV 8.8.8.8"}`), nil)
+	if err != nil || !res.IsError || ran != 0 {
+		t.Fatalf("expected sandbox_exec out-of-scope denial (err=%v isError=%v ran=%d)", err, res.IsError, ran)
+	}
+}
+
+func TestScopedHTTPToolRoutesThroughConfiguredProxy(t *testing.T) {
+	proxyCalled := false
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("proxied-body"))
+	}))
+	defer proxySrv.Close()
+
+	g := NewScopeGuard([]string{"example.test"}, nil, 0)
+	g.SetResolver(fixedResolver("93.184.216.34"))
+	tool := ScopedHTTPToolWithProxy(g, func() string { return proxySrv.URL }, "")
+	res, err := tool.Call(context.Background(), json.RawMessage(`{"url":"http://example.test/check"}`), nil)
+	if err != nil || res.IsError {
+		t.Fatalf("proxied ScopedHTTPTool failed: err=%v out=%s", err, blocksText(res.Content))
+	}
+	if !proxyCalled || !strings.Contains(blocksText(res.Content), "proxied-body") {
+		t.Fatalf("expected request to traverse configured proxy, proxyCalled=%v out=%s", proxyCalled, blocksText(res.Content))
+	}
+}

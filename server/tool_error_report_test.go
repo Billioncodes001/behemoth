@@ -79,3 +79,34 @@ func TestToolErrorTrackerIgnoresEmptyToolAndNilStore(t *testing.T) {
 		t.Fatalf("expected no requests, got %d", len(store.created))
 	}
 }
+
+func TestToolErrorTrackerResetsOnSuccessAndSkipsBenignOperationalErrors(t *testing.T) {
+	store := &fakeToolErrorStore{}
+	tr := newToolErrorTracker()
+
+	// Two failures followed by a success must reset the consecutive streak.
+	tr.recordScoped(store, "nuclei", "worker", 11, "", "dial timeout")
+	tr.recordScoped(store, "nuclei", "worker", 11, "", "dial timeout")
+	tr.resetScoped(11, "", "nuclei")
+	if tr.recordScoped(store, "nuclei", "worker", 11, "", "dial timeout") {
+		t.Fatal("expected resetScoped on success to clear streak")
+	}
+
+	// Benign operational outcomes (Bash non-zero grep, scope denial, budget cap) must not file false tool_error alerts.
+	for i := 0; i < 5; i++ {
+		tr.recordScoped(store, "Bash", "auto", 0, "conv-1", "exit status 1")
+		tr.recordScoped(store, "WebFetch", "worker", 12, "", "out of scope: target is not in scope")
+		tr.recordScoped(store, "http_request", "worker", 12, "", "Run budget exhausted: tool-call budget exhausted")
+	}
+	if len(store.created) != 0 {
+		t.Fatalf("expected 0 false-positive tool_error reports, got %d", len(store.created))
+	}
+
+	// Separate chat sessions (taskID=0) keep independent counters.
+	tr.recordScoped(store, "mcp__custom", "auto", 0, "conv-A", "rpc error")
+	tr.recordScoped(store, "mcp__custom", "auto", 0, "conv-A", "rpc error")
+	tr.recordScoped(store, "mcp__custom", "auto", 0, "conv-B", "rpc error")
+	if len(store.created) != 0 {
+		t.Fatalf("separate chat sessions should not share failure counts, got %d", len(store.created))
+	}
+}

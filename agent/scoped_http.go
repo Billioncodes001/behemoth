@@ -35,6 +35,14 @@ const (
 // ScopedHTTPTool builds the http_request tool bound to guard g. When g is nil the
 // tool still works (unscoped tasks), it just enforces nothing.
 func ScopedHTTPTool(g *ScopeGuard) actool.CoreTool {
+	return ScopedHTTPToolWithProxy(g, nil, "")
+}
+
+// ScopedHTTPToolWithProxy builds the scope-enforced http_request tool and routes
+// outbound requests through BEHEMOTH's live egress/recording proxy (Proxy Pool,
+// Exclusive Tor, MITM Capture, or Fail-Closed guard) so target probes never leak
+// the server's real IP or skip packet capture.
+func ScopedHTTPToolWithProxy(g *ScopeGuard, resolveProxy func() string, caCert string) actool.CoreTool {
 	return actool.Build(actool.Spec{
 		Name: "http_request",
 		Description: "Scope-enforced HTTP request. Authorizes the URL and every redirect hop against the task scope, " +
@@ -59,13 +67,30 @@ func ScopedHTTPTool(g *ScopeGuard) actool.CoreTool {
 		Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision {
 			return acperm.Allowed()
 		},
-		Run: func(ctx context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
-			return runScopedHTTP(ctx, g, in), nil
+		Run: func(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+			var proxyURL string
+			if resolveProxy != nil {
+				proxyURL = strings.TrimSpace(resolveProxy())
+			}
+			effectiveCA := strings.TrimSpace(caCert)
+			if tc != nil && len(tc.Env) > 0 {
+				for _, kv := range tc.Env {
+					if proxyURL == "" && (strings.HasPrefix(kv, "HTTP_PROXY=") || strings.HasPrefix(kv, "HTTPS_PROXY=") || strings.HasPrefix(kv, "ALL_PROXY=")) {
+						_, v, _ := strings.Cut(kv, "=")
+						proxyURL = strings.TrimSpace(v)
+					}
+					if effectiveCA == "" && strings.HasPrefix(kv, "SSL_CERT_FILE=") {
+						_, v, _ := strings.Cut(kv, "=")
+						effectiveCA = strings.TrimSpace(v)
+					}
+				}
+			}
+			return runScopedHTTP(ctx, g, in, proxyURL, effectiveCA), nil
 		},
 	})
 }
 
-func runScopedHTTP(ctx context.Context, g *ScopeGuard, in json.RawMessage) actool.Result {
+func runScopedHTTP(ctx context.Context, g *ScopeGuard, in json.RawMessage, proxyURL, caCert string) actool.Result {
 	var args struct {
 		URL             string            `json:"url"`
 		Method          string            `json:"method"`
@@ -121,7 +146,8 @@ func runScopedHTTP(ctx context.Context, g *ScopeGuard, in json.RawMessage) actoo
 		req.Header.Set("User-Agent", "BEHEMOTH/scope-guard")
 	}
 
-	client := g.HTTPClient(timeout)
+	client := g.HTTPClientWithProxy(timeout, proxyURL, caCert)
+	defer client.CloseIdleConnections()
 	if args.FollowRedirects != nil && !*args.FollowRedirects {
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	}

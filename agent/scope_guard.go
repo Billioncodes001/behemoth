@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -315,15 +317,30 @@ func (g *ScopeGuard) AuthorizeHost(host string, port int) ScopeDecision {
 	}
 
 	// Resolve to IPs. Literal IPs skip DNS. An empty result under a scope is a
-	// deny: we cannot prove the host is authorized.
+	// deny: we cannot prove the host is authorized (except explicit .onion targets
+	// which resolve remotely over Tor SOCKS5h rather than local DNS).
+	literalIP := net.ParseIP(host)
+	isLiteralLocal := strings.EqualFold(host, "localhost") || (literalIP != nil && (literalIP.IsLoopback() || literalIP.IsUnspecified()))
 	ips := []string{}
-	if ip := net.ParseIP(host); ip != nil {
-		ips = []string{ip.String()}
-	} else if resolve != nil {
+	if literalIP != nil {
+		ips = []string{literalIP.String()}
+	} else if resolve != nil && !strings.HasSuffix(host, ".onion") {
 		ips = resolve(host)
 	}
 	if unscoped {
 		return ScopeDecision{Allowed: true, Reason: "in scope (no scope configured)", Host: host, Port: port, IPs: ips}
+	}
+	if len(ips) == 0 && strings.HasSuffix(host, ".onion") {
+		for _, rule := range hosts {
+			if rule.matches(host, port) {
+				return ScopeDecision{Allowed: true, Reason: "in scope (.onion)", Host: host, Port: port}
+			}
+		}
+		for _, rule := range urls {
+			if rule.host.matches(host, port) {
+				return ScopeDecision{Allowed: true, Reason: "in scope (.onion URL rule)", Host: host, Port: port}
+			}
+		}
 	}
 	if len(ips) == 0 {
 		return ScopeDecision{Reason: "cannot resolve host '" + host + "' — denied (fail-closed DNS)", Host: host, Port: port}
@@ -339,15 +356,21 @@ func (g *ScopeGuard) AuthorizeHost(host string, port int) ScopeDecision {
 				return ScopeDecision{Reason: "address " + ipText + " matches deny network " + deny.String(), Host: host, Port: port, IPs: ips}
 			}
 		}
+		// Prevent DNS rebinding & dual-A-record bypasses: non-local domain names
+		// resolving via DNS to 127.0.0.0/8, ::1, or 0.0.0.0 must NEVER get the
+		// literal-localhost bypass or short-circuit checks on sibling A records.
+		if (ip.IsLoopback() || ip.IsUnspecified()) && !isLiteralLocal {
+			return ScopeDecision{Reason: "DNS rebinding to local address " + ipText + " not allowed", Host: host, Port: port, IPs: ips}
+		}
 		if ip.IsLoopback() && !allowLoopback {
 			return ScopeDecision{Reason: "loopback address " + ipText + " not allowed", Host: host, Port: port, IPs: ips}
 		}
 		if ip.IsPrivate() && !allowPrivate && !ip.IsLoopback() {
 			return ScopeDecision{Reason: "private address " + ipText + " not allowed", Host: host, Port: port, IPs: ips}
 		}
-		if allowLoopback && (ip.IsLoopback() || ip.IsUnspecified()) {
-			// 127.0.0.1 / ::1 / 0.0.0.0 are the agent's own host (recording proxy,
-			// locally started listeners), not engagement targets: never scope-checked.
+		if allowLoopback && isLiteralLocal && (ip.IsLoopback() || ip.IsUnspecified()) {
+			// Literal localhost / 127.0.0.1 / ::1 / 0.0.0.0 are the agent's own host
+			// (recording proxy, locally started listeners), not engagement targets.
 			return ScopeDecision{Allowed: true, Reason: "local address", Host: host, Port: port, IPs: ips}
 		}
 	}
@@ -562,18 +585,60 @@ func (g *ScopeGuard) CheckCommand(command string) ScopeDecision {
 
 // ---------- HTTP client with redirect re-authorization ----------
 
+func isLiteralLocalHostname(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if h == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
+}
+
 // HTTPClient returns a client that re-authorizes (and re-rate-limits) every
 // redirect hop. A 302 to an out-of-scope host fails the request instead of
 // silently leaving the allowlist.
 func (g *ScopeGuard) HTTPClient(timeout time.Duration) *http.Client {
+	return g.HTTPClientWithProxy(timeout, "", "")
+}
+
+// HTTPClientWithProxy builds a scope-enforced HTTP client that also routes through
+// the active outbound/recording proxy (Proxy Pool, Exclusive Tor, MITM Traffic Capture,
+// or Fail-Closed local forwarder) and trusts caCert when MITM capture is active.
+func (g *ScopeGuard) HTTPClientWithProxy(timeout time.Duration, proxyURL, caCert string) *http.Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	tr := &http.Transport{
+		Proxy:               nil, // never inherit ambient process env implicitly
+		TLSHandshakeTimeout: 15 * time.Second,
+	}
+	if p := strings.TrimSpace(proxyURL); p != "" {
+		if pu, err := url.Parse(p); err == nil && pu.Host != "" {
+			tr.Proxy = http.ProxyURL(pu)
+		}
+	}
+	if ca := strings.TrimSpace(caCert); ca != "" {
+		if pemBytes, err := os.ReadFile(ca); err == nil {
+			pool, sysErr := x509.SystemCertPool()
+			if sysErr != nil || pool == nil {
+				pool = x509.NewCertPool()
+			}
+			if pool.AppendCertsFromPEM(pemBytes) {
+				tr.TLSClientConfig = &tls.Config{RootCAs: pool}
+			}
+		}
+	}
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if len(via) > 0 && !isLiteralLocalHostname(via[0].URL.Hostname()) && isLiteralLocalHostname(req.URL.Hostname()) {
+				return fmt.Errorf("redirect from external host %s to local address %s denied", via[0].URL.Hostname(), req.URL.Hostname())
 			}
 			if g == nil {
 				return nil
@@ -700,7 +765,7 @@ func (t *scopeGuardedTool) Call(ctx context.Context, in json.RawMessage, tc *act
 // authorize extracts the target-bearing field for the tool and checks it.
 func (t *scopeGuardedTool) authorize(ctx context.Context, in json.RawMessage) ScopeDecision {
 	switch t.Name() {
-	case "Bash":
+	case "Bash", "sandbox_exec":
 		var args struct {
 			Command string `json:"command"`
 		}
@@ -733,7 +798,7 @@ func wrapScopeGuardTools(tools []actool.CoreTool, g *ScopeGuard) []actool.CoreTo
 	out := make([]actool.CoreTool, len(tools))
 	for i, t := range tools {
 		switch t.Name() {
-		case "Bash", "WebFetch":
+		case "Bash", "sandbox_exec", "WebFetch":
 			out[i] = &scopeGuardedTool{CoreTool: t, guard: g}
 		default:
 			out[i] = t

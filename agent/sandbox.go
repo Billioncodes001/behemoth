@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,14 +43,24 @@ type SandboxConfig struct {
 	GPUs string
 }
 
+func envFirstNonEmpty(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // SandboxConfigFromEnv reads the sandbox settings from the environment, with
 // safe defaults. env: BEHEMOTH_SANDBOX_IMAGE, BEHEMOTH_SANDBOX_NETWORK,
 // BEHEMOTH_SANDBOX_TIMEOUT (seconds), BEHEMOTH_SANDBOX_ARGS (space-separated),
-// BEHEMOTH_SANDBOX_GPUS ("all", "device=0", "0,1").
+// BEHEMOTH_SANDBOX_GPUS ("all", "device=0", "0,1"). Legacy ARTEX_SANDBOX_*
+// variables are honored as fallbacks.
 func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	cfg := SandboxConfig{
-		Image:   strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_IMAGE")),
-		Network: strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_NETWORK")),
+		Image:   envFirstNonEmpty("BEHEMOTH_SANDBOX_IMAGE", "ARTEX_SANDBOX_IMAGE"),
+		Network: envFirstNonEmpty("BEHEMOTH_SANDBOX_NETWORK", "ARTEX_SANDBOX_NETWORK"),
 		Timeout: 10 * time.Minute,
 		WorkDir: workDir,
 	}
@@ -59,15 +70,15 @@ func SandboxConfigFromEnv(workDir string) SandboxConfig {
 	if cfg.Network == "" {
 		cfg.Network = "host"
 	}
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_TIMEOUT")); v != "" {
+	if v := envFirstNonEmpty("BEHEMOTH_SANDBOX_TIMEOUT", "ARTEX_SANDBOX_TIMEOUT"); v != "" {
 		if secs, err := time.ParseDuration(v + "s"); err == nil && secs > 0 {
 			cfg.Timeout = secs
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_ARGS")); v != "" {
+	if v := envFirstNonEmpty("BEHEMOTH_SANDBOX_ARGS", "ARTEX_SANDBOX_ARGS"); v != "" {
 		cfg.ExtraArgs = strings.Fields(v)
 	}
-	cfg.GPUs = strings.TrimSpace(os.Getenv("BEHEMOTH_SANDBOX_GPUS"))
+	cfg.GPUs = envFirstNonEmpty("BEHEMOTH_SANDBOX_GPUS", "ARTEX_SANDBOX_GPUS")
 	return cfg
 }
 
@@ -80,6 +91,29 @@ func (c SandboxConfig) Available() bool {
 // dockerArgs builds the `docker run` argument list for one command. Pure so the
 // mapping is unit-testable without a daemon.
 func (c SandboxConfig) dockerArgs(command string) []string {
+	return c.dockerArgsWithEnv(command, nil)
+}
+
+const sandboxContainerCACertPath = "/etc/behemoth-mitm-ca.pem"
+
+func rewriteLoopbackProxyForBridge(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return raw, false
+	}
+	h := strings.ToLower(u.Hostname())
+	if h != "127.0.0.1" && h != "localhost" && h != "::1" {
+		return raw, false
+	}
+	if port := u.Port(); port != "" {
+		u.Host = "host.docker.internal:" + port
+	} else {
+		u.Host = "host.docker.internal"
+	}
+	return u.String(), true
+}
+
+func (c SandboxConfig) dockerArgsWithEnv(command string, toolEnv []string) []string {
 	image := c.Image
 	if image == "" {
 		image = "kalilinux/kali-last-release"
@@ -99,6 +133,53 @@ func (c SandboxConfig) dockerArgs(command string) []string {
 		"-w", "/work",
 		"-e", "HOME=/work",
 	}
+
+	// Forward live proxy & MITM CA environment variables so commands inside the
+	// sandbox container honor Proxy Pool, Exclusive Tor, MITM Capture, and the
+	// 503 Fail-Closed Proxy Guard instead of leaking the host's real IP.
+	var hostCACert string
+	needsHostGateway := false
+	var extraEnv []string
+	for _, kv := range toolEnv {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || strings.TrimSpace(v) == "" {
+			continue
+		}
+		switch k {
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy":
+			if network == "bridge" {
+				var bridged bool
+				v, bridged = rewriteLoopbackProxyForBridge(v)
+				if bridged {
+					needsHostGateway = true
+				}
+			}
+			extraEnv = append(extraEnv, k+"="+v)
+		case "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY", "PIP_BREAK_SYSTEM_PACKAGES":
+			extraEnv = append(extraEnv, k+"="+v)
+		case "SSL_CERT_FILE":
+			if _, err := os.Stat(v); err == nil {
+				hostCACert = v
+			}
+		}
+	}
+	if needsHostGateway {
+		args = append(args, "--add-host=host.docker.internal:host-gateway")
+	}
+	if hostCACert != "" {
+		args = append(args,
+			"-v", hostCACert+":"+sandboxContainerCACertPath+":ro",
+			"-e", "SSL_CERT_FILE="+sandboxContainerCACertPath,
+			"-e", "CURL_CA_BUNDLE="+sandboxContainerCACertPath,
+			"-e", "REQUESTS_CA_BUNDLE="+sandboxContainerCACertPath,
+			"-e", "GIT_SSL_CAINFO="+sandboxContainerCACertPath,
+			"-e", "NODE_EXTRA_CA_CERTS="+sandboxContainerCACertPath,
+		)
+	}
+	for _, e := range extraEnv {
+		args = append(args, "-e", e)
+	}
+
 	if gpus := strings.TrimSpace(c.GPUs); gpus != "" {
 		args = append(args, "--gpus", gpus)
 	}
@@ -134,13 +215,17 @@ func SandboxExecTool(cfg SandboxConfig) actool.CoreTool {
 		Permissions: func(context.Context, json.RawMessage, acperm.Context) acperm.Decision {
 			return acperm.Allowed()
 		},
-		Run: func(ctx context.Context, in json.RawMessage, _ *actool.ToolContext) (actool.Result, error) {
-			return runSandboxExec(ctx, cfg, in), nil
+		Run: func(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
+			var toolEnv []string
+			if tc != nil {
+				toolEnv = tc.Env
+			}
+			return runSandboxExec(ctx, cfg, in, toolEnv), nil
 		},
 	})
 }
 
-func runSandboxExec(ctx context.Context, cfg SandboxConfig, in json.RawMessage) actool.Result {
+func runSandboxExec(ctx context.Context, cfg SandboxConfig, in json.RawMessage, toolEnv []string) actool.Result {
 	var args struct {
 		Command        string `json:"command"`
 		TimeoutSeconds int    `json:"timeout_seconds"`
@@ -164,7 +249,7 @@ func runSandboxExec(ctx context.Context, cfg SandboxConfig, in json.RawMessage) 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "docker", cfg.dockerArgs(args.Command)...)
+	cmd := exec.CommandContext(runCtx, "docker", cfg.dockerArgsWithEnv(args.Command, toolEnv)...)
 	started := time.Now()
 	out, err := cmd.CombinedOutput()
 	elapsed := time.Since(started)

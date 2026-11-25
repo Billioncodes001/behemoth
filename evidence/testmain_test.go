@@ -2,34 +2,38 @@ package evidence
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 
 	"github.com/Autumn-27/behemoth/db"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// Initialize an explicitly configured fresh database before taking the same
-// suite lock as db, agent and server. Hold it on one pinned connection.
+// Acquire the shared suite lock (7337741002) on a pinned connection BEFORE
+// running db.Open so startup DDL never collides with parallel package tests.
 func TestMain(m *testing.M) {
 	if os.Getenv("BEHEMOTH_PG_DSN") == "" {
 		os.Exit(m.Run())
 	}
 	os.Exit(runEvidenceSuite(m))
 }
+
 func runEvidenceSuite(m *testing.M) int {
-	pg, err := db.Open(os.Getenv("BEHEMOTH_PG_DSN"))
+	dsn := os.Getenv("BEHEMOTH_PG_DSN")
+	if pool, err := sql.Open("pgx", dsn); err == nil {
+		defer pool.Close()
+		if conn, cerr := pool.Conn(context.Background()); cerr == nil {
+			defer conn.Close()
+			if _, lerr := conn.ExecContext(context.Background(), `SELECT pg_advisory_lock(7337741002)`); lerr == nil {
+				defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(7337741002)`) //nolint:errcheck
+			}
+		}
+	}
+	pg, err := db.Open(dsn)
 	if err != nil {
 		panic(err)
 	}
 	defer pg.Close()
-	conn, err := pg.Conn(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-	if _, err = conn.ExecContext(context.Background(), `SELECT pg_advisory_lock(7337741002)`); err != nil {
-		panic(err)
-	}
-	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(7337741002)`)
 	return m.Run()
 }

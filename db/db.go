@@ -169,6 +169,14 @@ func Open(dsn string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
+	if err := d.EnsureLLMUsageTable(); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("ensure llm_usage: %w", err)
+	}
+	if err := d.EnsureAgentRequestKinds(); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("ensure agent_requests kinds: %w", err)
+	}
 	return d, nil
 }
 
@@ -628,7 +636,7 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 
 // seedDefaultInterceptRulesV4 eliminates false-positive built-in interception rules
 // that blocked legitimate reconnaissance wordlists (e.g. "admin/delete" inside
-// directory enumeration scripts) and workspace file cleanup under /root/mybehemoth/data,
+// directory enumeration scripts) and workspace file cleanup under /root/behemoth/data,
 // while keeping host OS destructive-command protections strictly enabled.
 func (d *DB) seedDefaultInterceptRulesV4() error {
 	if v, _, _ := d.GetSetting("intercept_default_rules_v4"); v == "done" {
@@ -645,7 +653,7 @@ func (d *DB) seedDefaultInterceptRulesV4() error {
 		`(?i)https?://[^\s"']+/(?:clear|wipe|flush|purge|truncate|drop|destroy|factory[-_]reset|reset[-_]all)(?:[/?#"'\s]|$)`,
 	)
 	// 2) Scope rm rules to critical host root directories so cleaning up recon subdirectories
-	//    inside the session workspace (including /root/mybehemoth/data/sessions/...) is allowed.
+	//    inside the session workspace (including /root/behemoth/data/sessions/...) is allowed.
 	_, _ = d.Exec(`UPDATE intercept_rules SET pattern = $2 WHERE name = $1`,
 		"[Built-in] Recursive forced deletion rm -rf",
 		`(?i)\brm\b[^|\n;&]{0,80}(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|--recursive|--no-preserve-root)\s+["']?(?:/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/home|/root)(?:["'\s/;\n]|$)`,

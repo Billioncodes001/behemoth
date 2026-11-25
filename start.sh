@@ -93,7 +93,7 @@ start_tmux_all() {
   sleep 1
 
   local run_next=1
-  if [ -f /etc/nginx/sites-enabled/behemoth.conf ] && [ "${BEHEMOTH_FORCE_NEXT_SERVER:-0}" != "1" ]; then
+  if { [ -f /etc/nginx/sites-enabled/behemoth.conf ] || [ -f /etc/nginx/sites-enabled/artex.conf ]; } && [ "${BEHEMOTH_FORCE_NEXT_SERVER:-0}" != "1" ]; then
     # Nginx serves the embedded single-binary UI directly on :8787; skip duplicate Node server.
     run_next=0
   fi

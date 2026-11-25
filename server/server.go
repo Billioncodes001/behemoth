@@ -558,7 +558,7 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 			}
 		}
 		s.seedCredentialProcessor()
-		go s.runCredentialProcessor()
+		go s.runCredentialProcessor(s.ctx)
 	}
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s

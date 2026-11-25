@@ -186,7 +186,7 @@ import urllib.request
 import ssl
 
 SSL_CTX = ssl.create_default_context()
-UA = "BEHEMOTH-VulnIntel-MCP/2.2 (+https://github.com/Billioncodes001/mybehemoth)"
+UA = "BEHEMOTH-VulnIntel-MCP/2.4 (+https://github.com/Billioncodes001/behemoth)"
 
 def http_json(url, method="GET", payload=None, timeout=15):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None

@@ -71,8 +71,15 @@ func isGoRunDir(dir string) bool {
 	return false
 }
 
+func lookupEnvWithLegacy(primary, legacy string) string {
+	if v, set := os.LookupEnv(primary); set {
+		return strings.TrimSpace(v)
+	}
+	return strings.TrimSpace(os.Getenv(legacy))
+}
+
 // Path returns the config file path. Resolution order:
-//  1. env BEHEMOTH_CONFIG (explicit override)
+//  1. env BEHEMOTH_CONFIG (or legacy ARTEX_CONFIG when BEHEMOTH_CONFIG is unset)
 //  2. ./config.json in the current working directory (running from the project
 //     dir — robust no matter where `go run` placed the temp/cached binary)
 //  3. config.json next to the executable (a distributed binary keeps it beside)
@@ -80,7 +87,7 @@ func isGoRunDir(dir string) bool {
 // The first existing file wins. If none exist, the CWD path is returned so the
 // "not found" message points at the project dir the user most likely expected.
 func Path() string {
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_CONFIG")); v != "" {
+	if v := lookupEnvWithLegacy("BEHEMOTH_CONFIG", "ARTEX_CONFIG"); v != "" {
 		return v
 	}
 	var candidates []string
@@ -115,7 +122,7 @@ func Load() Config {
 // The directory is created if it does not exist.
 func SkillDir() string {
 	var d string
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_SKILL_DIR")); v != "" {
+	if v := lookupEnvWithLegacy("BEHEMOTH_SKILL_DIR", "ARTEX_SKILL_DIR"); v != "" {
 		d = v
 	} else if v := strings.TrimSpace(Load().SkillDir); v != "" {
 		d = v
@@ -135,18 +142,26 @@ func SkillDir() string {
 // instead of silently connecting to a wrong default. source describes where the
 // DSN came from (for startup logging).
 func PostgresDSN() (dsn, source string, err error) {
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_PG_DSN")); v != "" {
-		return v, "environment variable BEHEMOTH_PG_DSN", nil
+	if v, set := os.LookupEnv("BEHEMOTH_PG_DSN"); set {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v), "environment variable BEHEMOTH_PG_DSN", nil
+		}
+	} else if v := strings.TrimSpace(os.Getenv("ARTEX_PG_DSN")); v != "" {
+		return v, "environment variable ARTEX_PG_DSN (legacy fallback)", nil
 	}
-	if h := strings.TrimSpace(os.Getenv("BEHEMOTH_PG_HOST")); h != "" {
-		port, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("BEHEMOTH_PG_PORT")))
+	if h := lookupEnvWithLegacy("BEHEMOTH_PG_HOST", "ARTEX_PG_HOST"); h != "" {
+		port, _ := strconv.Atoi(lookupEnvWithLegacy("BEHEMOTH_PG_PORT", "ARTEX_PG_PORT"))
+		pw := os.Getenv("BEHEMOTH_PG_PASSWORD")
+		if _, set := os.LookupEnv("BEHEMOTH_PG_PASSWORD"); !set {
+			pw = os.Getenv("ARTEX_PG_PASSWORD")
+		}
 		envDB := Database{
 			Host:     h,
 			Port:     port,
-			User:     strings.TrimSpace(os.Getenv("BEHEMOTH_PG_USER")),
-			Password: os.Getenv("BEHEMOTH_PG_PASSWORD"),
-			DBName:   strings.TrimSpace(os.Getenv("BEHEMOTH_PG_DB")),
-			SSLMode:  strings.TrimSpace(os.Getenv("BEHEMOTH_PG_SSLMODE")),
+			User:     lookupEnvWithLegacy("BEHEMOTH_PG_USER", "ARTEX_PG_USER"),
+			Password: pw,
+			DBName:   lookupEnvWithLegacy("BEHEMOTH_PG_DB", "ARTEX_PG_DB"),
+			SSLMode:  lookupEnvWithLegacy("BEHEMOTH_PG_SSLMODE", "ARTEX_PG_SSLMODE"),
 		}
 		if envDB.DBName == "" {
 			envDB.DBName = "behemoth"

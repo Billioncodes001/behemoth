@@ -60,16 +60,21 @@ func resolveBudgetLimits(agentKey string) BudgetLimits {
 // of the budget is to stop *probing*, not to prevent the run from persisting what
 // it already learned.
 var budgetWriteBackTools = map[string]bool{
-	"insert_assets":   true,
-	"record_fact":     true,
-	"report_finding":  true,
-	"mark_done":       true,
-	"prove_goal":      true,
-	"add_intent":      true,
-	"set_goals":       true,
-	"set_constraints": true,
-	"TodoWrite":       true,
-	"Skill":           true,
+	"insert_assets":                          true,
+	"record_fact":                            true,
+	"report_finding":                         true,
+	"update_finding":                         true,
+	"bind_finding_traffic":                   true,
+	"save_verified_exploit_to_patch_monitor": true,
+	"save_artifact":                          true,
+	"report_need":                            true,
+	"mark_done":                              true,
+	"prove_goal":                             true,
+	"add_intent":                             true,
+	"set_goals":                              true,
+	"set_constraints":                        true,
+	"TodoWrite":                              true,
+	"Skill":                                  true,
 }
 
 // RunBudget tracks one run's token and tool-call spend against its limits.

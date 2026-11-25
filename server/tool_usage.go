@@ -16,10 +16,10 @@ type toolUsageRecorder interface {
 	InsertToolUsage(*db.ToolUsage) error
 }
 
-// toolErrorHook is invoked after every catalog tool call that returns an error
-// result. It is wired to Server.handleToolError at startup (see server.go) and
-// turns repeated failures into automatic tool_error agent requests.
-var toolErrorHook func(toolKey, agentKey string, taskID int64, errMsg string)
+// toolErrorHook is invoked after every catalog tool call. When ok == true, it
+// resets consecutive failure counters for that tool+scope; when ok == false, it
+// turns repeated genuine tool failures into automatic tool_error agent requests.
+var toolErrorHook func(toolKey, agentKey string, taskID int64, sessionID string, ok bool, errMsg string)
 
 // meteredTool records one row immediately before a catalog tool is invoked. It
 // embeds the resolved tool so schema overrides, defaults and permission behavior
@@ -30,6 +30,13 @@ type meteredTool struct {
 	toolKey  string
 	agentKey string
 	ri       agent.RunInfo
+}
+
+func (m *meteredTool) AcceptsRawInput() bool {
+	if ra, ok := m.CoreTool.(interface{ AcceptsRawInput() bool }); ok {
+		return ra.AcceptsRawInput()
+	}
+	return false
 }
 
 func meterTool(t actool.CoreTool, recorder toolUsageRecorder, toolKey, agentKey string, ri agent.RunInfo) actool.CoreTool {
@@ -56,14 +63,18 @@ func (m *meteredTool) Call(ctx context.Context, input json.RawMessage, tc *actoo
 		log.Printf("[toolusage] insert %s: %v", m.toolKey, err)
 	}
 	res, callErr := m.CoreTool.Call(ctx, input, tc)
-	if toolErrorHook != nil && (callErr != nil || res.IsError) {
-		msg := ""
-		if callErr != nil {
-			msg = callErr.Error()
+	if toolErrorHook != nil {
+		if callErr != nil || res.IsError {
+			msg := ""
+			if callErr != nil {
+				msg = callErr.Error()
+			} else {
+				msg = res.Flatten()
+			}
+			toolErrorHook(m.toolKey, m.agentKey, m.ri.TaskID, m.ri.SessionID, false, truncateToolErrorText(msg))
 		} else {
-			msg = res.Flatten()
+			toolErrorHook(m.toolKey, m.agentKey, m.ri.TaskID, m.ri.SessionID, true, "")
 		}
-		toolErrorHook(m.toolKey, m.agentKey, m.ri.TaskID, truncateToolErrorText(msg))
 	}
 	return res, callErr
 }

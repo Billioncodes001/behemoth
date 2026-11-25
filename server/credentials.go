@@ -41,14 +41,14 @@ func (s *Server) seedCredentialProcessor() {
 	}
 	_ = s.m.pg.SetBool(flag, true)
 }
-func (s *Server) runCredentialProcessor() {
+func (s *Server) runCredentialProcessor(ctx context.Context) {
 	// Events wake the worker immediately. The slow ticker is only a recovery
 	// scan for rows created before a notification or after a process restart.
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		case <-s.credentialWake:
@@ -60,9 +60,9 @@ func (s *Server) runCredentialProcessor() {
 		if err != nil || a == nil || !a.Enabled {
 			continue
 		}
-		item, err := s.m.pg.ClaimCredentialJob(s.ctx, s.m.pg.GetBool(db.SettingCredentialTraffic, false), 0)
+		item, err := s.m.pg.ClaimCredentialJob(ctx, s.m.pg.GetBool(db.SettingCredentialTraffic, false), 0)
 		if err != nil {
-			if s.ctx.Err() == nil {
+			if ctx.Err() == nil {
 				log.Printf("[credentials] queue: %v", err)
 			}
 			continue
@@ -70,7 +70,7 @@ func (s *Server) runCredentialProcessor() {
 		if item == nil {
 			continue
 		}
-		s.processCredentialJob(s.ctx, item)
+		s.processCredentialJob(ctx, item)
 	}
 }
 func (s *Server) processCredentialJob(parent context.Context, item *db.Intelligence) {

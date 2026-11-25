@@ -82,8 +82,10 @@ func (s *Server) handleMaintenanceStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) configuredWebhookSecret() string {
-	if v := strings.TrimSpace(os.Getenv("BEHEMOTH_WEBHOOK_SECRET")); v != "" {
-		return v
+	for _, envKey := range []string{"BEHEMOTH_WEBHOOK_SECRET", "ARTEX_WEBHOOK_SECRET"} {
+		if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+			return v
+		}
 	}
 	if s != nil && s.m != nil && s.m.pg != nil {
 		if v, ok, _ := s.m.pg.GetSetting("webhook_secret"); ok && strings.TrimSpace(v) != "" {
@@ -97,9 +99,11 @@ func verifyGitWebhookAuth(r *http.Request, secret string, body []byte) bool {
 	if secret == "" {
 		return true
 	}
-	if tok := strings.TrimSpace(r.Header.Get("X-Behemoth-Webhook-Token")); tok != "" {
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(secret)) == 1 {
-			return true
+	for _, hdr := range []string{"X-Behemoth-Webhook-Token", "X-Artex-Webhook-Token"} {
+		if tok := strings.TrimSpace(r.Header.Get(hdr)); tok != "" {
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(secret)) == 1 {
+				return true
+			}
 		}
 	}
 	if auth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(auth, "Bearer ") {
@@ -296,14 +300,17 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 				(cd web && npm install --no-audit --no-fund)
 			fi
 			(cd web && npm run build:static && rm -rf ../server/webui/dist && mkdir -p ../server/webui && cp -r out ../server/webui/dist)
-			if [ -f /etc/nginx/sites-enabled/behemoth.conf ]; then
+			if [ -f /etc/nginx/sites-enabled/behemoth.conf ] || [ -f /etc/nginx/sites-enabled/artex.conf ]; then
 				# Nginx fronts the embedded Go binary on :8787 directly; reclaim any idle :3000 Node server RAM.
-				if [ -f /tmp/behemoth-web.pid ]; then
-					kill "$(cat /tmp/behemoth-web.pid)" 2>/dev/null || true
-					rm -f /tmp/behemoth-web.pid
-				fi
+				for pidf in /tmp/behemoth-web.pid /tmp/artex-web.pid; do
+					if [ -f "$pidf" ]; then
+						kill "$(cat "$pidf")" 2>/dev/null || true
+						rm -f "$pidf"
+					fi
+				done
 				if command -v tmux >/dev/null 2>&1; then
 					tmux kill-window -t behemoth:frontend 2>/dev/null || true
+					tmux kill-window -t artex:frontend 2>/dev/null || true
 				fi
 			elif pgrep -f "next start" >/dev/null 2>&1; then
 				(cd web && npm run build)

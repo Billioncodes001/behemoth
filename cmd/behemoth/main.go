@@ -24,15 +24,15 @@ import (
 )
 
 // version is the build version, injected at release time via
-// -ldflags "-X main.version=<tag>". Defaults to "2.3.0" matching web/package.json.
-var version = "2.3.0"
+// -ldflags "-X main.version=<tag>". Defaults to "2.4.0" matching web/package.json.
+var version = "2.4.0"
 
 const banner = `
-    _    ____ _____ _______  __
-   / \  |  _ \_   _| ____\ \/ /
-  / _ \ | |_) || | |  _|  \  /
- / ___ \|  _ < | | | |___ /  \
-/_/   \_\_| \_\|_| |_____/_/\_\
+ ____  _____ _   _ _____ __  __  ___ _____ _   _
+| __ )| ____| | | | ____|  \/  |/ _ \_   _| | | |
+|  _ \|  _| | |_| |  _| | |\/| | | | || | | |_| |
+| |_) | |___|  _  | |___| |  | | |_| || | |  _  |
+|____/|_____|_| |_|_____|_|  |_|\___/ |_| |_| |_|
 `
 
 // printBanner writes the startup banner + version/runtime info to stdout.

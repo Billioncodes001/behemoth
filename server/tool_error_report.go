@@ -50,13 +50,66 @@ func newToolErrorTracker() *toolErrorTracker {
 	}
 }
 
+func toolFailureBucketKey(taskID int64, sessionID, toolKey string) string {
+	if taskID > 0 {
+		return fmt.Sprintf("task:%d|%s", taskID, toolKey)
+	}
+	if s := strings.TrimSpace(sessionID); s != "" {
+		return fmt.Sprintf("sess:%s|%s", s, toolKey)
+	}
+	return fmt.Sprintf("0|%s", toolKey)
+}
+
+// isBenignOperationalToolError filters expected operational outcomes (normal shell
+// non-zero exits, scope denials, budget caps, user cancellations) so they don't
+// pollute the operator's Agent Requests inbox as "broken tool" alerts.
+func isBenignOperationalToolError(toolKey, errMsg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(errMsg))
+	for _, sub := range []string{
+		"context canceled",
+		"out of scope:",
+		"scope violation:",
+		"run budget exhausted:",
+		"fail-closed proxy guard",
+	} {
+		if strings.Contains(lower, sub) {
+			return true
+		}
+	}
+	if toolKey == "Bash" {
+		// Normal shell commands (grep, curl -f, test -f) routinely exit non-zero
+		// during recon; only report Bash itself if shell spawning failed.
+		if !strings.Contains(lower, "executable file not found") && !strings.Contains(lower, "fork/exec") {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *toolErrorTracker) resetScoped(taskID int64, sessionID, toolKey string) {
+	if t == nil || strings.TrimSpace(toolKey) == "" {
+		return
+	}
+	key := toolFailureBucketKey(taskID, sessionID, toolKey)
+	t.mu.Lock()
+	delete(t.failures, key)
+	t.mu.Unlock()
+}
+
 // record counts one tool failure and returns true when a request was filed.
 func (t *toolErrorTracker) record(store toolErrorRecorder, toolKey, agentKey string, taskID int64, errMsg string) bool {
+	return t.recordScoped(store, toolKey, agentKey, taskID, "", errMsg)
+}
+
+func (t *toolErrorTracker) recordScoped(store toolErrorRecorder, toolKey, agentKey string, taskID int64, sessionID, errMsg string) bool {
 	if store == nil || strings.TrimSpace(toolKey) == "" {
 		return false
 	}
+	if isBenignOperationalToolError(toolKey, errMsg) {
+		return false
+	}
 	now := time.Now()
-	key := fmt.Sprintf("%d|%s", taskID, toolKey)
+	key := toolFailureBucketKey(taskID, sessionID, toolKey)
 
 	t.mu.Lock()
 	// Opportunistic cleanup so long-running processes don't grow the maps.
@@ -122,10 +175,14 @@ func (t *toolErrorTracker) record(store toolErrorRecorder, toolKey, agentKey str
 }
 
 // handleToolError is wired as the metered-tool error hook (see server.go).
-func (s *Server) handleToolError(toolKey, agentKey string, taskID int64, errMsg string) {
+func (s *Server) handleToolError(toolKey, agentKey string, taskID int64, sessionID string, ok bool, errMsg string) {
+	if ok {
+		globalToolErrorTracker.resetScoped(taskID, sessionID, toolKey)
+		return
+	}
 	st := s.agentRequestStore()
 	if st == nil {
 		return
 	}
-	globalToolErrorTracker.record(st, toolKey, agentKey, taskID, errMsg)
+	globalToolErrorTracker.recordScoped(st, toolKey, agentKey, taskID, sessionID, errMsg)
 }

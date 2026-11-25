@@ -379,10 +379,25 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	taskDir := ensureRunDir(p.workDir, taskID, 0)
+	resolvePlannerProxy := func() string {
+		if p.proxyAddrFn != nil {
+			return p.proxyAddrFn()
+		}
+		return p.proxyAddr
+	}
+	resolvePlannerHTTPProxy := func() string {
+		if px := resolvePlannerProxy(); px != "" {
+			return px
+		}
+		if p.webFetchProxyFn != nil {
+			return p.webFetchProxyFn()
+		}
+		return ""
+	}
 	// Planner-side scope enforcement: same mechanical allowlist the workers use, so
 	// a planning-round probe (curl/nmap) cannot wander outside task_scope either.
 	scopeGuard := NewTaskScopeGuard(as, taskID)
-	tools = append(tools, ScopedHTTPTool(scopeGuard))
+	tools = append(tools, ScopedHTTPToolWithProxy(scopeGuard, resolvePlannerHTTPProxy, p.proxyCACert))
 	tools = wrapScopeGuardTools(tools, scopeGuard)
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
 	sysBody := plannerSystem(goal, p.workDir, taskDir)
@@ -397,12 +412,6 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	settle := wrapupSettlement("planner", nil)
 	if tc.DeadlineUnix > 0 {
 		settle = wrapupSettlementForTask("planner", nil, clamped)
-	}
-	resolvePlannerProxy := func() string {
-		if p.proxyAddrFn != nil {
-			return p.proxyAddrFn()
-		}
-		return p.proxyAddr
 	}
 	proxyAddr := resolvePlannerProxy()
 	webFetchProxy := proxyAddr

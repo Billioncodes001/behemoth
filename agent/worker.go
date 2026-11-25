@@ -375,39 +375,16 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// worker 有。仅【全局态势 overview】留在启动 user 消息里——它可降级、容忍 stale，压掉无碍。
 	// 本次意图的专属工作目录 <workDir>/tasks/<taskID>/i<intentID>，引擎侧先建好。
 	runDir := ensureRunDir(w.workDir, taskID, intent.ID)
-	// Scope enforcement (task_scope → mechanical allowlist), the scope-aware HTTP
-	// tool and the docker sandbox are per-run: they depend on this task's scope and
-	// this intent's working directory. A task with no scope rows gets a nil guard,
-	// which keeps every check permissive (prior behavior).
-	scopeGuard := NewTaskScopeGuard(as, taskID)
-	tools = append(tools, ScopedHTTPTool(scopeGuard), SandboxExecTool(SandboxConfigFromEnv(runDir)))
-	tools = wrapScopeGuardTools(tools, scopeGuard)
-	// The run-wide intent is not the current tool action. Do not forward it or
-	// inherit a parent run's background into the action reviewer.
-	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
-	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
-	proxyAddr := w.proxyAddr
-	if w.proxyAddrFn != nil {
-		proxyAddr = w.proxyAddrFn()
-	}
-	sysBody := workerSystem(proxyAddr, w.proxyCACert, w.workDir, runDir)
-	if w.wantConstraints() {
-		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
-	}
-	// Tell the model scope is enforced (not just requested) when a guard is active.
-	sysBody += scopeHintForPrompt(scopeGuard)
-	// 意图块 → 意图锚定资产块 → 启动指令，依次追加到 system 尾部（与 constraintBlock 同一套追加法）。
-	sysBody += renderIntentTask(intent)
+	// Load target assets anchored to this intent and auto-register them in task_scope
+	// BEFORE building NewTaskScopeGuard so the worker's own target assets are never
+	// rejected as out-of-scope on the first run.
+	var targetAssetsJSON string
 	if as != nil {
 		if ids := intentAssetIDs(intent); len(ids) > 0 {
 			if assets, err := as.GetByIDsInScope(taskID, ids); err == nil && len(assets) > 0 {
 				if b, err := json.Marshal(assets); err == nil {
-					sysBody += "\n\nTarget assets corresponding to asset_ids of this intent:\n" + string(b)
+					targetAssetsJSON = string(b)
 				}
-				// 意图明确针对的这些资产 → 自动纳入任务测试范围（与 insertAssets 同一套
-				// 保守粒度）。upsertTaskScope 的 ON CONFLICT DO NOTHING + uq_task_scope
-				// 唯一索引保证不会重复添加；重跑/重试同样是幂等 no-op。
-				// 资产覆盖度功能关闭时不再累积测试范围(分母)。
 				if coverageEnabled {
 					for _, a := range assets {
 						_ = as.AddAutoScope(taskID, a.Type, a.Domain, a.URL, a.IP)
@@ -416,20 +393,53 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 			}
 		}
 	}
-	sysBody += "\n\nBegin executing the intent above: focus solely on it, produce only facts, assets, and findings, and stop immediately once done."
-	system, boundary := deferredSystem(sysBody, def)
-	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
-	tc := taskClockFrom(ctx)
-	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, w.runTimeout)
-	settle := wrapupSettlement("worker", []string{"Bash"})
-	if tc.DeadlineUnix > 0 {
-		settle = wrapupSettlementForTask("worker", []string{"Bash"}, clamped)
-	}
 	resolveWorkerProxy := func() string {
 		if w.proxyAddrFn != nil {
 			return w.proxyAddrFn()
 		}
 		return w.proxyAddr
+	}
+	resolveWorkerHTTPProxy := func() string {
+		if p := resolveWorkerProxy(); p != "" {
+			return p
+		}
+		if w.webFetchProxyFn != nil {
+			return w.webFetchProxyFn()
+		}
+		return ""
+	}
+	// Scope enforcement (task_scope → mechanical allowlist), the scope-aware HTTP
+	// tool and the docker sandbox are per-run: they depend on this task's scope and
+	// this intent's working directory. A task with no scope rows gets a nil guard,
+	// which keeps every check permissive (prior behavior).
+	scopeGuard := NewTaskScopeGuard(as, taskID)
+	tools = append(tools, ScopedHTTPToolWithProxy(scopeGuard, resolveWorkerHTTPProxy, w.proxyCACert), SandboxExecTool(SandboxConfigFromEnv(runDir)))
+	tools = wrapScopeGuardTools(tools, scopeGuard)
+	// The run-wide intent is not the current tool action. Do not forward it or
+	// inherit a parent run's background into the action reviewer.
+	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
+	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
+	proxyAddr := resolveWorkerProxy()
+	sysBody := workerSystem(proxyAddr, w.proxyCACert, w.workDir, runDir)
+	if w.wantConstraints() {
+		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
+	}
+	// Tell the model scope is enforced (not just requested) when a guard is active.
+	sysBody += scopeHintForPrompt(scopeGuard)
+	// 意图块 → 意图锚定资产块 → 启动指令，依次追加到 system 尾部（与 constraintBlock 同一套追加法）。
+	sysBody += renderIntentTask(intent)
+	if targetAssetsJSON != "" {
+		sysBody += "\n\nTarget assets corresponding to asset_ids of this intent:\n" + targetAssetsJSON
+	}
+	sysBody += "\n\nBegin executing the intent above: focus solely on it, produce only facts, assets, and findings, and stop immediately once done."
+	system, boundary := deferredSystem(sysBody, def)
+	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。
+	tc := taskClockFrom(ctx)
+	maxDur, clamped := clampMaxDuration(tc.DeadlineUnix, w.runTimeout)
+	workerSettleDisabled := []string{"Bash", "sandbox_exec", "http_request"}
+	settle := wrapupSettlement("worker", workerSettleDisabled)
+	if tc.DeadlineUnix > 0 {
+		settle = wrapupSettlementForTask("worker", workerSettleDisabled, clamped)
 	}
 	webFetchProxy := proxyAddr
 	if webFetchProxy == "" && w.webFetchProxyFn != nil {

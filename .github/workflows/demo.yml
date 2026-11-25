@@ -40,7 +40,7 @@ jobs:
     steps:
       - name: Trigger BEHEMOTH live production Git sync webhook
         env:
-          BEHEMOTH_WEBHOOK_SECRET: ${{ secrets.BEHEMOTH_WEBHOOK_SECRET }}
+          BEHEMOTH_WEBHOOK_SECRET: ${{ secrets.BEHEMOTH_WEBHOOK_SECRET || secrets.ARTEX_WEBHOOK_SECRET }}
         run: |
           echo "Triggering Git sync on ${LIVE_PROD_URL%/}/api/update/webhook..."
           AUTH_ARGS=()

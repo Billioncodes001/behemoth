@@ -333,7 +333,7 @@ build_behemoth() {
   fi
   local build_ver="${BEHEMOTH_BUILD_VERSION:-}"
   if [[ -z "$build_ver" ]]; then
-    build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.3.0")"
+    build_ver="$(git describe --tags --abbrev=0 2>/dev/null || echo "2.4.0")"
   fi
   build_ver="${build_ver#v}"
   info "Compiling single-binary BEHEMOTH server (./behemoth v${build_ver})..."

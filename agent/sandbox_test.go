@@ -71,6 +71,42 @@ func TestSandboxDockerArgsGPUs(t *testing.T) {
 	}
 }
 
+func TestSandboxDockerArgsForwardsProxyAndMountsMITMCACert(t *testing.T) {
+	caFile := t.TempDir() + "/ca.pem"
+	if err := os.WriteFile(caFile, []byte("FAKE-CA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgHost := SandboxConfig{Image: "img:1", Network: "host", WorkDir: "/data/run"}
+	env := []string{
+		"HTTP_PROXY=http://127.0.0.1:8788",
+		"HTTPS_PROXY=http://127.0.0.1:8788",
+		"NO_PROXY=localhost,127.0.0.1",
+		"SSL_CERT_FILE=" + caFile,
+	}
+	gotHost := strings.Join(cfgHost.dockerArgsWithEnv("curl -I https://example.com", env), " ")
+	for _, want := range []string{
+		"-v " + caFile + ":" + sandboxContainerCACertPath + ":ro",
+		"-e SSL_CERT_FILE=" + sandboxContainerCACertPath,
+		"-e REQUESTS_CA_BUNDLE=" + sandboxContainerCACertPath,
+		"-e HTTP_PROXY=http://127.0.0.1:8788",
+	} {
+		if !strings.Contains(gotHost, want) {
+			t.Fatalf("host network args %q missing %q", gotHost, want)
+		}
+	}
+
+	cfgBridge := SandboxConfig{Image: "img:1", Network: "bridge", WorkDir: "/data/run"}
+	gotBridge := strings.Join(cfgBridge.dockerArgsWithEnv("curl -I https://example.com", env), " ")
+	for _, want := range []string{
+		"--add-host=host.docker.internal:host-gateway",
+		"-e HTTP_PROXY=http://host.docker.internal:8788",
+	} {
+		if !strings.Contains(gotBridge, want) {
+			t.Fatalf("bridge network args %q missing %q", gotBridge, want)
+		}
+	}
+}
+
 // End-to-end container run. Opt-in (BEHEMOTH_SANDBOX_TEST=1) because it needs a
 // docker daemon and may pull an image.
 func TestSandboxExecOptional(t *testing.T) {
