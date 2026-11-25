@@ -35,7 +35,10 @@ type maintenanceState struct {
 	AutoSyncOn      bool      `json:"auto_sync_enabled"`
 }
 
-var maintState = &maintenanceState{AutoSyncOn: true}
+var (
+	maintState   = &maintenanceState{AutoSyncOn: true}
+	gitSyncRunMu sync.Mutex
+)
 
 func getMaintenanceSnapshot() map[string]any {
 	maintState.mu.RLock()
@@ -204,6 +207,13 @@ func (s *Server) startGitAutoSync(ctx context.Context) {
 }
 
 func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
+	// Serialize webhook (manual=true) and 60s background ticker (manual=false) so
+	// concurrent git fetch/pull calls never collide on .git/refs locks.
+	if !gitSyncRunMu.TryLock() {
+		return
+	}
+	defer gitSyncRunMu.Unlock()
+
 	maintState.mu.Lock()
 	if maintState.Updating {
 		maintState.mu.Unlock()
@@ -211,6 +221,14 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	}
 	maintState.LastChecked = time.Now()
 	maintState.mu.Unlock()
+
+	// Automatically migrate legacy pre-rename GitHub remote URLs to the canonical repository.
+	if remOut, rerr := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output(); rerr == nil {
+		rem := strings.TrimSpace(string(remOut))
+		if strings.Contains(rem, "Billioncodes001/myartex") || strings.Contains(rem, "Billioncodes001/mybehemoth") {
+			_ = exec.CommandContext(ctx, "git", "remote", "set-url", "origin", "https://github.com/Billioncodes001/behemoth.git").Run()
+		}
+	}
 
 	// Discard incidental lockfile drift produced by prior local `npm` builds before checking tracked files.
 	_ = exec.CommandContext(ctx, "git", "checkout", "--", "web/package-lock.json").Run()
