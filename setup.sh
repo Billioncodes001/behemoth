@@ -137,31 +137,41 @@ PY
   rm -rf "$tmpd"
 }
 
-# ensure_pipx_cli installs a Python CLI package via pipx (system-wide bin dir),
-# falling back to a dedicated venv under /opt/behemoth-venvs with symlinks into
-# /usr/local/bin. Idempotent: returns immediately when the CLI already exists.
+# ensure_pipx_cli installs a Python CLI package into an isolated Python 3.12-safe
+# virtualenv under /opt/behemoth-venvs (pre-seeding setuptools<71 + wheel so
+# packages that import pkg_resources like scoutsuite/pacu install cleanly on
+# Ubuntu 24.04 & Debian 12) and symlinks the CLI into /usr/local/bin.
 ensure_pipx_cli() {
   local pkg="$1" cli="$2"
   command -v "$cli" >/dev/null 2>&1 && return 0
   mkdir -p /usr/local/bin /opt/pipx /opt/behemoth-venvs 2>/dev/null || true
+  local vdir="/opt/behemoth-venvs/${pkg}"
+  if [[ ! -x "$vdir/bin/pip" ]]; then
+    rm -rf "$vdir" 2>/dev/null || true
+    python3 -m venv "$vdir" >/dev/null 2>&1 || true
+  fi
+  if [[ -x "$vdir/bin/pip" ]]; then
+    "$vdir/bin/pip" install --quiet --upgrade pip "setuptools<71" wheel >/dev/null 2>&1 || true
+    "$vdir/bin/pip" install --quiet "$pkg" >/dev/null 2>&1 || true
+    if [[ -f "$vdir/bin/$cli" ]]; then
+      ln -sf "$vdir/bin/$cli" "/usr/local/bin/$cli" 2>/dev/null || true
+      ok "Installed ${cli} -> /usr/local/bin/${cli} (venv ${vdir})"
+      return 0
+    fi
+  fi
   if command -v pipx >/dev/null 2>&1; then
     PIPX_BIN_DIR=/usr/local/bin PIPX_HOME=/opt/pipx pipx install "$pkg" >/dev/null 2>&1 || true
     command -v "$cli" >/dev/null 2>&1 && return 0
   fi
-  local vdir="/opt/behemoth-venvs/${pkg}"
-  python3 -m venv "$vdir" >/dev/null 2>&1 || return 0
-  "$vdir/bin/pip" install --quiet "$pkg" >/dev/null 2>&1 || true
-  if [[ -f "$vdir/bin/$cli" ]]; then
-    ln -sf "$vdir/bin/$cli" "/usr/local/bin/$cli" 2>/dev/null || true
-    ok "Installed ${cli} -> /usr/local/bin/${cli} (venv ${vdir})"
-  fi
 }
 
 # install_extended_arsenal provisions the heavier offensive/cloud/forensics
-# tooling that agents commonly need but distro packages don't provide:
-# Metasploit (msfvenom), impacket (secretsdump/GetNPUsers/...), Responder,
-# LinPEAS/WinPEAS, Volatility 3, Azure CLI (az), Google Cloud SDK (gcloud),
-# Pacu and ScoutSuite. Every step is idempotent and non-fatal.
+# tooling that agents commonly need: LinPEAS/WinPEAS (both winpeas.exe &
+# winPEASx64.exe), smtp-user-enum, Responder (both responder & Responder),
+# impacket (impacket-secretsdump / impacket-GetNPUsers / ...), Volatility 3
+# (vol & volatility), Pacu, ScoutSuite (scout & scout-suite), Google Cloud SDK
+# (gcloud), Azure CLI (az), and Metasploit (msfvenom). Fast tools run first so
+# they become available within seconds; every step is idempotent and non-fatal.
 install_extended_arsenal() {
   if [[ "${EUID:-$(id -u)}" -ne 0 && ! -w /usr/local/bin ]]; then
     info "Skipping extended arsenal (need root or writable /usr/local/bin)"
@@ -169,109 +179,151 @@ install_extended_arsenal() {
   fi
   export PATH="/usr/local/bin:/opt/google-cloud-sdk/bin:$PATH"
   mkdir -p /usr/local/bin /opt/behemoth-venvs /opt/pipx 2>/dev/null || true
-  info "Provisioning extended arsenal (metasploit, impacket, Responder, PEASS, Volatility, cloud CLIs)..."
+  info "Provisioning extended arsenal (PEASS, smtp-user-enum, Responder, impacket, Volatility, Pacu, ScoutSuite, gcloud, az, metasploit)..."
 
-  # --- Metasploit Framework (msfvenom) ---
-  if ! command -v msfvenom >/dev/null 2>&1; then
+  # --- 1. LinPEAS / WinPEAS (both winPEASx64.exe and winpeas.exe) ---
+  if ! command -v linpeas.sh >/dev/null 2>&1; then
+    if curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" -o /usr/local/bin/linpeas.sh 2>/dev/null; then
+      chmod 0755 /usr/local/bin/linpeas.sh
+      ln -sf /usr/local/bin/linpeas.sh /usr/local/bin/linpeas 2>/dev/null || true
+      ok "linpeas.sh installed"
+    else
+      warn "linpeas.sh download failed"
+    fi
+  fi
+  if ! command -v winPEASx64.exe >/dev/null 2>&1 || ! command -v winpeas.exe >/dev/null 2>&1; then
+    if [[ -f /usr/local/bin/winpeas.exe && ! -f /usr/local/bin/winPEASx64.exe ]]; then
+      cp -f /usr/local/bin/winpeas.exe /usr/local/bin/winPEASx64.exe
+      chmod 0755 /usr/local/bin/winPEASx64.exe
+    elif [[ -f /usr/local/bin/winPEASx64.exe && ! -f /usr/local/bin/winpeas.exe ]]; then
+      ln -sf /usr/local/bin/winPEASx64.exe /usr/local/bin/winpeas.exe
+    elif curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe" -o /usr/local/bin/winPEASx64.exe 2>/dev/null; then
+      chmod 0755 /usr/local/bin/winPEASx64.exe
+      ln -sf /usr/local/bin/winPEASx64.exe /usr/local/bin/winpeas.exe 2>/dev/null || true
+      ok "winPEASx64.exe & winpeas.exe installed"
+    else
+      warn "winPEASx64.exe download failed"
+    fi
+  fi
+
+  # --- 2. smtp-user-enum (PentestMonkey official Perl script when apt lacks it) ---
+  if ! command -v smtp-user-enum >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
-      apt-get install -y -qq metasploit-framework >/dev/null 2>&1 || true
+      apt-get install -y -qq perl smtp-user-enum >/dev/null 2>&1 || apt-get install -y -qq perl >/dev/null 2>&1 || true
     fi
-    if ! command -v msfvenom >/dev/null 2>&1; then
-      curl -fsSL "https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb" 2>/dev/null | bash >/dev/null 2>&1 || true
+    if ! command -v smtp-user-enum >/dev/null 2>&1; then
+      if curl -fsSL "https://raw.githubusercontent.com/pentestmonkey/smtp-user-enum/master/smtp-user-enum.pl" -o /usr/local/bin/smtp-user-enum 2>/dev/null; then
+        chmod 0755 /usr/local/bin/smtp-user-enum
+        ok "smtp-user-enum installed -> /usr/local/bin/smtp-user-enum"
+      fi
     fi
-    command -v msfvenom >/dev/null 2>&1 && ok "Metasploit Framework (msfvenom) installed" || warn "msfvenom install failed (install metasploit-framework manually)"
   fi
 
-  # --- impacket: guarantee impacket-* console scripts on PATH ---
-  if ! command -v impacket-secretsdump >/dev/null 2>&1 || ! command -v impacket-GetNPUsers >/dev/null 2>&1; then
-    ensure_pipx_cli impacket impacket-secretsdump
-  fi
-  if ! command -v impacket-secretsdump >/dev/null 2>&1 || ! command -v impacket-GetNPUsers >/dev/null 2>&1; then
-    local ivdir="/opt/behemoth-venvs/impacket"
-    python3 -m venv "$ivdir" >/dev/null 2>&1 && "$ivdir/bin/pip" install --quiet impacket >/dev/null 2>&1 || true
-    for script in "$ivdir"/bin/*.py; do
-      [[ -f "$script" ]] || continue
-      local base
-      base="$(basename "$script")"
-      ln -sf "$script" "/usr/local/bin/impacket-${base%.py}" 2>/dev/null || true
-    done
-  fi
-  command -v impacket-secretsdump >/dev/null 2>&1 && ok "impacket (secretsdump, GetNPUsers, psexec, ...) ready" || warn "impacket console scripts unavailable"
-
-  # --- Responder (LLMNR/NBT-NS/mDNS poisoner) ---
+  # --- 3. Responder (both `responder` and `Responder` for Tool Catalog compatibility) ---
   if ! command -v responder >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-    # Kali/Debian may ship a ready Python 3 port — prefer the distro package.
     apt-get install -y -qq responder >/dev/null 2>&1 || true
   fi
   if ! command -v responder >/dev/null 2>&1; then
-    if [[ ! -d /opt/Responder ]]; then
+    if [[ ! -f /opt/Responder/Responder.py ]]; then
+      rm -rf /opt/Responder 2>/dev/null || true
       git clone --depth 1 https://github.com/lgandx/Responder.git /opt/Responder >/dev/null 2>&1 || true
     fi
     if [[ -f /opt/Responder/Responder.py ]]; then
-      # Some Responder mirrors are still Python 2 syntax: use python2 when
-      # available, else convert the tree to Python 3 once with lib2to3.
-      local resp_runner="python3"
-      if command -v python2 >/dev/null 2>&1; then
-        resp_runner="python2"
-      elif ! grep -q 'print(' /opt/Responder/Responder.py 2>/dev/null; then
-        if python3 -m lib2to3 -w -n /opt/Responder >/dev/null 2>&1; then
-          ok "Responder converted to Python 3 (lib2to3)"
-        else
-          warn "Responder left in Python 2 syntax (no python2 / no lib2to3)"
-        fi
-      fi
       for mod in netifaces aioquic; do
         if command -v apt-get >/dev/null 2>&1; then
           apt-get install -y -qq "python3-${mod}" >/dev/null 2>&1 || true
         fi
         python3 -m pip install --quiet --break-system-packages "$mod" >/dev/null 2>&1 || true
       done
-      printf '#!/usr/bin/env bash\ncd /opt/Responder || exit 1\nexec %s Responder.py "$@"\n' "$resp_runner" > /usr/local/bin/responder
+      printf '#!/usr/bin/env bash\ncd /opt/Responder || exit 1\nexec python3 Responder.py "$@"\n' > /usr/local/bin/responder
       chmod 0755 /usr/local/bin/responder
-      ok "Responder installed -> /usr/local/bin/responder (${resp_runner})"
+      ok "Responder installed -> /usr/local/bin/responder"
     else
-      warn "Responder clone failed (network?)"
+      warn "Responder clone failed"
     fi
   fi
-
-  # --- smtp-user-enum (apt ships it on Debian/Ubuntu; pypi fallback) ---
-  ensure_pipx_cli smtp-user-enum smtp-user-enum
-
-  # --- LinPEAS / WinPEAS (privilege escalation enumeration) ---
-  if ! command -v linpeas.sh >/dev/null 2>&1; then
-    if curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" -o /usr/local/bin/linpeas.sh 2>/dev/null; then
-      chmod 0755 /usr/local/bin/linpeas.sh
-      ok "linpeas.sh installed"
-    else
-      warn "linpeas.sh download failed"
-    fi
-  fi
-  if ! command -v winpeas.exe >/dev/null 2>&1; then
-    if curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe" -o /usr/local/bin/winpeas.exe 2>/dev/null; then
-      chmod 0755 /usr/local/bin/winpeas.exe
-      ok "winpeas.exe installed"
-    else
-      warn "winpeas.exe download failed"
-    fi
+  if command -v responder >/dev/null 2>&1 && ! command -v Responder >/dev/null 2>&1; then
+    ln -sf "$(command -v responder)" /usr/local/bin/Responder 2>/dev/null || true
   fi
 
-  # --- Volatility 3 (memory forensics, provides vol / vol.py) ---
-  if ! command -v vol >/dev/null 2>&1 && ! command -v vol.py >/dev/null 2>&1; then
-    ensure_pipx_cli volatility3 vol
-    local v3dir="/opt/behemoth-venvs/volatility3"
-    if ! command -v vol >/dev/null 2>&1 && [[ -d "$v3dir" ]]; then
-      for b in vol vol.py volatility; do
-        [[ -f "$v3dir/bin/$b" ]] && ln -sf "$v3dir/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
+  # --- 4. impacket: guarantee impacket-secretsdump, impacket-GetNPUsers & all impacket-* on PATH ---
+  if ! command -v impacket-secretsdump >/dev/null 2>&1 || ! command -v impacket-GetNPUsers >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y -qq impacket-scripts python3-impacket >/dev/null 2>&1 || true
+    fi
+  fi
+  if ! command -v impacket-secretsdump >/dev/null 2>&1 || ! command -v impacket-GetNPUsers >/dev/null 2>&1; then
+    local ivdir="/opt/behemoth-venvs/impacket"
+    rm -rf "$ivdir" 2>/dev/null || true
+    if python3 -m venv "$ivdir" >/dev/null 2>&1; then
+      "$ivdir/bin/pip" install --quiet --upgrade pip "setuptools<71" wheel >/dev/null 2>&1 || true
+      "$ivdir/bin/pip" install --quiet impacket >/dev/null 2>&1 || true
+      for script in "$ivdir"/bin/*.py; do
+        [[ -f "$script" ]] || continue
+        local base
+        base="$(basename "$script")"
+        chmod 0755 "$script" 2>/dev/null || true
+        ln -sf "$script" "/usr/local/bin/impacket-${base%.py}" 2>/dev/null || true
+        ln -sf "$script" "/usr/local/bin/${base}" 2>/dev/null || true
       done
     fi
   fi
-  if command -v vol >/dev/null 2>&1 || command -v vol.py >/dev/null 2>&1; then
-    ok "Volatility 3 (vol) ready"
+  command -v impacket-secretsdump >/dev/null 2>&1 && ok "impacket (impacket-secretsdump, impacket-GetNPUsers, ...) ready" || warn "impacket console scripts unavailable"
+
+  # --- 5. Volatility 3 (provides `vol`, `volatility`, and `vol.py`) ---
+  if ! command -v vol >/dev/null 2>&1; then
+    ensure_pipx_cli volatility3 vol
+  fi
+  if command -v vol >/dev/null 2>&1; then
+    local vol_bin
+    vol_bin="$(command -v vol)"
+    ln -sf "$vol_bin" /usr/local/bin/volatility 2>/dev/null || true
+    ln -sf "$vol_bin" /usr/local/bin/vol.py 2>/dev/null || true
+    ok "Volatility 3 (vol & volatility) ready"
   else
     warn "Volatility 3 unavailable"
   fi
 
-  # --- Azure CLI (az) ---
+  # --- 6. Pacu (AWS exploitation framework) ---
+  ensure_pipx_cli pacu pacu
+  command -v pacu >/dev/null 2>&1 && ok "Pacu installed" || warn "pacu unavailable"
+
+  # --- 7. ScoutSuite (provides both `scout` and `scout-suite`) ---
+  if ! command -v scout >/dev/null 2>&1; then
+    ensure_pipx_cli scoutsuite scout
+  fi
+  if command -v scout >/dev/null 2>&1; then
+    ln -sf "$(command -v scout)" /usr/local/bin/scout-suite 2>/dev/null || true
+    ok "ScoutSuite (scout & scout-suite) installed"
+  else
+    warn "scout-suite unavailable"
+  fi
+
+  # --- 8. Google Cloud SDK (gcloud, gsutil, bq) ---
+  if ! command -v gcloud >/dev/null 2>&1; then
+    local sdk_arch="x86_64"
+    case "$(uname -m)" in
+      aarch64|arm64) sdk_arch="arm" ;;
+    esac
+    local sdk_dir="/opt/google-cloud-sdk"
+    if [[ ! -x "$sdk_dir/bin/gcloud" ]]; then
+      if curl -fsSL "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-${sdk_arch}.tar.gz" -o /tmp/google-cloud-sdk.tar.gz 2>/dev/null; then
+        rm -rf "$sdk_dir"
+        tar -xzf /tmp/google-cloud-sdk.tar.gz -C /opt >/dev/null 2>&1 || true
+        rm -f /tmp/google-cloud-sdk.tar.gz
+      fi
+    fi
+    if [[ -x "$sdk_dir/bin/gcloud" ]]; then
+      for gc_bin in gcloud gsutil bq; do
+        [[ -x "$sdk_dir/bin/$gc_bin" ]] && ln -sf "$sdk_dir/bin/$gc_bin" "/usr/local/bin/$gc_bin" 2>/dev/null || true
+      done
+      ok "Google Cloud SDK (gcloud) installed -> $sdk_dir"
+    else
+      warn "gcloud install failed"
+    fi
+  fi
+
+  # --- 9. Azure CLI (az) ---
   if ! command -v az >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       curl -sL "https://aka.ms/InstallAzureCLIDeb" 2>/dev/null | bash >/dev/null 2>&1 || true
@@ -282,32 +334,16 @@ install_extended_arsenal() {
     command -v az >/dev/null 2>&1 && ok "Azure CLI (az) installed" || warn "az install failed"
   fi
 
-  # --- Google Cloud SDK (gcloud) ---
-  if ! command -v gcloud >/dev/null 2>&1; then
-    local sdk_arch="x86_64"
-    case "$(uname -m)" in
-      aarch64|arm64) sdk_arch="arm" ;;
-    esac
-    local sdk_dir="/opt/google-cloud-sdk"
-    if curl -fsSL "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-${sdk_arch}.tar.gz" -o /tmp/google-cloud-sdk.tar.gz 2>/dev/null; then
-      rm -rf "$sdk_dir"
-      tar -xzf /tmp/google-cloud-sdk.tar.gz -C /opt >/dev/null 2>&1 || true
-      rm -f /tmp/google-cloud-sdk.tar.gz
-      if [[ -x "$sdk_dir/bin/gcloud" ]]; then
-        ln -sf "$sdk_dir/bin/gcloud" /usr/local/bin/gcloud
-        ok "Google Cloud SDK (gcloud) installed -> $sdk_dir"
-      fi
+  # --- 10. Metasploit Framework (msfvenom & msfconsole) ---
+  if ! command -v msfvenom >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y -qq metasploit-framework >/dev/null 2>&1 || true
     fi
-    command -v gcloud >/dev/null 2>&1 || warn "gcloud install failed"
+    if ! command -v msfvenom >/dev/null 2>&1; then
+      curl -fsSL "https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb" 2>/dev/null | bash >/dev/null 2>&1 || true
+    fi
+    command -v msfvenom >/dev/null 2>&1 && ok "Metasploit Framework (msfvenom) installed" || warn "msfvenom install failed"
   fi
-
-  # --- Pacu (AWS exploitation framework) ---
-  ensure_pipx_cli pacu pacu
-  command -v pacu >/dev/null 2>&1 && ok "Pacu installed" || warn "pacu unavailable"
-
-  # --- ScoutSuite (multi-cloud security auditing, CLI: scout) ---
-  ensure_pipx_cli scoutsuite scout
-  command -v scout >/dev/null 2>&1 && ok "ScoutSuite (scout) installed" || warn "scout-suite unavailable"
 
   ok "Extended arsenal ready"
 }
@@ -316,10 +352,20 @@ install_security_arsenal() {
   info "Provisioning offensive, OCR & reconnaissance CLI arsenal..."
   if command -v apt-get >/dev/null 2>&1 && [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y -qq 2>/dev/null || true
-    for pkg in ca-certificates gnupg lsb-release tar gzip xz-utils git curl wget tor tesseract-ocr tesseract-ocr-eng nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp smtp-user-enum jq python3-venv python3-pip pipx python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists; do
-      apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
+    local missing_apt=()
+    for pkg in ca-certificates gnupg lsb-release tar gzip xz-utils perl git curl wget build-essential python3-dev libffi-dev libssl-dev tcpdump tor tesseract-ocr tesseract-ocr-eng nmap sqlmap whatweb nikto gobuster ffuf dirb hydra sslscan wafw00f default-mysql-client postgresql-client ftp dnsutils whois netcat-openbsd socat ripgrep masscan onesixtyone snmp jq python3-venv python3-pip pipx python3-requests python3-bs4 python3-dnspython python3-pymysql python3-psycopg2 hashcat john pocl-opencl-icd seclists impacket-scripts python3-impacket; do
+      if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+        missing_apt+=("$pkg")
+      fi
     done
+    if [[ "${#missing_apt[@]}" -gt 0 ]]; then
+      apt-get update -y -qq 2>/dev/null || true
+      apt-get install -y -qq "${missing_apt[@]}" >/dev/null 2>&1 || {
+        for pkg in "${missing_apt[@]}"; do
+          apt-get install -y -qq "$pkg" >/dev/null 2>&1 || true
+        done
+      }
+    fi
     python3 -m pip install --quiet --break-system-packages pymysql psycopg2-binary redis pymongo PyJWT httpx websockets >/dev/null 2>&1 || true
     ensure_pipx_cli bloodhound bloodhound-python
     ensure_pipx_cli semgrep semgrep

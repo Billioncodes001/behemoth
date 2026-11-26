@@ -169,10 +169,13 @@ func (s *Server) autoProvisionLinuxArsenal() {
 	}
 
 	// Binaries whose absence triggers a (re)run of ./setup.sh arsenal so a fresh
-	// or partially provisioned host/container converges to the full arsenal.
+	// or partially provisioned host/container converges to the full arsenal
+	// (including exact case-sensitive names checked by the Tool Catalog).
 	coreExpected := []string{
-		"tor", "tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql",
-		"msfvenom", "impacket-secretsdump", "responder", "linpeas.sh", "winpeas.exe", "vol", "az", "gcloud", "pacu", "scout",
+		"tor", "tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql", "tcpdump",
+		"msfvenom", "impacket-secretsdump", "impacket-GetNPUsers", "smtp-user-enum",
+		"responder", "Responder", "linpeas.sh", "winpeas.exe", "winPEASx64.exe",
+		"vol", "volatility", "az", "gcloud", "pacu", "scout", "scout-suite",
 	}
 	var missingBins []string
 	for _, bin := range coreExpected {
@@ -184,30 +187,42 @@ func (s *Server) autoProvisionLinuxArsenal() {
 	if prevHash == wantHash && !missingCore {
 		return
 	}
-	// If setup.sh hash hasn't changed (we already ran this exact setup.sh version)
-	// and only an optional/unavailable upstream package is missing, wait 6h before
-	// retrying so rapid live-update restarts never trigger back-to-back apt runs.
+	// If setup.sh hash hasn't changed and an attempt ran recently, back off 15m so
+	// rapid restarts don't stack runs while still converging quickly.
 	if prevHash == wantHash && missingCore && meta.LastAttemptUnix > 0 &&
-		time.Since(time.Unix(meta.LastAttemptUnix, 0)) < 6*time.Hour {
+		time.Since(time.Unix(meta.LastAttemptUnix, 0)) < 15*time.Minute {
 		return
 	}
 
 	arsenalProvisioning.Store(true)
 	defer arsenalProvisioning.Store(false)
 
-	log.Printf("[arsenal] Auto-provisioning Linux security CLI, OCR & extended arsenal via %s in background (missing=%d)...", setupPath, len(missingBins))
-	ctx, cancel := context.WithTimeout(s.ctx, 35*time.Minute)
+	log.Printf("[arsenal] Auto-provisioning Linux security CLI, OCR & extended arsenal via %s in background (missing=%v)...", setupPath, missingBins)
+	// Use context.Background() rather than s.ctx so a live-update binary swap never
+	// SIGKILLs apt-get/pip/tar mid-install; flock serializes across process restarts.
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()
 
+	shellCmd := fmt.Sprintf("bash %q arsenal", setupPath)
+	if _, ferr := exec.LookPath("flock"); ferr == nil {
+		shellCmd = fmt.Sprintf("flock -w 600 /tmp/behemoth-arsenal.lock bash %q arsenal", setupPath)
+	}
 	var cmd *exec.Cmd
 	if isRoot {
-		cmd = exec.CommandContext(ctx, "bash", setupPath, "arsenal")
+		cmd = exec.CommandContext(ctx, "bash", "-c", shellCmd)
 	} else {
-		cmd = exec.CommandContext(ctx, "sudo", "-n", "bash", setupPath, "arsenal")
+		cmd = exec.CommandContext(ctx, "sudo", "-n", "bash", "-c", shellCmd)
 	}
 	cmd.Dir = filepath.Dir(setupPath)
 	out, runErr := cmd.CombinedOutput()
 	ensureArsenalPATH()
+
+	var stillMissing []string
+	for _, bin := range coreExpected {
+		if _, lookErr := exec.LookPath(bin); lookErr != nil {
+			stillMissing = append(stillMissing, bin)
+		}
+	}
 
 	newMeta := arsenalProvisionState{
 		SetupSHA256:     wantHash,
@@ -216,12 +231,13 @@ func (s *Server) autoProvisionLinuxArsenal() {
 	if b, jerr := json.Marshal(newMeta); jerr == nil {
 		_ = os.WriteFile(metaFile, b, 0o644)
 	}
-	_ = os.WriteFile(stateFile, []byte(wantHash+"\n"), 0o644)
-
-	if runErr != nil {
-		log.Printf("[arsenal] Background provisioning finished with warning: %v (%s)", runErr, firstLine(string(out), 200))
+	if len(stillMissing) == 0 {
+		_ = os.WriteFile(stateFile, []byte(wantHash+"\n"), 0o644)
+		log.Printf("[arsenal] All %d core & extended security CLI binaries verified on PATH!", len(coreExpected))
+	} else if runErr != nil {
+		log.Printf("[arsenal] Background provisioning finished with warning: %v (still missing=%v; out=%s)", runErr, stillMissing, firstLine(string(out), 200))
 	} else {
-		log.Printf("[arsenal] Linux security CLI, OCR & extended arsenal provisioned successfully")
+		log.Printf("[arsenal] Provisioning pass finished; remaining missing binaries (will retry after backoff): %v", stillMissing)
 	}
 }
 
@@ -289,8 +305,9 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				"socat", "openssl", "curl", "python3", "rg", "jq", "tor", "tesseract", "mysql", "psql",
 				"rustscan", "masscan", "smtp-user-enum", "onesixtyone", "snmpwalk",
 				"impacket-secretsdump", "impacket-GetNPUsers", "bloodhound-python",
-				"msfvenom", "responder", "linpeas.sh", "winpeas.exe", "vol", "volatility", "trivy", "grype", "semgrep",
-				"aws", "az", "gcloud", "pacu", "scout",
+				"msfvenom", "responder", "Responder", "linpeas.sh", "winpeas.exe", "winPEASx64.exe",
+				"vol", "volatility", "trivy", "grype", "semgrep", "tcpdump",
+				"aws", "az", "gcloud", "pacu", "scout", "scout-suite",
 			}
 			installed := make([]map[string]string, 0, len(cliNames))
 			var missing []string
