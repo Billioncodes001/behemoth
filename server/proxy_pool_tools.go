@@ -220,21 +220,69 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		routingMode = "proxy_pool_exhausted_fail_closed"
 	} else if globalActive {
 		routingMode = "static_global_proxy"
+	} else if !directEgressAllowed() {
+		routingMode = "no_outbound_direct_blocked"
 	}
-	anyOutbound := routingMode != "direct"
+	anyOutbound := routingMode != "direct" && routingMode != "no_outbound_direct_blocked"
 	// Auth-page throttle hint: commercial rotating proxy providers (Webshare et
 	// al.) meter login/signup traffic far more aggressively than normal pages and
 	// flag accounts that hammer them, so every proxy-status response reminds the
 	// agent of the pacing policy exactly when it is about to route via proxies.
+	meteredCommercial := s.m != nil && s.m.IsMeteredCommercialProxyActive()
 	authPagePolicy := "No outbound proxy is active — the proxy-provider authentication-page throttle policy does not apply."
 	if anyOutbound {
-		authPagePolicy = "OUTBOUND PROXY ACTIVE — AUTH-PAGE THROTTLE: shared/rotating commercial providers (Webshare, Bright Data, ...) meter login/signup pages heavily and flag accounts that hammer them. Through provider proxies keep <= ~20 auth-page loads and <= 5 credential attempts per target domain per hour, >= 10s apart; NEVER brute-force / credential-stuff or mass sign-up via rotating residential proxies — do credential testing direct or via operator-owned dedicated/self-hosted proxy exits. On 403/429/CAPTCHA/auth-revoked: stop the auth phase, cool down >= 30-60 minutes, record remaining work + counts, then resume later (pause_task / later run / operator schedule) — never retry in a tight loop."
+		if !meteredCommercial {
+			authPagePolicy = "DISPOSABLE SCRAPED / TOR EXIT ACTIVE — commercial proxy-provider auth-page meters do not apply to unauthenticated `scraped-*` public proxies or Tor circuits, though target-side WAF/lockout discipline still applies. Rotate via manage_proxy_pool(action='rotate') if an exit slows down or gets blocked."
+		} else {
+			authPagePolicy = "OUTBOUND COMMERCIAL PROXY ACTIVE — AUTH-PAGE THROTTLE: shared/rotating commercial providers (Webshare, Bright Data, IPRoyal, ...) meter login/signup/auth-service pages heavily and flag or suspend accounts that hammer them. Through provider proxies keep <= ~20 auth-page loads and <= 5 credential attempts per target domain per hour, >= 10s apart, and NEVER brute-force FTP/SSH/SMTP ports (21/22/25) or mass sign-up; use unauthenticated `scraped-*` proxies (`scrape_online_proxies`) or Tor when higher-volume auth testing is required. Whenever you hit the 5-attempt batch limit or see 403/429/CAPTCHA/407: STOP auth requests immediately, save your tested count + next batch, and call `schedule_cooldown_resume(cooldown_minutes=35, repeat_interval_minutes=45, resume_prompt=...)` so BEHEMOTH automatically wakes this session after cooldown!"
+		}
 	}
 	localForwarder := ""
 	if s.m != nil {
 		localForwarder = s.m.OutboundProxyAddr()
 	}
-	instruction := "NO outbound proxy is enabled (Tor is OFF, Proxy Pool is OFF, and Global Proxy is NOT configured). Connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
+	// Scraped-proxy visibility: the Online Scraper keeps verified scraped-* proxies
+	// inside the pool even when the pool is toggled off. Always surface them so the
+	// agent can auto-detect and activate available egress instead of stopping blind.
+	scrapedTotal, scrapedActive := 0, 0
+	type scrapedProxySummary struct {
+		ID        string `json:"id"`
+		Proxy     string `json:"proxy"`
+		Type      string `json:"type"`
+		Country   string `json:"country,omitempty"`
+		LatencyMS int64  `json:"latency_ms,omitempty"`
+	}
+	var scrapedTop []scrapedProxySummary
+	for i := range proxies {
+		if !strings.HasPrefix(proxies[i].ID, "scraped-") {
+			continue
+		}
+		scrapedTotal++
+		if proxies[i].Active && (proxies[i].Status == proxyv2.StatusHealthy || proxies[i].Status == proxyv2.StatusInUse) {
+			scrapedActive++
+			if len(scrapedTop) < 8 {
+				scrapedTop = append(scrapedTop, scrapedProxySummary{
+					ID:        proxies[i].ID,
+					Proxy:     maskSecrets(proxies[i].BuildProxyURL()),
+					Type:      string(proxies[i].Type),
+					Country:   proxies[i].Country,
+					LatencyMS: proxies[i].LatencyMS,
+				})
+			}
+		}
+	}
+	scrapedInfo := map[string]any{
+		"total":            scrapedTotal,
+		"active_verified":  scrapedActive,
+		"top":              scrapedTop,
+		"scraper_enabled":  false,
+		"auto_enable_pool": false,
+	}
+	if sc := s.loadProxyScraperConfig(); sc.Enabled || scrapedTotal > 0 {
+		scrapedInfo["scraper_enabled"] = sc.Enabled
+		scrapedInfo["auto_enable_pool"] = sc.AutoEnablePool
+	}
+	instruction := "NO outbound proxy is enabled (Tor is OFF, Proxy Pool is OFF, and Global Proxy is NOT configured), and direct egress is explicitly allowed (BEHEMOTH_ALLOW_DIRECT_EGRESS=1). You MAY connect directly to targets — do NOT pass -x or --proxy flags to curl/scanners, and never treat 127.0.0.1:8788 (local HTTP packet capture) as an external proxy."
 	switch routingMode {
 	case "tunnel_override":
 		instruction = "C2 TUNNEL EGRESS OVERRIDE ACTIVE: all server-side egress (capture layer, Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY, MCP servers, scanner tools) currently exits through an operator C2 pivot tunnel, even if a Proxy Pool or Tor is also enabled. Targets reachable only from the implant are now reachable; every byte is slow and capped, so avoid bulk fuzzing. Close with c2_proxy_close to restore the Pool/Tor/direct route."
@@ -250,6 +298,19 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		instruction = "STOP WORK IMMEDIATELY — FAIL-CLOSED PROXY GUARD ACTIVE: Proxy Pool is ENABLED, and ALL configured proxies are currently unhealthy or out of bandwidth! BEHEMOTH has strictly blocked all direct target connections to protect the server IP. Do NOT attempt any target scans or bypasses. Call scrape_online_proxies(protocols=['http'], country_mode='us_preferred') if authorized, or stop and inform the operator."
 	case "static_global_proxy":
 		instruction = "Static Global Proxy is ENABLED in System Settings. ZERO-IP-LEAK RULE: All built-in tools, MCP servers, and Bash HTTP_PROXY/HTTPS_PROXY/ALL_PROXY route through the Global Proxy. For CLI tools in Bash that ignore env vars (sqlmap, gobuster, nmap, openssl s_client), pass \"$HTTP_PROXY\" explicitly via their proxy flag so the server's real IP is never exposed."
+	case "no_outbound_direct_blocked":
+		instruction = "STOP WORK IMMEDIATELY — NO-OUTBOUND-PROXY GUARD ACTIVE: no outbound proxy is enabled (Tor OFF, Proxy Pool OFF, Global Proxy unset) and direct target connections are HARD-BLOCKED by policy — every external request through the local forwarder returns 503, so the BEHEMOTH host IP can never leak. NEVER connect directly. Bootstrap an egress now: call scrape_online_proxies(protocols=['http'], country_mode='us_preferred') to harvest & auto-activate verified proxies, or manage_proxy_pool(action='enable_tor') for free Tor circuits, or manage_proxy_pool(action='enable') if scraped proxies already sit in the pool (see scraped_proxies). If none of these succeed, stop the task, persist progress via record_fact/pause_task, and notify the operator — do NOT retry in a loop and do NOT work unproxied."
+	}
+	// Scraped-proxy nudge: when an egress IS active, remind the agent that scraped
+	// proxies exist and are already part of the rotation; when routing is blocked
+	// or direct, tell it how to activate them.
+	if scrapedActive > 0 {
+		switch routingMode {
+		case "proxy_pool", "hybrid_tor_pool":
+			instruction += fmt.Sprintf(" SCRAPED PROXIES ACTIVE: %d scraped & verified proxies are in the pool rotation right now — you are already using them; rotate with manage_proxy_pool(action='rotate') if one degrades.", scrapedActive)
+		case "no_outbound_direct_blocked", "direct", "proxy_pool_exhausted_fail_closed":
+			instruction += fmt.Sprintf(" SCRAPED PROXIES AVAILABLE: %d scraped & verified proxies are staged in the Proxy Pool but not routing yet — activate one with manage_proxy_pool(action='activate', proxy_id='<scraped-…>') after manage_proxy_pool(action='enable'), or rely on scrape_online_proxies to refresh them.", scrapedActive)
+		}
 	}
 	return map[string]any{
 		"proxy_enabled":           anyOutbound,
@@ -261,7 +322,11 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		"proxy_pool_enabled":      poolEnabled,
 		"proxy_pool_active":       poolActive,
 		"proxy_pool_exhausted":    poolExhausted || routingMode == "exclusive_tor_exhausted_fail_closed",
-		"fail_closed":             poolEnabled || exclusiveTor,
+		"fail_closed":             poolEnabled || exclusiveTor || routingMode == "no_outbound_direct_blocked",
+		"direct_egress_allowed":       directEgressAllowed(),
+		"direct_egress_blocked":       routingMode == "no_outbound_direct_blocked",
+		"metered_commercial_proxy":    meteredCommercial,
+		"scraped_proxies":             scrapedInfo,
 		"global_proxy_enabled":    globalActive,
 		"static_global_proxy": maskSecrets(func() string {
 			if s.m != nil {
@@ -284,7 +349,7 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 
 func (s *Server) toolCheckProxyStatus() actool.CoreTool {
 	return roTool("check_proxy_status",
-		"Always call this tool BEFORE attempting to use any proxy. Checks whether the user enabled Proxy Pool or configured a Global Proxy in Settings. If proxy_enabled is false, NO proxy is enabled and you must connect directly without -x / --proxy flags. When a proxy is active, read auth_page_policy (login/signup throttle discipline for shared proxy providers) before touching authentication pages.",
+		"Always call this tool BEFORE attempting to use any proxy or issuing any external request. Checks whether the user enabled Proxy Pool, Tor, or a Global Proxy. If proxy_enabled is false and direct_egress_blocked is true (default policy), NO proxy is active — you MUST NOT connect directly: activate scraped proxies or call scrape_online_proxies / manage_proxy_pool(action='enable_tor'), or stop and notify the operator. When a proxy is active, read auth_page_policy (login/signup throttle discipline for shared proxy providers) before touching authentication pages.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			payload, err := s.buildProxyStatusPayload()

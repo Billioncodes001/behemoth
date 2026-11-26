@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Autumn-27/behemoth/agent"
 )
 
 func TestAuthPagePathClassification(t *testing.T) {
@@ -23,6 +26,8 @@ func TestAuthPagePathClassification(t *testing.T) {
 		{"GET", "/auth/realms/acme/protocol/openid-connect/auth", true},
 		{"GET", "/oauth2/authorize", true},
 		{"GET", "/static/app.js", false},
+		{"GET", "/auth/logo.png", false},
+		{"GET", "/login/bundle.js?v=1", false},
 		{"GET", "/api/v1/users", false},
 		{"GET", "/", false},
 		{"PUT", "/login", false},
@@ -181,5 +186,104 @@ func TestForwardProxyAuthGate(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("upstream hits=%d, want 1", hits)
+	}
+}
+
+func TestAuthPageThrottlePortsAndScrapedExemptionAndRevokedQuarantine(t *testing.T) {
+	g, _ := fakeAuthGate(t)
+	g.perMinute = 2
+
+	// 1. Outbound SMTP mail-relay port 25/587 blocked with 403
+	if code, _, _ := g.gate("CONNECT", "mail.target.test:25", ""); code != http.StatusForbidden {
+		t.Fatalf("expected 403 on port 25, got %d", code)
+	}
+	// 2. Non-HTTP credential port 21 (FTP) counted against authSent budget
+	if code, _, _ := g.gate("CONNECT", "ftp.target.test:21", ""); code != 0 {
+		t.Fatalf("first FTP connect blocked: %d", code)
+	}
+	if code, _, _ := g.gate("CONNECT", "ftp.target.test:21", ""); code != 0 {
+		t.Fatalf("second FTP connect blocked: %d", code)
+	}
+	if code, _, _ := g.gate("CONNECT", "ftp.target.test:21", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("third FTP connect should hit auth minute budget, got %d", code)
+	}
+
+	// 3. Scraped unauthenticated proxies and Tor are exempt; Webshare/commercial proxies are metered
+	m := &Manager{
+		proxyPool: &proxyPoolState{
+			active: "scraped-http-1-2-3-4-8080",
+			entries: []proxyPoolEntry{
+				{
+					ProxyPoolEntry: ProxyPoolEntry{ID: "scraped-http-1-2-3-4-8080", Enabled: true, Health: "healthy"},
+					RawURL:         "http://1.2.3.4:8080",
+				},
+				{
+					ProxyPoolEntry: ProxyPoolEntry{ID: "ws-1", Name: "Webshare US", Enabled: true, Health: "healthy"},
+					RawURL:         "http://wsuser:wspass@198.51.100.10:80",
+				},
+				{
+					ProxyPoolEntry: ProxyPoolEntry{ID: "ws-2", Name: "Webshare Backup", Enabled: true, Health: "healthy"},
+					RawURL:         "http://wsuser:wspass@198.51.100.11:80",
+				},
+			},
+		},
+	}
+	if m.IsMeteredCommercialProxyActive() {
+		t.Fatal("unauthenticated scraped-* proxy must be exempt from commercial provider meter")
+	}
+	m.proxyPool.active = "ws-1"
+	if !m.IsMeteredCommercialProxyActive() {
+		t.Fatal("authenticated Webshare proxy must be treated as metered commercial proxy")
+	}
+
+	// 4. HTTP 407 auth-revoked quarantines ws-1 and rotates to ws-2 immediately
+	m.quarantineUpstreamProxy("http://wsuser:wspass@198.51.100.10:80", "HTTP 407 revoked")
+	if m.proxyPool.entries[1].Health != "unhealthy-cooling" {
+		t.Fatalf("expected ws-1 unhealthy-cooling after 407, got %s", m.proxyPool.entries[1].Health)
+	}
+	if m.proxyPool.active != "ws-2" {
+		t.Fatalf("expected automatic failover from ws-1 to ws-2, got active=%s", m.proxyPool.active)
+	}
+}
+
+func TestCooldownResumeScheduleAndCancelTools(t *testing.T) {
+	m := proxyTestManager(t)
+	s := &Server{m: m, chatBusy: map[string]bool{}}
+
+	conv, err := m.pg.CreateConversation("auto", "portal.example.com", nil)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx := agent.WithRunInfo(context.Background(), agent.RunInfo{SessionID: s.convBusyKey(conv.ID)})
+
+	in, _ := json.Marshal(map[string]any{
+		"cooldown_minutes":        35,
+		"repeat_interval_minutes": 45,
+		"max_runs":                3,
+		"domain":                  "portal.example.com",
+		"reason":                  "5/hour Webshare auth batch reached",
+		"resume_prompt":           "Continue credential batch #2 (users 6-10) spaced 12s apart.",
+	})
+	res, err := s.toolScheduleCooldownResume().Call(ctx, in, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("schedule_cooldown_resume failed: err=%v res=%s", err, res.Flatten())
+	}
+	var out struct {
+		OK  bool              `json:"ok"`
+		Job CooldownResumeJob `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &out); err != nil || !out.OK || out.Job.ConversationID != conv.ID {
+		t.Fatalf("unexpected schedule output: %s (err=%v)", res.Content[0].Text, err)
+	}
+
+	listRes, err := s.toolListCooldownSchedules().Call(ctx, json.RawMessage(`{}`), nil)
+	if err != nil || !strings.Contains(listRes.Flatten(), out.Job.ID) {
+		t.Fatalf("expected job in list_cooldown_schedules, got %s", listRes.Flatten())
+	}
+
+	cancelIn, _ := json.Marshal(map[string]any{"job_id": out.Job.ID})
+	cancelRes, err := s.toolCancelCooldownSchedule().Call(ctx, cancelIn, nil)
+	if err != nil || !strings.Contains(cancelRes.Flatten(), `"ok":true`) {
+		t.Fatalf("cancel_cooldown_schedule failed: err=%v res=%s", err, cancelRes.Flatten())
 	}
 }

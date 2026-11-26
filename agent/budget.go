@@ -67,6 +67,8 @@ var budgetWriteBackTools = map[string]bool{
 	"bind_finding_traffic":                   true,
 	"save_verified_exploit_to_patch_monitor": true,
 	"save_artifact":                          true,
+	"schedule_cooldown_resume":               true,
+	"cancel_cooldown_schedule":               true,
 	"report_need":                            true,
 	"mark_done":                              true,
 	"prove_goal":                             true,

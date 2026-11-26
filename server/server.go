@@ -382,7 +382,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		}
 	}
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
-	search.SetProxyProvider(s.m.OutboundProxyAddr)
+	search.SetProxyProvider(s.m.ActiveOutboundProxyAddr)
 	s.startLocalSearXNGSupervisor(s.ctx)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 

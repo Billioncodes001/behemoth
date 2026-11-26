@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -340,7 +342,10 @@ func (m *Manager) SetExclusiveTor(enabled bool, circuitURLs []string) {
 	m.exclusiveTorMu.Unlock()
 
 	if m.traffic != nil {
-		m.traffic.SetFailClosed(enabled || m.proxyPoolFailClosed.Load())
+		// MITM capture layer mirrors the same hard no-direct rule as the
+		// dynamic forwarder: without an upstream proxy, direct target dials
+		// are blocked unless BEHEMOTH_ALLOW_DIRECT_EGRESS explicitly allows.
+		m.traffic.SetFailClosed(enabled || m.proxyPoolFailClosed.Load() || !directEgressAllowed())
 		if enabled {
 			// Seed the static upstream with the first circuit; the live rotation
 			// provider (NextUpstreamProxy) spreads real requests across all of them.
@@ -484,7 +489,7 @@ func (m *Manager) SetProxyPoolFailClosed(enabled bool) {
 	}
 	m.proxyPoolFailClosed.Store(enabled)
 	if m.traffic != nil {
-		m.traffic.SetFailClosed(enabled || m.IsExclusiveTorEnabled())
+		m.traffic.SetFailClosed(enabled || m.IsExclusiveTorEnabled() || !directEgressAllowed())
 	}
 	if m.pg != nil {
 		m.syncBrowserMCPProxy()
@@ -811,17 +816,29 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
 	if fp, ferr := newDynamicForwardProxy(func() string { return m.NextUpstreamProxy() }); ferr == nil {
 		m.forwardProxy = fp
-		// Direct egress is allowed ONLY when fail-closed Proxy Pool / Exclusive Tor
-		// mode is OFF and no Global Proxy is set.
-		fp.direct = func() bool { return !m.IsProxyPoolFailClosed() && strings.TrimSpace(m.GlobalProxy()) == "" }
-		// Auth-page throttle: proxy providers meter login/sign-up traffic and revoke
-		// auth when it is hammered. The gate answers 429 + Retry-After before the
-		// request leaves, and opens a cooldown when the provider refuses (407/429/403).
+		// HARD NO-DIRECT RULE: when no upstream proxy is resolvable (Pool/Tor/
+		// Global all off or exhausted), the forwarder must never dial direct —
+		// it answers 503 so agents stop and notify the operator instead of
+		// leaking the host IP. BEHEMOTH_ALLOW_DIRECT_EGRESS=1 restores legacy
+		// direct egress.
+		fp.direct = func() bool { return directEgressAllowed() }
+		// Auth-page throttle: commercial proxy providers meter login/sign-up traffic
+		// and revoke auth when it is hammered. Unauthenticated scraped public proxies
+		// (scraped-*) and local Tor circuits are exempt since no provider account
+		// meter applies to them.
 		fp.guardRequest = func(_ context.Context, method, targetHost, reqPath string) (int, int, string) {
+			if !m.IsMeteredCommercialProxyActive() {
+				return 0, 0, ""
+			}
 			return authGate.gate(method, targetHost, reqPath)
 		}
-		fp.onUpstreamFail = func(targetHost, _ string, status int, method, reqPath string) {
-			authGate.noteUpstream(targetHost, status, method, reqPath)
+		fp.onUpstreamFail = func(targetHost, upstreamURL string, status int, method, reqPath string) {
+			if status == http.StatusProxyAuthRequired {
+				m.quarantineUpstreamProxy(upstreamURL, "HTTP 407 proxy authentication rejected or revoked by provider")
+			}
+			if m.IsMeteredCommercialProxyActive() || status == http.StatusProxyAuthRequired {
+				authGate.noteUpstream(targetHost, status, method, reqPath)
+			}
 		}
 	} else {
 		log.Printf("[proxy] local forwarder disabled: %v", ferr)
@@ -896,6 +913,8 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		// asks the manager per request, so Tor/pool rotation and tunnel overrides
 		// apply to captured traffic identically to the forwarder path.
 		m.traffic.SetUpstreamProvider(m.NextUpstreamProxy)
+		m.traffic.SetDirectAllowed(directEgressAllowed)
+		m.traffic.SetFailClosed(m.IsExclusiveTorEnabled() || m.IsProxyPoolFailClosed() || !directEgressAllowed())
 	}
 	m.enrich = enrich.New(m.assets, m.ProxyAddr, 4)
 	// Reconcile the seeded browser MCP with the persisted capture state, so a
@@ -1258,14 +1277,144 @@ func (m *Manager) Assets() *pgdb.AssetStore  { return m.assets }
 func (m *Manager) PG() *pgdb.DB              { return m.pg }
 func (m *Manager) Traffic() *traffic.Traffic { return m.traffic }
 
-// HasOutboundProxy reports whether an external outbound proxy (either a static
-// Global Proxy or an enabled Proxy Pool with at least one active entry) is configured.
-// Local traffic capture (127.0.0.1:8788) alone is NOT an outbound proxy.
+// directEgressAllowed reports whether agent/tool traffic may dial external
+// targets DIRECTLY when no outbound proxy (Proxy Pool, Tor, Global Proxy, or
+// C2 tunnel override) is active. Default is BLOCKED (hard no-direct policy:
+// agents must stop and notify the operator instead of leaking the host IP).
+// Set BEHEMOTH_ALLOW_DIRECT_EGRESS=1 to restore legacy direct egress.
+func directEgressAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BEHEMOTH_ALLOW_DIRECT_EGRESS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// HasOutboundProxy reports whether agent egress is forced through an external
+// outbound proxy (either a static Global Proxy or an enabled Proxy Pool with at
+// least one active entry) — or blocked entirely by the no-direct guard. Local
+// traffic capture (127.0.0.1:8788) alone is NOT an outbound proxy. When nothing
+// is configured and BEHEMOTH_ALLOW_DIRECT_EGRESS is unset, this still returns
+// true so every Bash/tool/MCP client is handed the local forwarder, whose
+// no-direct guard answers 503 instead of silently dialing direct.
 func (m *Manager) HasOutboundProxy() bool {
 	if m == nil {
 		return false
 	}
+	return strings.TrimSpace(m.GlobalProxy()) != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed() || m.CaptureEgressOverride() != "" || (m.forwardProxy != nil && !directEgressAllowed())
+}
+
+// HasConfiguredUpstreamProxy reports whether a real upstream proxy (Global Proxy,
+// Proxy Pool, Exclusive Tor, or C2 Tunnel Override) is configured — independent
+// of the default no-direct block. Used by bootstrap/search infrastructure so
+// proxy_harvester can discover public proxy feeds even before a pool is populated.
+func (m *Manager) HasConfiguredUpstreamProxy() bool {
+	if m == nil {
+		return false
+	}
 	return strings.TrimSpace(m.GlobalProxy()) != "" || m.proxyPoolConfigured.Load() || m.IsProxyPoolFailClosed() || m.CaptureEgressOverride() != ""
+}
+
+// ActiveOutboundProxyAddr returns the local dynamic forwarder URL ONLY when a
+// real upstream proxy is configured, and "" otherwise.
+func (m *Manager) ActiveOutboundProxyAddr() string {
+	if m == nil || !m.HasConfiguredUpstreamProxy() {
+		return ""
+	}
+	if m.forwardProxy != nil {
+		return m.forwardProxy.Addr()
+	}
+	return m.ProxyAddr()
+}
+
+// IsMeteredCommercialProxyActive reports whether the currently active outbound
+// proxy is a commercial/provider or authenticated proxy (e.g. Webshare, IPRoyal,
+// Bright Data, authenticated Static Global Proxy) whose auth-page traffic is
+// metered. Unauthenticated disposable scraped proxies (scraped-*) and local Tor
+// circuits (tor-* / Exclusive Tor) return false so they are not throttled by
+// commercial provider rules.
+func (m *Manager) IsMeteredCommercialProxyActive() bool {
+	if m == nil || m.IsExclusiveTorEnabled() {
+		return false
+	}
+	if m.CaptureEgressOverride() != "" {
+		return false
+	}
+	if m.proxyPool != nil {
+		m.proxyPool.mu.Lock()
+		activeID := m.proxyPool.active
+		var activeEntry *proxyPoolEntry
+		for i := range m.proxyPool.entries {
+			if m.proxyPool.entries[i].ID == activeID {
+				cp := m.proxyPool.entries[i]
+				activeEntry = &cp
+				break
+			}
+		}
+		m.proxyPool.mu.Unlock()
+		if activeEntry != nil {
+			if strings.HasPrefix(activeEntry.ID, "tor-") {
+				return false
+			}
+			hasCreds := false
+			if u, err := url.Parse(strings.TrimSpace(activeEntry.RawURL)); err == nil && u.User != nil && u.User.Username() != "" {
+				hasCreds = true
+			}
+			isWebshare := strings.Contains(strings.ToLower(activeEntry.Remark), "webshare") ||
+				strings.Contains(strings.ToLower(activeEntry.Name), "webshare")
+			if strings.HasPrefix(activeEntry.ID, "scraped-") && !hasCreds && !isWebshare {
+				return false
+			}
+			return true
+		}
+	}
+	gp := strings.TrimSpace(m.GlobalProxy())
+	return gp != ""
+}
+
+// quarantineUpstreamProxy immediately marks an upstream proxy URL that returned
+// HTTP 407 (proxy auth rejected/revoked) as unhealthy-cooling and rotates the
+// active pool entry to the next healthy proxy so revoked credentials are not
+// hammered repeatedly.
+func (m *Manager) quarantineUpstreamProxy(upstreamURL, reason string) {
+	if m == nil || strings.TrimSpace(upstreamURL) == "" {
+		return
+	}
+	targetKey := proxyURLKeyRaw(upstreamURL)
+	var quarantinedID string
+	if m.proxyPool != nil {
+		m.proxyPool.mu.Lock()
+		for i := range m.proxyPool.entries {
+			e := &m.proxyPool.entries[i]
+			if proxyURLKeyRaw(e.RawURL) != targetKey {
+				continue
+			}
+			quarantinedID = e.ID
+			e.Health = "unhealthy-cooling"
+			e.LastError = reason
+			e.LastCheckedAt = time.Now()
+			if e.ConsecutiveFailures < defaultProxyHealthThreshold {
+				e.ConsecutiveFailures = defaultProxyHealthThreshold
+			}
+			if m.proxyPool.active == e.ID {
+				if next := m.selectHealthyLocked(e.ID); next != "" {
+					_ = m.applyActiveProxyLocked(next, "auth_revoked_failover")
+				} else if m.IsProxyPoolFailClosed() {
+					_ = m.applyActiveProxyLocked("", "exhausted_fail_closed")
+				}
+			}
+			if m.pg != nil {
+				_ = m.persistProxyPoolLocked()
+			}
+			break
+		}
+		m.proxyPool.mu.Unlock()
+	}
+	if quarantinedID != "" && ppV2 != nil && ppV2.Pool != nil {
+		_ = ppV2.Pool.SetProxyActive(quarantinedID, false, true)
+		_, _ = ppV2.Pool.ForceRotate("auth_revoked_failover")
+	}
 }
 
 // ForwardProxyAddr returns the local dynamic forward-proxy listener address (if running),

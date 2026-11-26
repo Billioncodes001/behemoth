@@ -73,17 +73,28 @@ func envInt(key string, def int) int {
 var authGate = newAuthPageThrottle()
 
 // authPagePath reports whether a request targets an authentication page whose
-// traffic providers meter. Only navigational/POST requests count; assets and API
-// calls do not.
+// traffic providers meter. Only navigational/POST requests count; static assets
+// (.js, .css, images, fonts) under /auth/ or /login/ paths do not.
 func authPagePath(method, path string) bool {
-	switch strings.ToUpper(method) {
+	m := strings.ToUpper(strings.TrimSpace(method))
+	switch m {
 	case "GET", "HEAD", "POST":
 	default:
 		return false
 	}
 	p := strings.ToLower(path)
+	if idx := strings.IndexByte(p, '?'); idx >= 0 {
+		p = p[:idx]
+	}
 	if p == "" || p == "/" {
 		return false
+	}
+	if m == "GET" || m == "HEAD" {
+		for _, ext := range []string{".js", ".mjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".eot", ".map"} {
+			if strings.HasSuffix(p, ext) {
+				return false
+			}
+		}
 	}
 	for _, marker := range []string{
 		"login", "log-in", "signin", "sign-in", "signup", "sign-up", "register",
@@ -95,6 +106,34 @@ func authPagePath(method, path string) bool {
 		}
 	}
 	return false
+}
+
+func extractTargetPort(hostPort string) int {
+	h := strings.TrimSpace(hostPort)
+	if _, portStr, err := net.SplitHostPort(h); err == nil {
+		if n, perr := strconv.Atoi(portStr); perr == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func isBlockedMailRelayPort(port int) bool {
+	switch port {
+	case 25, 465, 587, 2525:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMeteredAuthServicePort(port int) bool {
+	switch port {
+	case 21, 22, 23, 445, 3389, 5900:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeAuthHost(host string) string {
@@ -129,11 +168,18 @@ func (t *authPageThrottle) state(host string, now time.Time) *authHostState {
 	return st
 }
 
-// gate decides whether a request may proceed. It returns HTTP 429, a Retry-After
-// hint in seconds and an explanatory message when the request must wait.
+// gate decides whether a request may proceed. It returns HTTP 429 (or 403 for
+// provider-banned mail-relay ports), a Retry-After hint in seconds, and an
+// explanatory message when the request must wait.
 func (t *authPageThrottle) gate(method, host, path string) (status, retrySeconds int, msg string) {
 	if t == nil || t.disabled {
 		return 0, 0, ""
+	}
+	port := extractTargetPort(host)
+	if isBlockedMailRelayPort(port) {
+		return 403, 0, fmt.Sprintf(
+			"BEHEMOTH proxy provider guard: outbound SMTP/mail-relay port %d to %s is blocked on commercial proxies to prevent provider account suspension.",
+			port, host)
 	}
 	h := normalizeAuthHost(host)
 	if h == "" {
@@ -146,7 +192,7 @@ func (t *authPageThrottle) gate(method, host, path string) (status, retrySeconds
 
 	if wait := st.cooldownUntil.Sub(now); wait > 0 {
 		return 429, int(wait.Seconds()) + 1, fmt.Sprintf(
-			"BEHEMOTH auth-page cooldown for %s: the proxy provider rejected or limited this host. Wait %s, or pause the task and resume later (never retry in a tight loop).",
+			"BEHEMOTH auth-page cooldown for %s: the proxy provider rejected or limited this host. Wait %s, call schedule_cooldown_resume to automatically resume after cooldown, or switch to scraped/Tor proxies (never retry in a tight loop).",
 			h, wait.Round(time.Second))
 	}
 
@@ -156,7 +202,7 @@ func (t *authPageThrottle) gate(method, host, path string) (status, retrySeconds
 			"BEHEMOTH proxy burst cap for %s: %d requests in the last minute. Throttle the scanner/wordlist and retry.", h, t.hostPerMinute)
 	}
 
-	if authPagePath(method, path) {
+	if authPagePath(method, path) || (strings.EqualFold(method, "CONNECT") && isMeteredAuthServicePort(port)) {
 		// authSent keeps an hour of history for the hourly budget; count the tail
 		// that falls inside the minute window instead of the whole slice.
 		authLastMinute := 0
@@ -167,13 +213,13 @@ func (t *authPageThrottle) gate(method, host, path string) (status, retrySeconds
 		if t.perMinute > 0 && authLastMinute >= t.perMinute {
 			wait := st.authSent[len(st.authSent)-t.perMinute].Add(time.Minute).Sub(now)
 			return 429, int(wait.Seconds()) + 1, fmt.Sprintf(
-				"BEHEMOTH auth-page budget for %s: %d login/sign-up requests in the last minute (limit %d/min, %d/hour through proxy providers). Wait before the next credential attempt.",
+				"BEHEMOTH auth-page budget for %s: %d login/sign-up/auth-service requests in the last minute (limit %d/min, %d/hour through proxy providers). Space attempts >=10s apart or call schedule_cooldown_resume.",
 				h, authLastMinute, t.perMinute, t.perHour)
 		}
 		if t.perHour > 0 && len(st.authSent) >= t.perHour {
 			wait := st.authSent[len(st.authSent)-t.perHour].Add(time.Hour).Sub(now)
 			return 429, int(wait.Seconds()) + 1, fmt.Sprintf(
-				"BEHEMOTH auth-page budget for %s exhausted: %d login/sign-up requests in the last hour. Record your attempts, disable the proxy for the credential phase, or resume later.",
+				"BEHEMOTH auth-page budget for %s exhausted: %d login/sign-up/auth-service requests in the last hour. Record your progress and call schedule_cooldown_resume(cooldown_minutes=60) to resume automatically after cooldown, or switch to scraped proxies.",
 				h, len(st.authSent))
 		}
 		st.authSent = append(st.authSent, now)

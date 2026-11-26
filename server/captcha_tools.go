@@ -356,14 +356,32 @@ func solveCaptchaRun(s *Server) func(context.Context, json.RawMessage) (actool.R
 			if strings.TrimSpace(a.PageURL) == "" {
 				return actool.Errorf("page_url is required for mode=form"), nil
 			}
+			// When exiting through a metered commercial proxy provider (e.g. Webshare),
+			// clamp form-submission rounds and spacing so solve_captcha never trips
+			// provider login/signup abuse meters (<=5 attempts, >=10s delay, 2Captcha first).
+			meteredProxy := usedManagedProxy && s != nil && s.m != nil && s.m.IsMeteredCommercialProxyActive()
+			maxAttempts := a.MaxAttempts
+			delaySec := a.DelaySeconds
+			force2Cap := a.Use2Captcha
+			if meteredProxy {
+				if maxAttempts <= 0 || maxAttempts > 5 {
+					maxAttempts = 5
+				}
+				if delaySec < 10 {
+					delaySec = 10
+				}
+				if apiKey != "" {
+					force2Cap = true
+				}
+			}
 			var roundCounter int32
 			var customRec captcha.Recognizer
 			if apiKey != "" {
 				solver := captcha.NewTokenSolver(apiKey, baseURL, nil)
 				customRec = func(rctx context.Context, imgBytes []byte) ([]string, error) {
 					n := atomic.AddInt32(&roundCounter, 1)
-					// Try fast local OCR on rounds 1-2 unless use_2captcha=true; escalate to 2Captcha ImageToText on round 3+ or OCR miss.
-					if !a.Use2Captcha && n <= 2 {
+					// Try fast local OCR on rounds 1-2 unless force2Cap=true; escalate to 2Captcha ImageToText on round 3+ or OCR miss.
+					if !force2Cap && n <= 2 {
 						if r, oerr := captcha.SolveImageCaptcha(rctx, imgBytes, captcha.OCRRequest{CharWhitelist: a.CharWhitelist}); oerr == nil && len(r.Candidates) > 0 {
 							return r.Candidates, nil
 						}
@@ -399,8 +417,8 @@ func solveCaptchaRun(s *Server) func(context.Context, json.RawMessage) (actool.R
 				SuccessMarkers:   a.SuccessMarkers,
 				FailureMarkers:   a.FailureMarkers,
 				RejectMarkers:    a.RejectMarkers,
-				MaxAttempts:      a.MaxAttempts,
-				Delay:            time.Duration(a.DelaySeconds * float64(time.Second)),
+				MaxAttempts:      maxAttempts,
+				Delay:            time.Duration(delaySec * float64(time.Second)),
 				Timeout:          timeout,
 				ProxyURL:         effectiveProxy,
 				OCR:              captcha.OCRRequest{CharWhitelist: a.CharWhitelist},

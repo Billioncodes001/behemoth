@@ -121,3 +121,70 @@ func (t *lazyMCPTool) Call(ctx context.Context, in json.RawMessage, tc *actool.T
 	}
 	return realTool.Call(ctx, in, tc)
 }
+
+var (
+	mcpFailCooldownMu sync.Mutex
+	mcpFailCooldown   = map[int64]time.Time{}
+)
+
+func shouldSkipFailedMCPConnect(serverID int64) bool {
+	mcpFailCooldownMu.Lock()
+	defer mcpFailCooldownMu.Unlock()
+	until, ok := mcpFailCooldown[serverID]
+	return ok && time.Now().Before(until)
+}
+
+func noteFailedMCPConnect(serverID int64) {
+	mcpFailCooldownMu.Lock()
+	mcpFailCooldown[serverID] = time.Now().Add(60 * time.Second)
+	mcpFailCooldownMu.Unlock()
+}
+
+// defaultBuiltinMCPToolStubs returns pre-known tool metadata for built-in MCP
+// servers so even brand-new databases (before background npx discovery finishes)
+// assemble turns in <2ms via lazyMCPConnection with zero cold subprocess spawns.
+func defaultBuiltinMCPToolStubs(serverName string) []db.MCPTool {
+	switch serverName {
+	case "browser":
+		return []db.MCPTool{
+			{Name: "mcp__browser__browser_navigate", Description: "Navigate headless Chromium to a URL"},
+			{Name: "mcp__browser__browser_snapshot", Description: "Capture accessibility snapshot of the current page"},
+			{Name: "mcp__browser__browser_click", Description: "Click an element on the web page"},
+			{Name: "mcp__browser__browser_type", Description: "Type text into an editable element"},
+			{Name: "mcp__browser__browser_evaluate", Description: "Evaluate JavaScript expression on page or element"},
+			{Name: "mcp__browser__browser_take_screenshot", Description: "Take a screenshot of the current page"},
+			{Name: "mcp__browser__browser_network_requests", Description: "List all network requests since page load"},
+			{Name: "mcp__browser__browser_console_messages", Description: "Return all browser console messages"},
+		}
+	case "vuln_intel":
+		return []db.MCPTool{
+			{Name: "mcp__vuln_intel__cve_nvd_lookup", Description: "Fetch CVE details, CVSS vector, CWEs, and references from NIST NVD 2.0"},
+			{Name: "mcp__vuln_intel__epss_exploit_probability", Description: "Query FIRST.org EPSS exploitation probability score"},
+			{Name: "mcp__vuln_intel__cisa_kev_check", Description: "Check CISA Known Exploited Vulnerabilities catalog"},
+			{Name: "mcp__vuln_intel__osv_package_vulns", Description: "Query OSV.dev vulnerabilities for an ecosystem package & version"},
+		}
+	case "recon_osint":
+		return []db.MCPTool{
+			{Name: "mcp__recon_osint__crtsh_subdomains", Description: "Enumerate subdomains via Certificate Transparency logs (crt.sh)"},
+			{Name: "mcp__recon_osint__wayback_historical_urls", Description: "Discover historical endpoints via Internet Archive CDX API"},
+			{Name: "mcp__recon_osint__security_txt_contacts", Description: "Retrieve /.well-known/security.txt disclosure contacts"},
+		}
+	case "web_sec_analyzer":
+		return []db.MCPTool{
+			{Name: "mcp__web_sec_analyzer__http_security_headers_audit", Description: "Audit HTTP security headers, cookies, and CORS configuration"},
+			{Name: "mcp__web_sec_analyzer__jwt_decode_and_audit", Description: "Decode and audit JWT header, claims, and algorithm weaknesses"},
+		}
+	case "sequential_thinking":
+		return []db.MCPTool{
+			{Name: "mcp__sequential_thinking__sequentialthinking", Description: "Structured multi-step exploit chain and hypothesis reasoning"},
+		}
+	case "knowledge_memory":
+		return []db.MCPTool{
+			{Name: "mcp__knowledge_memory__create_entities", Description: "Create entities in persistent knowledge graph"},
+			{Name: "mcp__knowledge_memory__search_nodes", Description: "Search nodes in persistent knowledge graph"},
+			{Name: "mcp__knowledge_memory__read_graph", Description: "Read persistent knowledge graph"},
+		}
+	default:
+		return nil
+	}
+}

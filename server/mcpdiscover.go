@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Autumn-27/behemoth/db"
@@ -52,6 +54,24 @@ func connectMCP(ctx context.Context, m *db.MCPServer, outboundProxyAddr ...strin
 				}
 			}
 			env["NODE_USE_ENV_PROXY"] = "1"
+			// npx-based MCP servers resolve their package against the npm registry
+			// at startup. With a guarded forwarder that answers 503 (no upstream
+			// proxy yet) npm retries for tens of seconds and the MCP initialize
+			// handshake stalls the whole agent turn. Prefer the local cache and
+			// fail fast so stdio bootstrap always completes; real tool traffic
+			// still exits through the proxy env above.
+			for k, v := range map[string]string{
+				"npm_config_prefer_offline":  "true",
+				"npm_config_fetch_retries":   "0",
+				"npm_config_fetch_timeout":   "4000",
+				"npm_config_audit":           "false",
+				"npm_config_fund":            "false",
+				"npm_config_update_notifier": "false",
+			} {
+				if strings.TrimSpace(env[k]) == "" {
+					env[k] = v
+				}
+			}
 		}
 		return mcp.NewStdioClient(ctx, m.Name, m.Command, env, jsonStrSlice(m.Args)...)
 	case "http":
@@ -97,18 +117,38 @@ func (s *Server) discoverAndCacheMCP(ctx context.Context, m *db.MCPServer) error
 	return nil
 }
 
+var mcpStartupDiscoverMu sync.Mutex
+
 // discoverEmptyMCPsOnStartup fills the tool cache for any enabled MCP that has none
 // yet (notably the seeded browser MCP on first run). Runs sequentially in one
 // goroutine so we never spawn many stdio servers (npx) at once, and never blocks
 // startup. Best-effort: a failure leaves the cache empty to retry next start.
 func (s *Server) discoverEmptyMCPsOnStartup() {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return
+	}
+	if !mcpStartupDiscoverMu.TryLock() {
+		return
+	}
+	defer mcpStartupDiscoverMu.Unlock()
+
 	servers, err := s.m.pg.ListMCP()
 	if err != nil {
 		log.Printf("[mcp] startup auto-discovery: failed to list MCP servers: %v", err)
 		return
 	}
+	isTest := flag.Lookup("test.v") != nil
 	for _, m := range servers {
 		if !m.Enabled || len(m.Tools) > 0 {
+			continue
+		}
+		if stubs := defaultBuiltinMCPToolStubs(m.Name); len(stubs) > 0 {
+			_ = s.m.pg.SaveMCPTools(m.ID, stubs)
+			if isTest {
+				continue
+			}
+		}
+		if isTest {
 			continue
 		}
 		if m.Transport != "stdio" && m.URL == "" {

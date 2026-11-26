@@ -243,3 +243,53 @@ of a shared residential pool, or disable the throttle for a pure brute-force run
 
 Code: `server/auth_page_throttle.go`; hook wiring in `server/manager.go`,
 `server/forward_proxy.go`; tests in `server/auth_page_throttle_test.go`.
+
+## 7. Hard no-direct egress guard
+
+Agents must never reach external targets directly from the BEHEMOTH host IP:
+if no outbound proxy (Proxy Pool, Tor, Global Proxy, or C2 tunnel override) is
+active, they stop and notify the operator instead of leaking the server IP.
+This is enforced twice:
+
+- **Prompt (code-owned, all roles)**: the OPSEC block in `agent/prompt.go`
+  (*Check Proxy Status FIRST — Zero Server IP Leaks, Direct Egress Is
+  FORBIDDEN*) now instructs agents to bootstrap an egress
+  (`scrape_online_proxies`, `manage_proxy_pool(action='enable_tor')`, or
+  enabling staged scraped proxies) or stop + `record_fact`/`pause_task` +
+  notify the operator — never to work unproxied. A dedicated sub-rule covers
+  Tor-only routing: if Tor cannot carry the job (exit blocked / too slow /
+  needs a non-Tor exit), stop and notify instead of falling back to direct.
+- **Mechanical (local forward proxy + MITM capture layer)**: when the upstream
+  resolver returns empty and direct egress is not explicitly allowed, the
+  forwarder answers **503** (`Fail-Closed Proxy Guard`) for every external
+  request — plain HTTP and CONNECT — before any dial, and the MITM layer sets
+  the same fail-closed flag. Because `HasOutboundProxy()` reports the guard
+  state, Bash (`$HTTP_PROXY`/`$HTTPS_PROXY`/`$ALL_PROXY`), WebFetch,
+  `http_request`, MCP servers, and scanner tools all funnel into the local
+  forwarder and get the blocked answer instead of silently dialing direct.
+  Loopback targets (local PoC servers) are always exempt. STDIO MCP servers
+  receive the local forwarder in `HTTP_PROXY`; because `npx`-based MCPs resolve
+  their package against the registry at startup (and would stall on the 503),
+  `connectMCP` now also injects npm fast-fail/offline-preferring knobs
+  (`npm_config_prefer_offline`, `fetch_retries=0`, `fetch_timeout=4000`) so the
+  MCP handshake always completes and the agent turn is not blocked.
+
+`check_proxy_status` / `get_proxy_pool_status` report the state as
+`effective_routing_mode: "no_outbound_direct_blocked"` with
+`direct_egress_blocked: true` and a STOP instruction; the payload also carries
+a `scraped_proxies` summary (total / active-verified / top entries / scraper
+`auto_enable_pool` flag) so agents auto-detect scraped proxies staged in the
+pool and activate them with `manage_proxy_pool(action='enable'/'activate')`
+instead of working blind. The scheduled Online Scraper auto-enables the pool
+with fresh verified proxies whenever *Auto-Enable Pool* is on.
+
+Escape hatch (not recommended during engagements):
+
+```bash
+BEHEMOTH_ALLOW_DIRECT_EGRESS=1   # restore legacy direct egress when nothing is enabled
+```
+
+Code: `server/manager.go` (`directEgressAllowed`, `fp.direct` wiring,
+`HasOutboundProxy`, MITM `SetFailClosed`), `server/forward_proxy.go` (503
+guard), `server/proxy_pool_tools.go` (routing mode + `scraped_proxies`);
+tests in `server/no_direct_egress_guard_test.go`.

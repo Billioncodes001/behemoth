@@ -86,6 +86,8 @@ var autoDeferredSpecialistTools = map[string]bool{
 	"add_proxy_scrape_source":                  true,
 	"remove_proxy_scrape_source":               true,
 	"verify_and_import_scraped_proxies":        true,
+	"list_cooldown_schedules":                  true,
+	"cancel_cooldown_schedule":                 true,
 }
 
 //nolint:unused // used as the hostTools provider in wireAgentAugment
@@ -160,6 +162,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 	out = append(out, s.artifactTools()...)
 	out = append(out, s.captchaTools()...)
 	out = append(out, s.agentRequestTools()...)
+	out = append(out, s.cooldownScheduleTools()...)
 	return append(out, s.proxyPoolAgentTools()...)
 }
 
@@ -746,6 +749,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedSelfImprovingScannerToolsV1()
 	s.seedLootAndCaptchaToolsV1()
 	s.seedCaptchaAndSearchToolsV2()
+	s.seedCooldownScheduleToolsV1()
 	s.seedAgentRequestToolsV1()
 	s.seedC2ToolsV1()
 	s.seedC2ProxyToolsV1()
@@ -1457,6 +1461,29 @@ func (s *Server) seedCaptchaAndSearchToolsV2() {
 	binds, _ := json.Marshal(targetAgents)
 	keys := make([]string, 0, len(refreshTools))
 	for _, t := range refreshTools {
+		schema, _ := json.Marshal(t.InputSchema())
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range targetAgents {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedCooldownScheduleToolsV1 seeds schedule_cooldown_resume, list_cooldown_schedules,
+// and cancel_cooldown_schedule into the tools catalog and binds them to operational agents.
+func (s *Server) seedCooldownScheduleToolsV1() {
+	const flag = "cooldown_schedule_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	tools := s.cooldownScheduleTools()
+	targetAgents := []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester"}
+	binds, _ := json.Marshal(targetAgents)
+	keys := make([]string, 0, len(tools))
+	for _, t := range tools {
 		schema, _ := json.Marshal(t.InputSchema())
 		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
 		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)

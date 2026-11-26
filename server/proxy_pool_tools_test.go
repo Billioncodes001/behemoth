@@ -45,7 +45,8 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	})
 
 	// Before any proxy is enabled (Proxy Pool OFF, Global Proxy empty, Traffic Capture OFF):
-	// SessionProxyAddr MUST be empty ("") and check_proxy_status MUST report proxy_enabled=false!
+	// SessionProxyAddr MUST be empty ("") and check_proxy_status MUST report proxy_enabled=false
+	// with the hard no-direct guard active (default policy blocks direct egress)!
 	if got := s.m.SessionProxyAddr(); got != "" {
 		t.Fatalf("expected empty SessionProxyAddr when all proxies are disabled, got %q", got)
 	}
@@ -57,8 +58,8 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	if err := json.Unmarshal([]byte(chkRes.Content[0].Text), &chkPayload); err != nil {
 		t.Fatalf("invalid check_proxy_status JSON: %v", err)
 	}
-	if chkPayload["proxy_enabled"] != false || chkPayload["effective_routing_mode"] != "direct" {
-		t.Fatalf("expected proxy_enabled=false & direct before import, got %+v", chkPayload)
+	if chkPayload["proxy_enabled"] != false || chkPayload["effective_routing_mode"] != "no_outbound_direct_blocked" {
+		t.Fatalf("expected proxy_enabled=false & no_outbound_direct_blocked before import, got %+v", chkPayload)
 	}
 	if policy, _ := chkPayload["auth_page_policy"].(string); !strings.Contains(policy, "does not apply") {
 		t.Fatalf("expected direct-mode auth_page_policy to be a no-op notice, got %q", policy)
@@ -105,15 +106,15 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 		t.Fatalf("expected request routed through imported proxy, got body=%q hits=%d", string(body), proxyHits.Load())
 	}
 
-	// Verify disabling Proxy Pool switches to direct without clobbering proxy health,
+	// Verify disabling Proxy Pool engages the no-direct guard (routing blocked, never direct),
 	// and re-enabling + configuring restores pool routing immediately.
 	disRes, err := s.toolManageProxyPool().Call(context.Background(), json.RawMessage(`{"action":"disable"}`), nil)
 	if err != nil || disRes.IsError {
 		t.Fatalf("manage_proxy_pool disable failed: err=%v res=%+v", err, disRes)
 	}
 	stRes, _ := s.toolGetProxyPoolStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
-	if !strings.Contains(stRes.Content[0].Text, `"effective_routing_mode":"direct"`) {
-		t.Fatalf("expected direct routing when pool disabled, got %s", stRes.Content[0].Text)
+	if !strings.Contains(stRes.Content[0].Text, `"effective_routing_mode":"no_outbound_direct_blocked"`) {
+		t.Fatalf("expected blocked routing when pool disabled, got %s", stRes.Content[0].Text)
 	}
 
 	enRes, err := s.toolManageProxyPool().Call(context.Background(), json.RawMessage(`{"action":"enable","rotation_strategy":"least_used","session_sticky":false,"rotation_interval_seconds":15}`), nil)

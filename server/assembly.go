@@ -92,10 +92,16 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					pxFn = outboundProxyFn[0]
 				}
 				// FAST ZERO-COLD-START PATH: when tool metadata is already cached in
-				// PostgreSQL (mcp_tools_cache), register lightweight lazyMCPTool stubs
-				// in 0ms without spawning npx/python3 subprocesses! The server is only
-				// dialed if the agent actually searches or invokes one of its tools.
-				if cachedTools, cerr := pg.MCPToolsDetailed(m.ID); cerr == nil && len(cachedTools) > 0 {
+				// PostgreSQL (mcp_tools_cache) — or known statically for built-in MCPs —
+				// register lightweight lazyMCPTool stubs in 0ms without spawning npx/python3
+				// subprocesses! The server is only dialed if the agent actually searches or
+				// invokes one of its tools.
+				cachedTools, cerr := pg.MCPToolsDetailed(m.ID)
+				if (cerr != nil || len(cachedTools) == 0) && len(defaultBuiltinMCPToolStubs(m.Name)) > 0 {
+					cachedTools = defaultBuiltinMCPToolStubs(m.Name)
+					_ = pg.SaveMCPTools(m.ID, cachedTools)
+				}
+				if len(cachedTools) > 0 {
 					mCopy := m
 					lazyConn := newLazyMCPConnection(mCopy, pxFn)
 					closers = append(closers, lazyConn)
@@ -123,12 +129,16 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					continue
 				}
 
+				if shouldSkipFailedMCPConnect(m.ID) {
+					continue
+				}
 				var mcpProxy string
 				if pxFn != nil {
 					mcpProxy = pxFn()
 				}
 				cl, err := connectMCP(ctx, m, mcpProxy)
 				if err != nil {
+					noteFailedMCPConnect(m.ID)
 					log.Printf("[mcp] %s connection failed: %v", m.Name, err)
 					continue
 				}

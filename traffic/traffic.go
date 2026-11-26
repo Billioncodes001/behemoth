@@ -176,6 +176,7 @@ type Traffic struct {
 	// result falls back to the static upstream, then to the fail-closed guard.
 	upstreamProvider func() string
 	failClosed       atomic.Bool
+	directAllowed    atomic.Value // optional func() bool
 	upstreamMu       sync.RWMutex
 	upstreamFailure  func(error)
 	outboundMod      atomic.Value // optional func(host string, hdr http.Header)
@@ -186,6 +187,14 @@ type Traffic struct {
 func (t *Traffic) SetFailClosed(enabled bool) {
 	if t != nil {
 		t.failClosed.Store(enabled)
+	}
+}
+
+// SetDirectAllowed installs an optional dynamic policy callback reporting whether
+// direct non-loopback target dials are permitted when no upstream proxy is set.
+func (t *Traffic) SetDirectAllowed(fn func() bool) {
+	if t != nil {
+		t.directAllowed.Store(fn)
 	}
 }
 
@@ -358,6 +367,11 @@ func (t *Traffic) resolveUpstream(req *http.Request) (*url.URL, error) {
 	}
 	if t.failClosed.Load() {
 		return nil, errors.New("BEHEMOTH fail-closed proxy guard: Proxy Pool is enabled, and all configured proxies are unhealthy or out of bandwidth; direct connection blocked")
+	}
+	if v := t.directAllowed.Load(); v != nil {
+		if fn, ok := v.(func() bool); ok && fn != nil && !fn() {
+			return nil, errors.New("BEHEMOTH fail-closed proxy guard: no usable outbound proxy is active; direct target connection blocked to protect server IP")
+		}
 	}
 	return nil, nil
 }
