@@ -235,8 +235,12 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	// Discard incidental lockfile drift produced by prior local `npm` builds before checking tracked files.
 	_ = exec.CommandContext(ctx, "git", "checkout", "--", "web/package-lock.json").Run()
 
-	// Check ONLY tracked files (`-uno`) so untracked runtime outputs (reports, custom skills,
-	// temporary logs) never block automatic 60-second updates on production.
+	// Check ONLY tracked files (`-uno`) so untracked runtime outputs never block
+	// automatic 60-second updates. Runtime-managed paths (agent self-improved
+	// `skills/**`, chmod drift on `setup.sh`/`start.sh`, or `server/webui/**`) are
+	// auto-stashed & re-applied rather than blocking production live-sync, while
+	// genuine code edits (`.go`, `web/src/**`) on a developer checkout still skip safely.
+	autoStashRuntimeDirty := false
 	if !manual {
 		statusOut, err := exec.CommandContext(ctx, "git", "status", "--porcelain", "-uno").Output()
 		if err != nil {
@@ -244,8 +248,29 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 			return
 		}
 		if dirty := strings.TrimSpace(string(statusOut)); len(dirty) > 0 {
-			setMaintenanceOutcome("skipped_dirty_tracked_files", firstLine(dirty, 200))
-			return
+			onlyRuntimeManaged := true
+			for _, line := range strings.Split(dirty, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				fields := strings.Fields(line)
+				pathPart := fields[len(fields)-1]
+				if strings.HasPrefix(pathPart, "skills/") ||
+					strings.HasPrefix(pathPart, "server/webui/") ||
+					pathPart == "setup.sh" ||
+					pathPart == "start.sh" ||
+					pathPart == "web/package-lock.json" {
+					continue
+				}
+				onlyRuntimeManaged = false
+				break
+			}
+			if !onlyRuntimeManaged {
+				setMaintenanceOutcome("skipped_dirty_tracked_files", firstLine(dirty, 200))
+				return
+			}
+			autoStashRuntimeDirty = true
 		}
 	}
 
@@ -304,9 +329,14 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		webChanged = true
 	}
 
-	if manual {
-		// Stash any local tracked edits during an explicit webhook/manual sync so fast-forward succeeds cleanly.
-		_ = exec.CommandContext(ctx, "git", "stash", "push", "--quiet", "-m", "behemoth-manual-sync-"+time.Now().UTC().Format("20060102T150405Z")).Run()
+	stashedSkills := false
+	if manual || autoStashRuntimeDirty {
+		// Stash local tracked edits (e.g. agent-updated skills/** on production) so fast-forward succeeds cleanly.
+		if preOut, _ := exec.CommandContext(ctx, "git", "status", "--porcelain", "-uno").Output(); len(strings.TrimSpace(string(preOut))) > 0 {
+			if exec.CommandContext(ctx, "git", "stash", "push", "--quiet", "-m", "behemoth-autosync-"+time.Now().UTC().Format("20060102T150405Z")).Run() == nil {
+				stashedSkills = autoStashRuntimeDirty
+			}
+		}
 	}
 
 	shortRemote := remoteSHA
@@ -326,6 +356,12 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	}
 	_ = os.Chmod("setup.sh", 0o755)
 	_ = os.Chmod("start.sh", 0o755)
+	if stashedSkills {
+		// Best-effort restore of non-conflicting agent skill improvements; if conflicted, reset cleanly to upstream HEAD.
+		if exec.CommandContext(ctx, "git", "stash", "apply", "--quiet").Run() != nil {
+			_ = exec.CommandContext(ctx, "git", "checkout", "--", ".").Run()
+		}
+	}
 
 	needNpmInstall := "0"
 	if pkgJSONChanged {
