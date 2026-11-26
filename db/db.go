@@ -181,6 +181,10 @@ func Open(dsn string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("ensure bounty_programs: %w", err)
 	}
+	if err := d.EnsureTaskChatLinksTables(); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("ensure task_chat_links: %w", err)
+	}
 	return d, nil
 }
 

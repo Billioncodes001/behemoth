@@ -461,10 +461,21 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.traffic != nil {
 		m.traffic.SetUpstreamFailureHandler(s.handleProxyTrafficFailure)
 	}
-	// Wire live service API keys (2Captcha, Firecrawl, Tavily, Brave, SearXNG) and
-	// live service integration prompts into every agent runtime.
+	// Wire live service API keys (2Captcha, Firecrawl, Tavily, Brave, SearXNG),
+	// live service integration prompts, and Task <-> Chat live callback bridge.
 	agent.ExtraServiceEnv = s.serviceEnvPairs
 	agent.ServiceIntegrationsNote = s.serviceIntegrationsNote
+	agent.ConversationContextNote = func(sessionID string) string {
+		if !strings.HasPrefix(sessionID, "conv-") {
+			return ""
+		}
+		cid, err := strconv.ParseInt(strings.TrimPrefix(sessionID, "conv-"), 10, 64)
+		if err != nil || cid <= 0 {
+			return ""
+		}
+		return s.conversationLinkedTasksContext(cid)
+	}
+	m.SetTaskChatEventHandler(s.triggerTaskChatSyncAsync)
 
 	// Wire DB-stored prompt templates into the agents (new approach S3.3 / S5a). With no
 	// override row, agents keep their built-in defaults -- behavior is unchanged.

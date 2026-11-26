@@ -118,6 +118,9 @@ func (sc *Scheduler) init() {
 func (sc *Scheduler) step() {
 	sc.fireTaskSchedules()
 	sc.fireCooldownResumes()
+	if sc.s != nil {
+		sc.s.syncTaskChatUpdates()
+	}
 	triggers, err := sc.pg.ListEnabledTriggers()
 	if err != nil {
 		return

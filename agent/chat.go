@@ -93,10 +93,23 @@ func chatWorkDirSpec(workDir, model string) string {
 	return out
 }
 
+// ConversationContextNote returns an optional dynamic system-prompt block for a
+// given chat sessionID (e.g. "conv-42"), such as linked multi-agent Tasks spawned
+// from that conversation. Wired by server startup; nil in standalone tests.
+var ConversationContextNote func(sessionID string) string
+
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, model, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model) + systemTail()
+	return chatSystemForSession(agentKey, "", model, dataDir, workDir)
+}
+
+func chatSystemForSession(agentKey, sessionID, model, dataDir, workDir string) string {
+	extra := ""
+	if ConversationContextNote != nil && sessionID != "" {
+		extra = ConversationContextNote(sessionID)
+	}
+	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model) + extra + systemTail()
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.
@@ -135,7 +148,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
-	system, boundary := deferredSystem(chatSystem(agentKey, c.model, c.workDir, sessionWorkDir), def)
+	system, boundary := deferredSystem(chatSystemForSession(agentKey, sessionID, c.model, c.workDir, sessionWorkDir), def)
 
 	resolveLiveProxy := func() string {
 		// proxy_harvester discovers & verifies public proxy feeds to replenish an empty or

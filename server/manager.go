@@ -313,6 +313,7 @@ type Manager struct {
 	forwardProxy         *dynamicForwardProxy
 	proxyPoolConfigured  atomic.Bool
 	proxyPoolFailClosed  atomic.Bool
+	onTaskChatEvent      func(taskID string)
 	exclusiveTorMu       sync.RWMutex
 	exclusiveTorEnabled  bool
 	exclusiveTorCircuits []string
@@ -2534,9 +2535,32 @@ func (m *Manager) SetTaskStatusGuardedReason(id, status, reason string) (won boo
 	}
 	m.mu.Unlock()
 	if err := m.syncTaskRuntime(id, n); err != nil {
+		m.fireTaskChatEvent(id)
 		return true, err
 	}
+	m.fireTaskChatEvent(id)
 	return true, nil
+}
+
+func (m *Manager) SetTaskChatEventHandler(fn func(taskID string)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.onTaskChatEvent = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) fireTaskChatEvent(taskID string) {
+	if m == nil || taskID == "" {
+		return
+	}
+	m.mu.RLock()
+	fn := m.onTaskChatEvent
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(taskID)
+	}
 }
 
 // SetTaskStatus persists a task's lifecycle status (e.g. "done") and reflects it
@@ -2579,8 +2603,10 @@ func (m *Manager) SetTaskStatus(id, status string) error {
 	}
 	m.mu.Unlock()
 	if err := m.syncTaskRuntime(id, n); err != nil {
+		m.fireTaskChatEvent(id)
 		return err
 	}
+	m.fireTaskChatEvent(id)
 	return nil
 }
 

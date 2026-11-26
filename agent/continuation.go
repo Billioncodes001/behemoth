@@ -13,12 +13,14 @@ import (
 )
 
 var (
-	reActionIntentAnnouncement  = regexp.MustCompile(`(?i)(?:^|[.!?]\s+|\n\s*)(?:let\s+me\b|let's\b|i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|going\s+to\b|starting\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|investigation|analysis|enumeration)|running\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|command|tool)|checking\s+(?:the\s+)?(?:current\s+status|target|site|web|http|headers|ports|endpoints|vulnerabilities)|investigating\s+the\b|scanning\s+the\b|probing\s+the\b|now\s+let\s+me\b|next,?\s+let\s+me\b|next,?\s+i\s+will\b|first,?\s+let\s+me\b|allow\s+me\b)`)
-	reActiveTaskPrompt          = regexp.MustCompile(`(?i)\b(scan|pentest|penetration\s+test|exploit|vulnerabilit(?:y|ies)|recon|reconnaissance|enumerate|probe|audit|assess|find\s+something|use\s+.*tools|check\s+.*for\s+vulnerabilit|attack|fuzz|crawl|spider|discover)\b`)
-	reWholeSiteEngagementPrompt = regexp.MustCompile(`(?i)\b(scan\s+(?:this|the|entire|whole)?\s*(?:website|site|domain|portal|app|application|target|https?://|[a-z0-9.-]+\.[a-z]{2,})|pentest|penetration\s+test|full\s+(?:scan|assessment|audit)|find\s+vulnerabilit.*exploit|scan.*and\s+exploit)\b`)
-	reSingleFindingMention      = regexp.MustCompile(`(?i)@\[finding#\d+`)
-	reTargetHostOrURL           = regexp.MustCompile(`(?i)(?:https?://[^\s/$.?#].[^\s]*|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,24}\b)`)
-	reReadOnlyQuestionPrompt    = regexp.MustCompile(`(?is)^\s*(?:\[manual\s+report|manual\s+selection\s+review|where\s+is\b|where\s+are\b|what\s+is\b|what\s+are\b|what\s+vulnerabilit|why\s+did\b|why\s+is\b|how\s+does\b|explain\b|summarize\b|show\s+me\s+(?:the\s+)?report\b)`)
+	reActionIntentAnnouncement     = regexp.MustCompile(`(?i)(?:^|[.!?]\s+|\n\s*)(?:let\s+me\b|let's\b|i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|going\s+to\b|starting\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|investigation|analysis|enumeration)|running\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|command|tool)|checking\s+(?:the\s+)?(?:current\s+status|target|site|web|http|headers|ports|endpoints|vulnerabilities)|investigating\s+the\b|scanning\s+the\b|probing\s+the\b|now\s+let\s+me\b|next,?\s+let\s+me\b|next,?\s+i\s+will\b|first,?\s+let\s+me\b|allow\s+me\b)`)
+	reActiveTaskPrompt             = regexp.MustCompile(`(?i)\b(scan|pentest|penetration\s+test|exploit|vulnerabilit(?:y|ies)|recon|reconnaissance|enumerate|probe|audit|assess|find\s+something|use\s+.*tools|check\s+.*for\s+vulnerabilit|attack|fuzz|crawl|spider|discover|bug\s*hunt|hunt\s+for\s+bugs)\b`)
+	reWholeSiteEngagementPrompt    = regexp.MustCompile(`(?i)\b(scan\s+(?:this|the|entire|whole)?\s*(?:website|site|domain|portal|app|application|target|https?://|[a-z0-9.-]+\.[a-z]{2,})|pentest|penetration\s+test|full\s+(?:scan|assessment|audit)|find\s+vulnerabilit.*exploit|scan.*and\s+exploit)\b`)
+	reSingleFindingMention         = regexp.MustCompile(`(?i)@\[finding#\d+`)
+	reExplicitDirectChatOnlyPrompt = regexp.MustCompile(`(?i)\b(?:in\s+chat\s+only|directly\s+in\s+chat|without\s+(?:creating\s+|spawning\s+|using\s+)?(?:a\s+)?task|don'?t\s+(?:create|spawn|start)\s+(?:a\s+)?task|do\s+not\s+(?:create|spawn|start)\s+(?:a\s+)?task|no\s+task\b)`)
+	reSystemReminderBlock          = regexp.MustCompile(`(?is)<system-reminder>.*?</system-reminder>`)
+	reTargetHostOrURL              = regexp.MustCompile(`(?i)(?:https?://[^\s/$.?#].[^\s]*|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,24}\b)`)
+	reReadOnlyQuestionPrompt       = regexp.MustCompile(`(?is)^\s*(?:\[manual\s+report|manual\s+selection\s+review|where\s+is\b|where\s+are\b|what\s+is\b|what\s+are\b|what\s+vulnerabilit|why\s+did\b|why\s+is\b|how\s+does\b|how\s+is\b|explain\b|summarize\b|show\s+me\s+(?:the\s+)?(?:report|status|findings|task)\b|status\s+of\b)`)
 )
 
 const (
@@ -34,10 +36,35 @@ const (
 
 	continuationMissingAssetSyncNudge = "[System Continuation — Mandatory Asset Synchronization] Before concluding your assessment, you must call insert_assets to persist the genuinely discovered target domain, IP address(es), open ports, and web services into the BEHEMOTH Assets database (and call report_finding if any real vulnerability was verified). Invoke insert_assets now, then continue."
 
-	continuationMissingSpawnTaskNudge = "[System Continuation — Create Engagement Task] The user requested a full target/website vulnerability scan or penetration test. First check `list_tasks` to see if an active task already exists for this target domain; if none exists yet, register scope (`add_company_scope` / `insert_assets`) and call `spawn_task` ONCE (never create duplicate tasks for the same target!), then continue your active exploitation in Chat."
+	continuationMissingSpawnTaskNudge = "[System Continuation — Delegate Assignment to Multi-Agent Tasks] This request is a target scan / security assessment assignment in default Auto Chat. Do NOT grind solo in Chat or stop without dispatching a Task: (1) check `list_tasks` first to see if an active task already exists for this target domain; (2) register target scope (`add_company_scope` / `insert_assets`) if needed; (3) pre-fill a comprehensive Task (`description` + structured `goal`) and call `spawn_task` ONCE (or `add_task_hint` if an active task already exists for this target); and (4) immediately reply in Chat with a clickable `[Task #<id>](/function/tasks/detail?id=<id>)` link informing the user that parallel Multi-Agent Workers are now executing it and will automatically post live finding & completion updates back into this Chat!"
 
 	continuationExploitDiscoveredFindingsNudge = "[System Continuation — Mandatory Post-Discovery Exploitation & Arsenal Loop] You recorded %d candidate finding(s) via `report_finding`, and attempted to stop at surface detection without driving each finding through active exploitation! Do NOT stop until all exploitation paths are genuinely exhausted: (1) call `search_patch_arsenal` to check if Patch Monitor already has CVEs, PoCs, or payloads for the discovered libraries/technologies/vulnerability classes and reuse them; (2) systematically go through EACH recorded finding and execute live PoCs (`Bash`, Playwright/browser MCP, `run_security_tool`) to prove maximum impact and test exploit chains; (3) whenever exploitation proves higher impact or confirms code/script execution, call `update_finding` to escalate `severity` (e.g. `low` -> `medium`/`high`/`critical`), set `status='confirmed'`, and append PoC output, plus `update_finding_report`; and (4) save any newly verified working exploit/payload back to Patch Monitor via `save_verified_exploit_to_patch_monitor`!"
 )
+
+func stripSystemReminders(prompt string) string {
+	if !strings.Contains(prompt, "<system-reminder>") {
+		return prompt
+	}
+	return strings.TrimSpace(reSystemReminderBlock.ReplaceAllString(prompt, ""))
+}
+
+// shouldAutoDelegateToTask reports whether a prompt sent to the default `auto`
+// Super-Agent in /chat is an engagement/scan/pentest assignment that should be
+// converted into a parallel Multi-Agent Task via spawn_task (rather than burned
+// sequentially inside single-agent Chat).
+func shouldAutoDelegateToTask(agentKey string, boundTools map[string]bool, prompt string) bool {
+	if !strings.EqualFold(strings.TrimSpace(agentKey), "auto") {
+		return false
+	}
+	if boundTools != nil && !boundTools["spawn_task"] {
+		return false
+	}
+	clean := stripSystemReminders(prompt)
+	if reSingleFindingMention.MatchString(clean) || reExplicitDirectChatOnlyPrompt.MatchString(clean) {
+		return false
+	}
+	return isLiveTargetScanPrompt("auto", clean)
+}
 
 func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bool, string) {
 	return IsPrematureActionTurnForAgent("", nil, messages, initialUserPrompt)
@@ -59,7 +86,7 @@ func isLiveTargetScanPrompt(agentKey, prompt string) bool {
 	if !isActiveProbingAgent(agentKey) {
 		return false
 	}
-	trimmed := strings.TrimSpace(prompt)
+	trimmed := strings.TrimSpace(stripSystemReminders(prompt))
 	if trimmed == "" || reReadOnlyQuestionPrompt.MatchString(trimmed) {
 		return false
 	}
@@ -133,8 +160,21 @@ func IsPrematureActionTurnForAgent(agentKey string, boundTools map[string]bool, 
 		}
 	}
 
-	// For active scan / assessment / tool-execution prompts on probing agents, verify that
-	// real probing tools, asset/task synchronization, AND post-discovery exploitation of
+	// Default Auto Super-Agent in /chat: convert engagement/scan/pentest requests into
+	// a parallel Multi-Agent Task via spawn_task (or add_task_hint on an existing task)
+	// and finish Chat immediately instead of burning hours/tokens solo in Chat!
+	if shouldAutoDelegateToTask(agentKey, boundTools, initialUserPrompt) {
+		if prog.calledSpawnTask {
+			return false, ""
+		}
+		if !prog.nudgedSpawnTask {
+			return true, continuationMissingSpawnTaskNudge
+		}
+		return false, ""
+	}
+
+	// For active scan / assessment / tool-execution prompts on solo probing agents (e.g. Solo Pentest),
+	// verify that real probing tools, asset/task synchronization, AND post-discovery exploitation of
 	// discovered findings were actually performed before concluding!
 	if isLiveTargetScanPrompt(agentKey, initialUserPrompt) {
 		if prog.execTurns == 0 {
@@ -146,14 +186,6 @@ func IsPrematureActionTurnForAgent(agentKey string, boundTools map[string]bool, 
 		canSyncAssets := boundTools == nil || boundTools["insert_assets"] || boundTools["add_company_scope"] || boundTools["spawn_task"] || boundTools["report_finding"]
 		if !prog.calledAssetOrTaskSync && canSyncAssets {
 			return true, continuationMissingAssetSyncNudge
-		}
-		// Whole-website / full-engagement scan in Auto: ensure a tracked Task is created via spawn_task!
-		if strings.EqualFold(strings.TrimSpace(agentKey), "auto") &&
-			boundTools != nil && boundTools["spawn_task"] &&
-			!prog.calledSpawnTask && !prog.nudgedSpawnTask &&
-			reWholeSiteEngagementPrompt.MatchString(initialUserPrompt) &&
-			!reSingleFindingMention.MatchString(initialUserPrompt) {
-			return true, continuationMissingSpawnTaskNudge
 		}
 		// Post-Discovery Exploitation Loop: if findings were discovered via report_finding,
 		// do NOT stop right after surface reporting—require active post-discovery exploitation!
@@ -201,7 +233,9 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 			for _, b := range m.Content {
 				trimmed := strings.TrimSpace(b.Text)
 				if b.Type == llm.BlockText && trimmed != "" {
-					if strings.Contains(trimmed, "[System Continuation — Create Engagement Task]") || strings.Contains(trimmed, "[System Continuation — Sync Engagement Task]") {
+					if strings.Contains(trimmed, "[System Continuation — Create Engagement Task]") ||
+						strings.Contains(trimmed, "[System Continuation — Sync Engagement Task]") ||
+						strings.Contains(trimmed, "[System Continuation — Delegate Assignment to Multi-Agent Tasks]") {
 						p.nudgedSpawnTask = true
 					}
 					if strings.Contains(trimmed, "[System Continuation — Mandatory Post-Discovery Exploitation") {
@@ -254,7 +288,7 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 				"generate_vuln_exploit", "generate_payload", "save_verified_exploit_to_patch_monitor":
 				p.calledAssetOrTaskSync = true
 			}
-			if (u.Name == "spawn_task" || u.Name == "list_tasks" || u.Name == "add_task_hint") && !toolCallFailedInNextTurn(messages, i, u.ID) {
+			if (u.Name == "spawn_task" || u.Name == "add_task_hint" || u.Name == "set_task_goals") && !toolCallFailedInNextTurn(messages, i, u.ID) {
 				p.calledSpawnTask = true
 			}
 			if u.Name == "report_finding" && !toolCallFailedInNextTurn(messages, i, u.ID) {
@@ -307,6 +341,8 @@ type continuationHooks struct {
 	label             string
 	nudges            atomic.Int64
 	maxNudges         int
+	taskDispatched    atomic.Bool
+	soloProbeAttempts atomic.Int64
 }
 
 func WrapContinuationHooks(inner harness.HookRunner, initialUserPrompt, label string, maxNudges int) harness.HookRunner {
@@ -327,7 +363,26 @@ func WrapChatContinuationHooks(inner harness.HookRunner, agentKey string, boundT
 	}
 }
 
+func isSoloTargetProbingTool(name string) bool {
+	switch name {
+	case "Bash", "run_security_tool", "WebFetch", "browser_inspect", "verify_xss_execution",
+		"shell_open", "shell_send", "audit_frontend_api_surface", "verify_access_control_matrix",
+		"verify_endpoint_idempotency":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *continuationHooks) PreToolUse(ctx context.Context, name string, input []byte) (bool, string, []byte) {
+	if shouldAutoDelegateToTask(c.agentKey, c.boundTools, c.initialUserPrompt) && isSoloTargetProbingTool(name) {
+		if c.taskDispatched.Load() {
+			return true, "[Task Handoff Complete] You have already dispatched this engagement to BEHEMOTH's parallel Multi-Agent Tasks engine, where Planner and concurrent Workers are now executing it simultaneously. Do NOT run duplicate solo scans in Chat — immediately conclude your Chat turn with a clear summary, a clickable `[Task #<id>](/function/tasks/detail?id=<id>)` link, and inform the user that live finding & completion updates will appear automatically in this Chat!", nil
+		}
+		if c.soloProbeAttempts.Add(1) <= 3 {
+			return true, "[Task Orchestration Guard] In default Auto Chat, target vulnerability scans and penetration tests MUST be converted into a parallel Multi-Agent Task instead of grinding sequentially in single-agent Chat. First call `list_tasks` (to avoid duplicate tasks for the same domain), optionally register scope via `add_company_scope` / `insert_assets`, pre-fill a comprehensive Task (`description` + structured `goal`), and dispatch it via `spawn_task` (or `add_task_hint` if an active task already exists for this target). Then reply to the user with the `[Task #<id>](/function/tasks/detail?id=<id>)` link!", nil
+		}
+	}
 	if c.inner != nil {
 		return c.inner.PreToolUse(ctx, name, input)
 	}
@@ -335,6 +390,9 @@ func (c *continuationHooks) PreToolUse(ctx context.Context, name string, input [
 }
 
 func (c *continuationHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
+	if !isErr && (name == "spawn_task" || name == "add_task_hint" || name == "set_task_goals") {
+		c.taskDispatched.Store(true)
+	}
 	if c.inner != nil {
 		c.inner.PostToolUse(ctx, name, input, result, isErr)
 	}

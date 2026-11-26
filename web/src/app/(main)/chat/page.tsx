@@ -650,8 +650,96 @@ function ChatView({
     if (conv.running) setRunning(true);
   }, [conv.running]);
 
-  // Real-time SSE token & step stream while a turn is running, backed by a lightweight
-  // safety poll so mock mode and non-SSE reverse proxies remain 100% reliable.
+  // Keep a lightweight SSE subscription open for the active conversation at all
+  // times (even after Auto's handoff turn ends and running === false) so live
+  // milestone, finding, and completion updates pushed back from Multi-Agent Tasks
+  // appear immediately in real time without requiring a page reload.
+  const sseConnectedRef = React.useRef(false);
+  React.useEffect(() => {
+    sseConnectedRef.current = false;
+    if (typeof EventSource === "undefined" || process.env.NEXT_PUBLIC_MOCK === "1") {
+      return;
+    }
+    let live = true;
+    let es: EventSource | null = null;
+    try {
+      es = api.conversationStream(conv.id);
+      es.onopen = () => {
+        if (live) sseConnectedRef.current = true;
+      };
+      es.onerror = () => {
+        if (live) sseConnectedRef.current = false;
+      };
+      es.addEventListener("delta", (ev: MessageEvent) => {
+        if (!live) return;
+        try {
+          const d = JSON.parse(ev.data);
+          if (!d?.kind || !d?.text) {
+            setLiveDelta(null);
+          } else if (d.kind === "thinking" || d.kind === "text") {
+            setLiveDelta({ kind: d.kind, text: String(d.text), summary: String(d.summary || "") });
+          }
+        } catch {
+          /* ignore malformed frame */
+        }
+      });
+      es.addEventListener("activity", (ev: MessageEvent) => {
+        if (!live) return;
+        try {
+          const item = JSON.parse(ev.data) as Activity;
+          if (item && typeof item.seq === "number") {
+            setMessages((prev) => mergeActivities(prev, [item]));
+            cursorRef.current = Math.max(cursorRef.current, item.seq);
+            if (item.kind === "thinking" || item.kind === "text" || item.kind === "result" || item.kind === "tool_use") {
+              setLiveDelta(null);
+            }
+          }
+        } catch {
+          /* ignore malformed frame */
+        }
+      });
+      es.addEventListener("status", (ev: MessageEvent) => {
+        if (!live) return;
+        try {
+          const st = JSON.parse(ev.data);
+          if (st && st.running === true) {
+            setRunning(true);
+          } else if (st && st.running === false) {
+            setLiveDelta(null);
+            void api
+              .conversationMessages(conv.id, cursorRef.current)
+              .then((r) => {
+                if (!live) return;
+                if (r.items.length) {
+                  setMessages((prev) => mergeActivities(prev, r.items));
+                }
+                cursorRef.current = Math.max(cursorRef.current, r.cursor);
+                setRunning(r.running);
+                if (!r.running) onTitleMaybeChanged();
+              })
+              .catch(() => {
+                if (live) {
+                  setRunning(false);
+                  onTitleMaybeChanged();
+                }
+              });
+          }
+        } catch {
+          /* ignore */
+        }
+      });
+    } catch {
+      es = null;
+    }
+    return () => {
+      live = false;
+      sseConnectedRef.current = false;
+      if (es) es.close();
+    };
+  }, [conv.id, onTitleMaybeChanged]);
+
+  // Safety HTTP polling while a turn is actively running (for mock mode and
+  // environments where intermediate proxies buffer SSE).
   React.useEffect(() => {
     if (!running) {
       setLiveDelta(null);
@@ -659,76 +747,6 @@ function ChatView({
     }
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
-    let sseConnected = false;
-    let es: EventSource | null = null;
-
-    if (typeof EventSource !== "undefined" && process.env.NEXT_PUBLIC_MOCK !== "1") {
-      try {
-        es = api.conversationStream(conv.id);
-        es.onopen = () => {
-          sseConnected = true;
-        };
-        es.addEventListener("delta", (ev: MessageEvent) => {
-          if (!live) return;
-          try {
-            const d = JSON.parse(ev.data);
-            if (!d?.kind || !d?.text) {
-              setLiveDelta(null);
-            } else if (d.kind === "thinking" || d.kind === "text") {
-              setLiveDelta({ kind: d.kind, text: String(d.text), summary: String(d.summary || "") });
-            }
-          } catch {
-            /* ignore malformed frame */
-          }
-        });
-        es.addEventListener("activity", (ev: MessageEvent) => {
-          if (!live) return;
-          try {
-            const item = JSON.parse(ev.data) as Activity;
-            if (item && typeof item.seq === "number") {
-              setMessages((prev) => mergeActivities(prev, [item]));
-              cursorRef.current = Math.max(cursorRef.current, item.seq);
-              if (item.kind === "thinking" || item.kind === "text" || item.kind === "result" || item.kind === "tool_use") {
-                setLiveDelta(null);
-              }
-            }
-          } catch {
-            /* ignore malformed frame */
-          }
-        });
-        es.addEventListener("status", (ev: MessageEvent) => {
-          if (!live) return;
-          try {
-            const st = JSON.parse(ev.data);
-            if (st && st.running === false) {
-              setLiveDelta(null);
-              void api
-                .conversationMessages(conv.id, cursorRef.current)
-                .then((r) => {
-                  if (!live) return;
-                  if (r.items.length) {
-                    setMessages((prev) => mergeActivities(prev, r.items));
-                  }
-                  cursorRef.current = Math.max(cursorRef.current, r.cursor);
-                  setRunning(r.running);
-                  if (!r.running) onTitleMaybeChanged();
-                })
-                .catch(() => {
-                  if (live) {
-                    setRunning(false);
-                    onTitleMaybeChanged();
-                  }
-                });
-            }
-          } catch {
-            /* ignore */
-          }
-        });
-      } catch {
-        es = null;
-      }
-    }
-
     const tick = async () => {
       let keepPolling = true;
       try {
@@ -747,8 +765,7 @@ function ChatView({
       } catch {
         /* transient — keep polling */
       } finally {
-        // Poll less frequently when SSE is actively delivering real-time frames.
-        const pollMs = sseConnected ? 2500 : 800;
+        const pollMs = sseConnectedRef.current ? 2500 : 800;
         if (live && keepPolling) timer = setTimeout(() => void tick(), pollMs);
       }
     };
@@ -756,7 +773,6 @@ function ChatView({
     return () => {
       live = false;
       clearTimeout(timer);
-      if (es) es.close();
     };
   }, [running, conv.id, onTitleMaybeChanged]);
 

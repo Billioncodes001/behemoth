@@ -369,12 +369,20 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 						}
 						hay := strings.ToLower(existing.Name + " " + existing.Description + " " + existing.Goal)
 						if strings.Contains(hay, targetDom) {
+							convID := s.linkTaskToConversationFromCtx(ctx, existing.ID, true)
 							hintJSON, _ := json.Marshal(map[string]any{
 								"task_id": existing.ID,
 								"text":    "Additional objective from Chat: " + strings.TrimSpace(a.Goal),
 							})
 							_, _ = s.delegateToTask(ctx, hintJSON, (*agent.ToolSet).AddHintTool)
-							return actool.Text(fmt.Sprintf("reused existing active task: %s (target %s already has an active task; objective appended as hint instead of creating a duplicate task)", existing.ID, targetDom)), nil
+							if existing.Paused {
+								_, _ = s.admitPausedTask(existing)
+							}
+							extra := ""
+							if convID > 0 {
+								extra = fmt.Sprintf("\ntask_url: /function/tasks/detail?id=%s\nlive_chat_updates: linked to Conversation #%d (do NOT scan solo in Chat; reply to the user with [Task #%s](/function/tasks/detail?id=%s) and let them know live updates will post back here automatically)", existing.ID, convID, existing.ID, existing.ID)
+							}
+							return actool.Text(fmt.Sprintf("reused existing active task: %s (target %s already has an active task; objective appended as hint instead of creating a duplicate task)%s", existing.ID, targetDom, extra)), nil
 						}
 					}
 				}
@@ -462,10 +470,20 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 					_ = s.m.PG().SetParentRef(id, a.ParentRef)
 				}
 			}
+			// Link to originating /chat conversation BEFORE launchTask so rapid goal
+			// decomposition immediately sees the link row.
+			convID := s.linkTaskToConversationFromCtx(ctx, t.ID, false)
 			// 共享的建后流程,与 HTTP 建任务(server.go createTask)复用同一段 launchTask:
 			// seed + 后台可见地做目标分解(第0轮/LLM步骤/逐条goal) + engine.Run。
 			// seed_first_intent 默认 false(标准先规划再执行);简单任务可开启直接下发一 work 测试。
 			s.launchTask(t, a.Description+" "+a.Goal, a.SeedFirstIntent)
+			if convID > 0 {
+				workers := s.activeWorkerConcurrencyForTask(t)
+				return actool.Text(fmt.Sprintf(
+					"task created: %s\ntask_url: /function/tasks/detail?id=%s\nparallel_workers: %d simultaneous Worker agents + Goal Decomposer + Planner + Reporter\nlive_chat_updates: linked to Conversation #%d (stop solo probing in Chat now — reply concisely to the user with the clickable [Task #%s](/function/tasks/detail?id=%s) link and let them know live updates will automatically post back into this Chat!)",
+					t.ID, t.ID, workers, convID, t.ID, t.ID,
+				)), nil
+			}
 			return actool.Text(fmt.Sprintf("task created: %s", t.ID)), nil
 		})
 }
@@ -516,7 +534,24 @@ func (s *Server) toolAddHint() actool.CoreTool {
 			"asset_ids":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Anchored asset IDs (optional, 0/1/multiple; asset IDs within that task)"},
 		}, "task_id"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
-			return s.delegateToTask(ctx, in, (*agent.ToolSet).AddHintTool)
+			var parsed struct {
+				TaskID string `json:"task_id"`
+			}
+			_ = json.Unmarshal(in, &parsed)
+			var convID int64
+			if strings.TrimSpace(parsed.TaskID) != "" {
+				convID = s.linkTaskToConversationFromCtx(ctx, parsed.TaskID, true)
+			}
+			res, err := s.delegateToTask(ctx, in, (*agent.ToolSet).AddHintTool)
+			if err == nil && !res.IsError && convID > 0 && s.m != nil {
+				if t, ok := s.m.Task(strings.TrimSpace(parsed.TaskID)); ok && t != nil {
+					st := t.lifecycleSnapshot()
+					if isTerminalStatus(st.Status) {
+						s.reviveTask(t)
+					}
+				}
+			}
+			return res, err
 		})
 }
 
@@ -764,6 +799,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedC2ProxyToolsV1()
 	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
+	s.seedAutoTaskDelegationV2()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -1717,4 +1753,23 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 		}
 	}
 	s.reconcileExistingSkillMisses()
+}
+
+// seedAutoTaskDelegationV2 upgrades the default Auto Super-Agent prompt in
+// existing PostgreSQL databases so engagement/scan requests in /chat are
+// automatically converted into pre-filled parallel Multi-Agent Tasks with
+// live Task -> Chat callback updates instead of burning tokens solo in Chat.
+func (s *Server) seedAutoTaskDelegationV2() {
+	const flag = "auto_task_delegation_prompt_v2"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
+		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
+			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+			}
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
 }

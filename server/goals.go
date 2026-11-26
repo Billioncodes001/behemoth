@@ -64,6 +64,7 @@ func (s *Server) startTaskEngine(t *Task) {
 		return
 	}
 	s.engine.Run(s.ctx, t)
+	s.notifyTaskGoalsReadyToChat(t, goals)
 }
 
 func (s *Server) occupiesConcurrencySlot(t *Task) bool {
@@ -418,6 +419,11 @@ func (s *Server) reconcileConcurrency() {
 func (s *Server) reviveTask(t *Task) {
 	if t == nil {
 		return
+	}
+	if s.m != nil && s.m.pg != nil {
+		if tid, err := strconv.ParseInt(t.ID, 10, 64); err == nil && tid > 0 {
+			_ = s.m.pg.ResetTaskChatTerminalState(tid)
+		}
 	}
 	if _, err := s.admitTask(t, "resume"); err != nil {
 		log.Printf("[revive] task %s 恢复失败: %v", t.ID, err)
