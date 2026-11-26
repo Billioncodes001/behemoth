@@ -3,6 +3,7 @@ package db
 import (
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -321,6 +322,76 @@ ORDER BY day`, days)
 		return JudgeUsage{}, err
 	}
 	return u, nil
+}
+
+// ResetTokenUsageStats clears token metering statistics for the dashboard cards
+// and daily bar graphs without touching findings, assets, tasks, or conversation
+// transcripts. When profileID == nil and profileName == "", all token stats
+// (both the llm_usage ledger and legacy activity/conversation_activities token
+// counters) are reset to zero. When scoped to a specific profile, only that
+// profile's ledger rows and pinned task/conversation counters are cleared.
+func (d *DB) ResetTokenUsageStats(profileID *int64, profileName string) (int64, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var deletedLedger int64
+	pName := strings.TrimSpace(profileName)
+	if profileID == nil && pName == "" {
+		res, err := tx.Exec(`DELETE FROM llm_usage`)
+		if err != nil {
+			return 0, err
+		}
+		deletedLedger, _ = res.RowsAffected()
+
+		if _, err := tx.Exec(`
+UPDATE activity
+SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0
+WHERE COALESCE(input_tokens, 0) <> 0
+   OR COALESCE(output_tokens, 0) <> 0
+   OR COALESCE(cache_read_tokens, 0) <> 0
+   OR COALESCE(cache_write_tokens, 0) <> 0`); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`
+UPDATE conversation_activities
+SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0
+WHERE COALESCE(input_tokens, 0) <> 0
+   OR COALESCE(output_tokens, 0) <> 0
+   OR COALESCE(cache_read_tokens, 0) <> 0
+   OR COALESCE(cache_write_tokens, 0) <> 0`); err != nil {
+			return 0, err
+		}
+	} else {
+		if pName != "" {
+			res, err := tx.Exec(`DELETE FROM llm_usage WHERE profile_name = $1`, pName)
+			if err != nil {
+				return 0, err
+			}
+			deletedLedger, _ = res.RowsAffected()
+		}
+		if profileID != nil && *profileID > 0 {
+			if _, err := tx.Exec(`
+UPDATE activity
+SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0
+WHERE exploration_id IN (SELECT exploration_id FROM tasks WHERE llm_profile_id = $1)`, *profileID); err != nil {
+				return 0, err
+			}
+			if _, err := tx.Exec(`
+UPDATE conversation_activities
+SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0
+WHERE conversation_id IN (SELECT id FROM conversations WHERE llm_profile_id = $1)`, *profileID); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deletedLedger, nil
 }
 
 // ParseExpID turns the exploration-id segment parsed from a session string into an

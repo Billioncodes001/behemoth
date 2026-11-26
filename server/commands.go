@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -116,6 +117,47 @@ func (s *Server) pgUsageStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"by_profile": byProfile, "daily": daily})
+}
+
+// pgResetUsageStats resets LLM token usage counters and graph history (both
+// llm_usage ledger and legacy activity token counters) while preserving all
+// findings, assets, tasks, and chat transcripts.
+func (s *Server) pgResetUsageStats(w http.ResponseWriter, r *http.Request) {
+	pg := s.m.PG()
+	if pg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "database not initialized")
+		return
+	}
+	var req struct {
+		ProfileID   *int64 `json:"profile_id"`
+		ProfileName string `json:"profile_name"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	pName := strings.TrimSpace(req.ProfileName)
+	if req.ProfileID != nil && *req.ProfileID > 0 && pName == "" {
+		if profs, err := pg.ListProfiles(); err == nil {
+			for _, p := range profs {
+				if p.ID == *req.ProfileID {
+					pName = p.Name
+					break
+				}
+			}
+		}
+	}
+	cleared, err := pg.ResetTokenUsageStats(req.ProfileID, pName)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	scope := "all"
+	if pName != "" {
+		scope = pName
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                  true,
+		"ledger_rows_cleared": cleared,
+		"scope":               scope,
+	})
 }
 
 // pgLLMTasks returns distinct recorded tasks with counts, for the page's task

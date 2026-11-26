@@ -88,6 +88,10 @@ var autoDeferredSpecialistTools = map[string]bool{
 	"verify_and_import_scraped_proxies":        true,
 	"list_cooldown_schedules":                  true,
 	"cancel_cooldown_schedule":                 true,
+	"list_bounty_programs":                     true,
+	"register_bounty_program":                  true,
+	"start_bounty_hunt":                        true,
+	"update_bounty_tracker":                    true,
 }
 
 //nolint:unused // used as the hostTools provider in wireAgentAugment
@@ -121,6 +125,9 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 			var filteredAgents []string
 			for _, ag := range ct.Agents {
 				if ag == "proxy_harvester" && strings.Contains(ct.Key, "proxy_scrape") {
+					continue
+				}
+				if ag == "bounty_scout" && strings.Contains(ct.Key, "bounty") {
 					continue
 				}
 				if ag == "patch_researcher" && (strings.Contains(ct.Key, "patch") || strings.Contains(ct.Key, "vuln")) {
@@ -163,6 +170,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 	out = append(out, s.captchaTools()...)
 	out = append(out, s.agentRequestTools()...)
 	out = append(out, s.cooldownScheduleTools()...)
+	out = append(out, s.bountyHunterAgentTools()...)
 	return append(out, s.proxyPoolAgentTools()...)
 }
 
@@ -750,6 +758,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedLootAndCaptchaToolsV1()
 	s.seedCaptchaAndSearchToolsV2()
 	s.seedCooldownScheduleToolsV1()
+	s.seedBountyHunterToolsV1()
 	s.seedAgentRequestToolsV1()
 	s.seedC2ToolsV1()
 	s.seedC2ProxyToolsV1()
@@ -1491,6 +1500,49 @@ func (s *Server) seedCooldownScheduleToolsV1() {
 	}
 	for _, agKey := range targetAgents {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedBountyHunterToolsV1 seeds the Bug Bounty Finder & Tracker tools and equips
+// the built-in `bounty_scout` agent with search, browser, and bounty registration tools.
+func (s *Server) seedBountyHunterToolsV1() {
+	const flag = "bounty_hunter_tools_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	_, _ = s.m.pg.Exec(`UPDATE agents SET web_search=true WHERE key = 'bounty_scout'`)
+	tools := s.bountyHunterAgentTools()
+	targetAgents := []string{"bounty_scout", "auto", "pentest", "worker", "planner", "mainagent"}
+	binds, _ := json.Marshal(targetAgents)
+	keys := make([]string, 0, len(tools))
+	for _, t := range tools {
+		schema, _ := json.Marshal(t.InputSchema())
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range targetAgents {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.AddAgentToToolBinding("bounty_scout", []string{
+		"check_proxy_status", "get_proxy_pool_status", "manage_proxy_pool",
+		"multi_engine_search", "exploit_search", "browser_inspect",
+		"solve_captcha", "report_need",
+	})
+	if scout, err := s.m.pg.GetAgentByKey("bounty_scout"); err == nil && scout != nil {
+		if tmpl := agent.BuiltinPromptSeeds()["bounty_scout"]; tmpl != "" {
+			if cur, _ := s.m.pg.CurrentPrompt(scout.ID); strings.TrimSpace(cur) == "" {
+				_, _ = s.m.pg.ResetPromptToDefault(scout.ID, tmpl)
+			}
+		}
+		if servers, serr := s.m.pg.ListMCP(); serr == nil {
+			for _, srv := range servers {
+				if srv.Name == browserMCPName || srv.Name == "recon_osint" {
+					_, _ = s.m.pg.Exec(`INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled) VALUES($1, 'mcp', $2, '', true) ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO UPDATE SET enabled=true`, scout.ID, srv.ID)
+				}
+			}
+		}
 	}
 	_ = s.m.pg.SetSetting(flag, "true")
 }

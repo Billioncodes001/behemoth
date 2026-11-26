@@ -36,6 +36,7 @@ export const jaMessages: Record<string, string> = {
   "nav.settings": "システム設定",
   "nav.proxy-pool": "プロキシプール",
   "nav.patch-monitor": "パッチ監視",
+  "nav.bounties": "バグバウンティ",
   "nav.search": "マルチエンジン検索",
 
   "common.cancel": "キャンセル",

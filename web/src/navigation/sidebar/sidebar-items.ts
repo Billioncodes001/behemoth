@@ -1,5 +1,6 @@
 import {
   Activity,
+  Award,
   Ban,
   BellRing,
   Bot,
@@ -83,6 +84,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "assets", title: "Assets", url: "/function/assets", icon: Network },
       { id: "sync", title: "Asset Sync", url: "/function/sync", icon: FolderSync },
       { id: "workspace", title: "Workspace", url: "/function/workspace", icon: FolderOpen },
+      { id: "bounties", title: "Bug Bounties", url: "/function/bounties", icon: Award, badge: "new" },
       { id: "patch-monitor", title: "Patch Monitor", url: "/function/patch-monitor", icon: ShieldAlert, badge: "new" },
       { id: "search", title: "Multi-Engine Search", url: "/search", icon: Search, badge: "new" },
     ],

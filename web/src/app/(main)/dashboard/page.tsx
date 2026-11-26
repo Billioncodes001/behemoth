@@ -14,16 +14,27 @@ import {
   HardDriveIcon,
   MemoryStickIcon,
   NetworkIcon,
+  RotateCcwIcon,
   ShieldCheckIcon,
   TargetIcon,
   ZapIcon,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
+import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
@@ -384,6 +395,39 @@ export default function DashboardPage() {
   const [tokenTab, setTokenTab] = React.useState<number | null | "all">("all");
   // day range for the daily bar chart
   const [tokenDays, setTokenDays] = React.useState<7 | 30 | 90 | 180 | 365>(30);
+  const [resetConfirmOpen, setResetConfirmOpen] = React.useState(false);
+  const [resettingTokens, setResettingTokens] = React.useState(false);
+
+  const selectedTokenProfile = React.useMemo(() => {
+    if (tokenTab === "all" || tokenTab === null) return null;
+    return llmProfiles.find((p) => Number(p.id) === tokenTab) ?? null;
+  }, [tokenTab, llmProfiles]);
+
+  const handleResetTokenStats = React.useCallback(async () => {
+    setResettingTokens(true);
+    try {
+      const payload = selectedTokenProfile
+        ? { profile_id: Number(selectedTokenProfile.id), profile_name: selectedTokenProfile.name }
+        : {};
+      await api.resetUsageStats(payload);
+      const [freshUsage, freshTasks, freshConvTokens, freshTok] = await Promise.all([
+        api.usageStats(365),
+        api.tasks(),
+        api.conversationTokens(),
+        api.tokenStats(),
+      ]);
+      setUsageStats(freshUsage);
+      setTasks(freshTasks.tasks);
+      setConvTokens(freshConvTokens);
+      setTokens(freshTok.total ?? null);
+      setResetConfirmOpen(false);
+      toast.success(translate("overview.resetTokensDone"));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResettingTokens(false);
+    }
+  }, [selectedTokenProfile, translate]);
 
   // profile 名 → id，用于把 llm_usage 的 profile_name 映射到现有 profile 分栏。
   const profileIdByName = React.useMemo(() => {
@@ -654,9 +698,20 @@ export default function DashboardPage() {
         {/* LLM 用量 */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-              <ZapIcon className="size-3" />
-              {translate("overview.tokenUsage")}
+            <div className="flex items-center justify-between gap-1.5 text-[10px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <ZapIcon className="size-3" />
+                {translate("overview.tokenUsage")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setResetConfirmOpen(true)}
+                title={translate("overview.resetTokensTitle")}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <RotateCcwIcon className="size-2.5" />
+                {translate("overview.resetTokens")}
+              </button>
             </div>
             <div className="text-2xl font-semibold tabular-nums">
               {fmtTokens(displayedTokens.input + displayedTokens.output) || "—"}
@@ -708,6 +763,14 @@ export default function DashboardPage() {
             <span className="text-[10px] font-normal text-muted-foreground">
               {tokenVersion === "new" ? "llm_usage" : "activity"}
             </span>
+            <button
+              type="button"
+              onClick={() => setResetConfirmOpen(true)}
+              className="ml-1 inline-flex items-center gap-1 rounded-md border bg-muted/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <RotateCcwIcon className="size-2.5" />
+              {translate("overview.resetTokens")}
+            </button>
           </div>
           {/* Profile tabs */}
           <div className="flex flex-wrap items-center gap-1">
@@ -1322,6 +1385,33 @@ export default function DashboardPage() {
           )}
         </Card>
       </div>
+
+      <Dialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{translate("overview.resetTokensTitle")}</DialogTitle>
+            <DialogDescription>
+              {selectedTokenProfile
+                ? translate("overview.resetTokensConfirmProfile", { name: selectedTokenProfile.name })
+                : translate("overview.resetTokensConfirmAll")}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setResetConfirmOpen(false)} disabled={resettingTokens}>
+              {translate("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => void handleResetTokenStats()}
+              disabled={resettingTokens}
+            >
+              <RotateCcwIcon className="mr-1.5 size-3.5" />
+              {resettingTokens ? translate("overview.resetting") : translate("overview.resetTokens")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

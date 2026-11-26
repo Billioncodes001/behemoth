@@ -69,6 +69,7 @@ var budgetWriteBackTools = map[string]bool{
 	"save_artifact":                          true,
 	"schedule_cooldown_resume":               true,
 	"cancel_cooldown_schedule":               true,
+	"update_bounty_tracker":                  true,
 	"report_need":                            true,
 	"mark_done":                              true,
 	"prove_goal":                             true,

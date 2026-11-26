@@ -177,6 +177,10 @@ func Open(dsn string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("ensure agent_requests kinds: %w", err)
 	}
+	if err := d.EnsureBountyTables(); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("ensure bounty_programs: %w", err)
+	}
 	return d, nil
 }
 
@@ -218,6 +222,7 @@ var builtinAgents = []builtinAgent{
 	{"pentest", "Solo Pentest", "assistant", "Solo pentest agent: runs the full chain end-to-end from recon -> attack surface mapping -> deep exploitation -> verification -> wrap-up, planning, executing, and adversarially verifying on its own.", nil, true, intp(0)},
 	{"patch_watch", "Patch Watch", "assistant", "Autonomous Security Patch & Advisory Watcher: continuously monitors OS & tech-giant security feeds (Windows MSRC, macOS/iOS, CISA KEV, Chrome, Linux Kernel, RHEL, Ubuntu, Cisco, Fortinet, Palo Alto, AWS), analyzes patch diffs/CVEs, and automatically generates PoC exploits and client-side payloads.", nil, true, intp(0)},
 	{"proxy_harvester", "Proxy Harvester", "assistant", "Autonomous Self-Improving Proxy Harvester: discovers new free SOCKS5/HTTPS proxy repositories and APIs online, prunes dead feeds, verifies Elite TLS-capable proxies, and replenishes the Proxy Pool automatically.", nil, true, intp(0)},
+	{"bounty_scout", "Bounty Scout", "assistant", "Autonomous Bug Bounty Discovery & Enrollment Scout: discovers public & self-hosted bug bounty programs across the internet, inspects program rules/scopes/payouts and registration requirements via Multi-Engine Search & headless Chromium, and enrolls them into BEHEMOTH's Bug Bounty Finder.", nil, true, intp(0)},
 }
 
 // seedBuiltins inserts the fixed built-in agents and their variable catalog (idempotent).

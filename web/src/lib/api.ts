@@ -696,6 +696,8 @@ export const api = {
     get<{ running: boolean; conversation_id?: number }>(`/tasks/${id}/topology-mapping/status`),
   // 全局 llm_usage 聚合（仪表盘新版 token 视图）：按 profile 总量 + 按天分桶。
   usageStats: (days = 365) => get<UsageStats>(`/tokens/usage?days=${days}`),
+  resetUsageStats: (opts?: { profile_id?: number; profile_name?: string }) =>
+    post<{ ok: boolean; ledger_rows_cleared: number; scope: string }>("/tokens/reset", opts ?? {}),
   // ---- 目标管理（总览）----
   // 本任务全部目标（text/vulnclass/state）。
   taskGoals: (id: string) =>

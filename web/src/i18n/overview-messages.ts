@@ -114,6 +114,18 @@ export const overviewMessages = {
   "overview.captureDisabled": ["捕获未开启", "Capture disabled"],
   "overview.tokenUsage": ["Token 用量", "Token usage"],
   "overview.llmTokens": ["LLM Token 消耗", "LLM token usage"],
+  "overview.resetTokens": ["重置统计", "Reset stats"],
+  "overview.resetTokensTitle": ["重置 Token 统计与图表", "Reset token usage & graph stats"],
+  "overview.resetTokensConfirmAll": [
+    "确认将全部 LLM Token 累计消耗与每日趋势图表清零？此操作不会删除任何漏洞发现、资产、任务或对话内容。",
+    "Reset all LLM token counters and daily usage graphs to zero? Findings, assets, tasks, and chat transcripts are preserved.",
+  ],
+  "overview.resetTokensConfirmProfile": [
+    "确认将模型配置「{{name}}」的 Token 统计与图表数据清零？漏洞发现、资产与对话记录将完整保留。",
+    "Reset token counters and graph data for profile “{{name}}”? Findings, assets, and transcripts remain untouched.",
+  ],
+  "overview.resetTokensDone": ["Token 统计与图表已重置", "Token usage stats and graphs have been reset"],
+  "overview.resetting": ["重置中…", "Resetting…"],
   "overview.legacyMetrics": ["旧版", "Legacy"],
   "overview.ledgerMetrics": ["新版", "Ledger"],
   "overview.ledgerMetricsHelp": [

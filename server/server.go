@@ -384,6 +384,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
 	search.SetProxyProvider(s.m.ActiveOutboundProxyAddr)
 	s.startLocalSearXNGSupervisor(s.ctx)
+	s.startBountyScannerLoop(s.ctx)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)
@@ -1332,7 +1333,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats)
 	mux.HandleFunc("GET /api/tokens/daily", s.tokenDailyStats)
 	mux.HandleFunc("GET /api/tokens/conversations", s.conversationTokens)
-	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats) // 全局 llm_usage 聚合（仪表盘新版视图）
+	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)      // 全局 llm_usage 聚合（仪表盘新版视图）
+	mux.HandleFunc("POST /api/tokens/reset", s.pgResetUsageStats) // 重置仪表盘 Token 统计与图表（保留漏洞/资产）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)
@@ -1541,6 +1543,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v2/captcha/status", s.handleCaptchaStatus)
 	mux.HandleFunc("POST /api/v2/captcha/config", s.handleCaptchaConfig)
 	mux.HandleFunc("POST /api/v2/captcha/test", s.handleCaptchaTest)
+
+	// Bug Bounty Finder & Tracker API
+	mux.HandleFunc("GET /api/bounties/programs", s.handleListBountyPrograms)
+	mux.HandleFunc("POST /api/bounties/programs", s.handleCreateBountyProgram)
+	mux.HandleFunc("POST /api/bounties/programs/{id}/hunt", s.handleStartBountyHunt)
+	mux.HandleFunc("PATCH /api/bounties/programs/{id}", s.handleUpdateBountyProgram)
+	mux.HandleFunc("DELETE /api/bounties/programs/{id}", s.handleDeleteBountyProgram)
+	mux.HandleFunc("GET /api/bounties/scanner", s.handleGetBountyScanner)
+	mux.HandleFunc("PUT /api/bounties/scanner", s.handlePutBountyScanner)
+	mux.HandleFunc("POST /api/bounties/scanner/run", s.handleRunBountyScannerNow)
 
 	// Browser Automation API (Pentagi-inspired)
 	mux.HandleFunc("POST /api/v2/browser/screenshot", s.handleBrowserScreenshot)
