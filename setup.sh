@@ -259,20 +259,23 @@ install_searxng() {
 
   local cfg_dir="/opt/behemoth/searxng"
   mkdir -p "$cfg_dir"
+  chmod 777 "$cfg_dir"
   if [[ ! -f "$cfg_dir/settings.yml" ]]; then
     cat > "$cfg_dir/settings.yml" <<SEARXNG_EOF
 use_default_settings: true
 server:
   secret_key: "$(rand_secret)$(rand_secret)"
   limiter: false
-  base_url: http://localhost:8888/
+  image_proxy: false
+  base_url: http://127.0.0.1:8888/
 search:
+  safe_search: 0
   formats:
     - html
     - json
 SEARXNG_EOF
-    chmod 600 "$cfg_dir/settings.yml"
   fi
+  chmod 644 "$cfg_dir/settings.yml"
 
   if docker ps -a --format '{{.Names}}' | grep -qx 'behemoth-searxng'; then
     info "Starting existing behemoth-searxng container..."

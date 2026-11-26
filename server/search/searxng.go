@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -52,56 +53,42 @@ func (s *SearXNGSearchEngine) Handle(ctx context.Context, req Request) (Response
 	}
 
 	startTime := time.Now()
+	maxRes := clampMaxResults(req.MaxResults, 25)
 
-	// Build request URL
-	apiURL := fmt.Sprintf("%s/search", s.instanceURL)
-	params := url.Values{}
-	params.Set("q", req.Query)
-	params.Set("format", "json")
-	params.Set("categories", s.getCategories(req.Mode))
-	params.Set("language", "en")
+	query := strings.TrimSpace(req.Query)
+	if req.SiteFilter != "" && !strings.Contains(strings.ToLower(query), "site:") {
+		query = query + " site:" + strings.TrimSpace(req.SiteFilter)
+	}
 
-	fullURL := apiURL + "?" + params.Encode()
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	cats := s.getCategories(req.Mode)
+	sxResp, err := s.queryInstance(ctx, query, cats)
 	if err != nil {
-		return Response{}, fmt.Errorf("failed to create searxng request: %w", err)
+		return Response{}, err
+	}
+	if len(sxResp.Results) == 0 && cats != "general" {
+		if fallbackResp, ferr := s.queryInstance(ctx, query, "general"); ferr == nil && len(fallbackResp.Results) > 0 {
+			sxResp = fallbackResp
+		}
 	}
 
-	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		return Response{}, fmt.Errorf("searxng search failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return Response{}, fmt.Errorf("failed to read searxng response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("searxng API error: status %d", resp.StatusCode)
-	}
-
-	var sxResp searxngResponse
-	if err := json.Unmarshal(body, &sxResp); err != nil {
-		return Response{}, fmt.Errorf("failed to parse searxng response: %w", err)
-	}
-
-	results := make([]Result, 0, min(len(sxResp.Results), req.MaxResults))
-	for i, r := range sxResp.Results {
-		if i >= req.MaxResults {
+	results := make([]Result, 0, min(len(sxResp.Results), maxRes))
+	for _, r := range sxResp.Results {
+		if len(results) >= maxRes {
 			break
 		}
+		if r.URL == "" {
+			continue
+		}
+		srcEngine := r.Engine
+		if srcEngine == "" {
+			srcEngine = "meta"
+		}
 		results = append(results, Result{
-			Title:   r.Title,
+			Title:   cleanHTML(r.Title),
 			URL:     r.URL,
-			Snippet: r.Content,
-			Engine:  fmt.Sprintf("searxng:%s", r.Engine), // Show source engine
-			Rank:    i + 1,
+			Snippet: cleanHTML(truncateString(r.Content, 300)),
+			Engine:  fmt.Sprintf("searxng:%s", srcEngine),
+			Rank:    len(results) + 1,
 		})
 	}
 
@@ -114,17 +101,58 @@ func (s *SearXNGSearchEngine) Handle(ctx context.Context, req Request) (Response
 	}, nil
 }
 
+func (s *SearXNGSearchEngine) queryInstance(ctx context.Context, query, categories string) (*searxngResponse, error) {
+	apiURL := fmt.Sprintf("%s/search", s.instanceURL)
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("format", "json")
+	if categories != "" {
+		params.Set("categories", categories)
+	}
+	params.Set("language", "en")
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create searxng request: %w", err)
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("X-Forwarded-For", "127.0.0.1")
+	httpReq.Header.Set("X-Real-IP", "127.0.0.1")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("searxng search failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := readResponseBytes(resp, 2<<20)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read searxng response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("searxng API error: status %d, body: %s", resp.StatusCode, truncateString(string(body), 300))
+	}
+
+	var sxResp searxngResponse
+	if err := json.Unmarshal(body, &sxResp); err != nil {
+		return nil, fmt.Errorf("failed to parse searxng response: %w", err)
+	}
+	return &sxResp, nil
+}
+
 // getCategories maps search mode to SearXNG categories.
 func (s *SearXNGSearchEngine) getCategories(mode SearchMode) string {
 	switch mode {
 	case ModeNews:
-		return "news"
+		return "news,general"
 	case ModeExploit:
-		return "it,science" // IT and science for exploits
+		return "it,general"
 	case ModeTechnical:
-		return "it,science"
+		return "it,general"
 	case ModeOSINT:
-		return "general,social media"
+		return "general"
 	default:
 		return "general"
 	}
@@ -136,36 +164,69 @@ var (
 	localSearXNGChecked time.Time
 )
 
-// DetectLocalSearXNG probes the well-known local SearXNG endpoint provisioned
-// by setup.sh (Docker container bound to 127.0.0.1:8888). The result is cached
-// for 60 seconds so per-request probes stay cheap. Returns "" when no local
-// instance answers.
+// DetectLocalSearXNG probes the local SearXNG service provisioned on this host
+// (127.0.0.1:8888, localhost:8888, or Compose service searxng:8080) using a
+// direct loopback client that bypasses external outbound proxies. Positive hits
+// are cached for 60s; misses are cached for only 3s so newly booted containers
+// are picked up immediately.
 func DetectLocalSearXNG() string {
+	return detectLocalSearXNG(false)
+}
+
+// DetectLocalSearXNGForce bypasses the probe cache and immediately checks whether
+// the local SearXNG service is up.
+func DetectLocalSearXNGForce() string {
+	return detectLocalSearXNG(true)
+}
+
+func detectLocalSearXNG(force bool) string {
 	localSearXNGMu.Lock()
 	defer localSearXNGMu.Unlock()
-	if !localSearXNGChecked.IsZero() && time.Since(localSearXNGChecked) < 60*time.Second {
-		return localSearXNGURL
+	if !force && !localSearXNGChecked.IsZero() {
+		ttl := 3 * time.Second
+		if localSearXNGURL != "" {
+			ttl = 60 * time.Second
+		}
+		if time.Since(localSearXNGChecked) < ttl {
+			return localSearXNGURL
+		}
 	}
 	localSearXNGChecked = time.Now()
 	localSearXNGURL = ""
-	for _, base := range []string{"http://127.0.0.1:8888", "http://localhost:8888"} {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
-		if err != nil {
-			cancel()
-			continue
-		}
-		resp, err := httpClient.Do(req)
-		cancel()
-		if err != nil {
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+	candidates := []string{"http://127.0.0.1:8888"}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		candidates = append(candidates, "http://searxng:8080")
+	}
+	for _, base := range candidates {
+		if probeSearXNGBase(base) {
 			localSearXNGURL = base
 			break
 		}
 	}
 	return localSearXNGURL
+}
+
+func probeSearXNGBase(base string) bool {
+	for _, path := range []string{"/healthz", "/config"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		req.Header.Set("X-Real-IP", "127.0.0.1")
+		resp, err := localDirectClient.Do(req)
+		cancel()
+		if err != nil {
+			// Connection refused / unreachable on this host — no need to try /config.
+			return false
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return true
+		}
+	}
+	return false
 }

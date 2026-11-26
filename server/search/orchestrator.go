@@ -76,9 +76,35 @@ func (o *Orchestrator) setupFallbackChains() {
 	o.fallbackChains[ModeOSINT] = []SearchEngineType{EngineSearXNG, EngineFirecrawl, EngineBrave, EngineDuckDuckGo, EngineTavily}
 }
 
+// ensureAutoLocalSearXNG dynamically attaches the local self-hosted SearXNG
+// service whenever it comes online after server boot.
+func (o *Orchestrator) ensureAutoLocalSearXNG() {
+	o.mu.RLock()
+	existing, ok := o.engines[EngineSearXNG]
+	alreadyActive := ok && existing != nil && existing.IsAvailable()
+	o.mu.RUnlock()
+	if alreadyActive {
+		return
+	}
+	localURL := DetectLocalSearXNG()
+	if localURL == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if existing, ok := o.engines[EngineSearXNG]; ok && existing != nil && existing.IsAvailable() {
+		return
+	}
+	o.config.SearXNG.URL = localURL
+	o.config.SearXNG.Enabled = true
+	o.engines[EngineSearXNG] = NewSearXNGSearchEngine(localURL, true)
+	log.Printf("[search] Auto-enabled self-hosted SearXNG at %s", localURL)
+}
+
 // Search executes a search using the appropriate fallback chain (or a specific requested engine).
 func (o *Orchestrator) Search(ctx context.Context, req Request) (*SearchResult, error) {
 	startTime := time.Now()
+	o.ensureAutoLocalSearXNG()
 	o.mu.RLock()
 	if req.MaxResults <= 0 {
 		req.MaxResults = o.config.MaxResults
@@ -227,6 +253,7 @@ func (o *Orchestrator) SearchTechnical(ctx context.Context, query string) (*Sear
 
 // GetAvailableEngines returns list of currently available engines.
 func (o *Orchestrator) GetAvailableEngines() []SearchEngineType {
+	o.ensureAutoLocalSearXNG()
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	var available []SearchEngineType
@@ -240,6 +267,7 @@ func (o *Orchestrator) GetAvailableEngines() []SearchEngineType {
 
 // GetStats returns statistics about the orchestrator.
 func (o *Orchestrator) GetStats() map[string]interface{} {
+	o.ensureAutoLocalSearXNG()
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	allTypes := []SearchEngineType{EngineFirecrawl, EngineDuckDuckGo, EngineTavily, EngineSearXNG, EngineBrave, EngineSploitus}
@@ -253,10 +281,17 @@ func (o *Orchestrator) GetStats() map[string]interface{} {
 			engineStatus[string(t)] = false
 		}
 	}
+	configuredKeys := map[string]bool{
+		"firecrawl": o.config.Firecrawl.APIKey != "" || o.config.Firecrawl.BaseURL != "",
+		"tavily":    o.config.Tavily.APIKey != "",
+		"brave":     o.config.Brave.APIKey != "",
+		"searxng":   o.config.SearXNG.URL != "",
+	}
 	return map[string]interface{}{
 		"total_engines_registered": len(allTypes),
 		"available_engines":        availableCount,
 		"engine_status":            engineStatus,
+		"configured_keys":          configuredKeys,
 		"searxng_url":              o.config.SearXNG.URL,
 		"firecrawl_url":            o.config.Firecrawl.BaseURL,
 	}

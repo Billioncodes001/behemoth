@@ -383,6 +383,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.searchOrchestrator = search.NewOrchestrator(searchCfg)
 	search.SetProxyProvider(s.m.OutboundProxyAddr)
+	s.startLocalSearXNGSupervisor(s.ctx)
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)
@@ -6545,13 +6546,15 @@ func (s *Server) handleSearchEngines(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "search not initialized")
 		return
 	}
+	if localURL := search.DetectLocalSearXNG(); localURL != "" {
+		s.searchOrchestrator.UpdateEngine("searxng", localURL)
+	}
 	stats := s.searchOrchestrator.GetStats()
-	// Surface the auto-detected local SearXNG instance so the settings UI can
-	// offer a one-click "use local instance" shortcut.
 	if localURL := search.DetectLocalSearXNG(); localURL != "" {
 		stats["searxng_local_url"] = localURL
 		stats["searxng_local_detected"] = true
 	}
+	stats["searxng_provisioning"] = searxngProvisioning.Load()
 	writeJSON(w, http.StatusOK, stats)
 }
 
@@ -6571,6 +6574,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.Query == "" {
 		writeErr(w, http.StatusBadRequest, "query is required")
 		return
+	}
+
+	// If the caller explicitly requested local SearXNG while initial provisioning is
+	// still spinning up, wait briefly so the engine becomes ready transparently.
+	if strings.EqualFold(strings.TrimSpace(req.Engine), "searxng") {
+		s.ensureLocalSearXNGReady(r.Context(), 30*time.Second)
 	}
 
 	// Convert mode string to SearchMode

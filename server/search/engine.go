@@ -195,11 +195,25 @@ func SetProxyProvider(fn func() string) {
 	proxyProviderFn.Store(fn)
 }
 
+// isLocalSearchHost reports whether host is a loopback or internal Compose service
+// that must never be routed through an external outbound proxy / Tor exit.
+func isLocalSearchHost(rawHost string) bool {
+	h := strings.ToLower(strings.TrimSpace(rawHost))
+	if idx := strings.LastIndex(h, ":"); idx != -1 && !strings.HasPrefix(h, "[") {
+		h = h[:idx]
+	}
+	h = strings.Trim(h, "[]")
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.") || h == "searxng"
+}
+
 // httpClient is a shared HTTP client for search requests.
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
 		Proxy: func(req *http.Request) (*url.URL, error) {
+			if req != nil && req.URL != nil && isLocalSearchHost(req.URL.Host) {
+				return nil, nil
+			}
 			if v := proxyProviderFn.Load(); v != nil {
 				if fn, ok := v.(func() string); ok && fn != nil {
 					if raw := strings.TrimSpace(fn()); raw != "" {
@@ -209,6 +223,15 @@ var httpClient = &http.Client{
 			}
 			return http.ProxyFromEnvironment(req)
 		},
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		ForceAttemptHTTP2: true,
+	},
+}
+
+// localDirectClient is a sub-second timeout client dedicated to local loopback health checks.
+var localDirectClient = &http.Client{
+	Timeout: 600 * time.Millisecond,
+	Transport: &http.Transport{
+		Proxy: nil,
 	},
 }

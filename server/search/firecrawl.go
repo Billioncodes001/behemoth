@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -103,14 +102,13 @@ func (f *FirecrawlSearchEngine) Handle(ctx context.Context, req Request) (Respon
 	}
 
 	startTime := time.Now()
+	maxRes := clampMaxResults(req.MaxResults, 20)
 
+	query := strings.TrimSpace(req.Query)
 	body := firecrawlRequest{
-		Query:   req.Query,
-		Limit:   min(req.MaxResults, 20),
+		Query:   query,
+		Limit:   maxRes,
 		Sources: []string{"web"},
-	}
-	if body.Limit <= 0 {
-		body.Limit = 10
 	}
 	if req.SiteFilter != "" {
 		body.IncludeDomains = []string{req.SiteFilter}
@@ -125,9 +123,18 @@ func (f *FirecrawlSearchEngine) Handle(ctx context.Context, req Request) (Respon
 	if err != nil {
 		return Response{}, fmt.Errorf("firecrawl search failed: %w", err)
 	}
-	// Older self-hosted builds only expose the v1 search endpoint.
-	if status == http.StatusNotFound || status == http.StatusNotImplemented {
-		respBody, status, err = f.post(ctx, "/v1/search", payload)
+	// Older self-hosted builds only expose /v1/search (or reject v2's `sources` field).
+	if status == http.StatusNotFound || status == http.StatusNotImplemented ||
+		(status == http.StatusBadRequest && strings.Contains(strings.ToLower(string(respBody)), "sources")) {
+		v1Query := query
+		if req.SiteFilter != "" && !strings.Contains(strings.ToLower(v1Query), "site:") {
+			v1Query = v1Query + " site:" + strings.TrimSpace(req.SiteFilter)
+		}
+		v1Payload, _ := json.Marshal(firecrawlRequest{
+			Query: v1Query,
+			Limit: maxRes,
+		})
+		respBody, status, err = f.post(ctx, "/v1/search", v1Payload)
 		if err != nil {
 			return Response{}, fmt.Errorf("firecrawl search failed: %w", err)
 		}
@@ -143,9 +150,9 @@ func (f *FirecrawlSearchEngine) Handle(ctx context.Context, req Request) (Respon
 	}
 
 	all := fr.Data.results()
-	results := make([]Result, 0, min(len(all), req.MaxResults))
+	results := make([]Result, 0, min(len(all), maxRes))
 	for i, r := range all {
-		if i >= req.MaxResults {
+		if len(results) >= maxRes {
 			break
 		}
 		if r.URL == "" {
@@ -175,6 +182,7 @@ func (f *FirecrawlSearchEngine) post(ctx context.Context, path string, payload [
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create firecrawl request: %w", err)
 	}
+	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Content-Type", "application/json")
 	if f.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+f.apiKey)
@@ -184,7 +192,7 @@ func (f *FirecrawlSearchEngine) post(ctx context.Context, path string, payload [
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	respBody, err := readResponseBytes(resp, 2<<20)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("failed to read firecrawl response: %w", err)
 	}

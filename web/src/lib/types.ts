@@ -2435,9 +2435,11 @@ export interface SearchEnginesStatus {
   total_engines_registered: number;
   available_engines: number;
   engine_status: Record<SearchEngineType, boolean>;
+  configured_keys?: Record<string, boolean>;
   searxng_url?: string;
   searxng_local_url?: string;
   searxng_local_detected?: boolean;
+  searxng_provisioning?: boolean;
 }
 
 export interface SearchRequest {

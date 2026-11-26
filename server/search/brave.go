@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -20,7 +20,7 @@ type BraveSearchEngine struct {
 // NewBraveSearchEngine creates a new Brave search engine.
 func NewBraveSearchEngine(apiKey string, enabled bool) *BraveSearchEngine {
 	return &BraveSearchEngine{
-		apiKey:  apiKey,
+		apiKey:  strings.TrimSpace(apiKey),
 		enabled: enabled,
 	}
 }
@@ -51,22 +51,24 @@ func (b *BraveSearchEngine) Handle(ctx context.Context, req Request) (Response, 
 
 	startTime := time.Now()
 
+	query := strings.TrimSpace(req.Query)
+	if req.SiteFilter != "" && !strings.Contains(strings.ToLower(query), "site:") {
+		query = query + " site:" + strings.TrimSpace(req.SiteFilter)
+	}
+
 	q := url.Values{}
-	q.Set("q", req.Query)
+	q.Set("q", query)
 	q.Set("count", fmt.Sprintf("%d", clampMaxResults(req.MaxResults, 20)))
 	q.Set("safesearch", "off")
-	if req.SiteFilter != "" {
-		q.Set("search_lang", "")
-		q.Set("q", req.Query+" site:"+req.SiteFilter)
-	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://api.search.brave.com/res/v1/web/search?"+q.Encode(), nil)
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to create brave request: %w", err)
 	}
+	// Do NOT manually set Accept-Encoding: gzip — Go's http.Transport adds it and
+	// decompresses transparently only when Accept-Encoding is unset on the request.
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Accept-Encoding", "gzip")
 	httpReq.Header.Set("X-Subscription-Token", b.apiKey)
 
 	resp, err := httpClient.Do(httpReq)
@@ -75,7 +77,7 @@ func (b *BraveSearchEngine) Handle(ctx context.Context, req Request) (Response, 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	respBody, err := readResponseBytes(resp, 2<<20)
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to read brave response: %w", err)
 	}
@@ -90,12 +92,16 @@ func (b *BraveSearchEngine) Handle(ctx context.Context, req Request) (Response, 
 		return Response{}, fmt.Errorf("failed to parse brave response: %w", err)
 	}
 
-	results := make([]Result, 0, len(brResp.Web.Results))
-	for i, r := range brResp.Web.Results {
+	var rawResults []braveResult
+	if brResp.Web != nil {
+		rawResults = brResp.Web.Results
+	}
+	results := make([]Result, 0, len(rawResults))
+	for i, r := range rawResults {
 		results = append(results, Result{
-			Title:   r.Title,
+			Title:   cleanHTML(r.Title),
 			URL:     r.URL,
-			Snippet: truncateString(r.Description, 300),
+			Snippet: cleanHTML(truncateString(r.Description, 300)),
 			Engine:  string(EngineBrave),
 			Rank:    i + 1,
 		})

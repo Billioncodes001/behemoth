@@ -1,10 +1,42 @@
 package search
 
 import (
+	"bytes"
+	"compress/gzip"
 	"html"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 )
+
+// readResponseBytes reads up to maxBytes from an HTTP response, transparently
+// decompressing gzip payloads even if an upstream server or proxy sends raw
+// gzip bytes (`\x1f\x8b`) without Go's transport auto-gunzipping them.
+func readResponseBytes(resp *http.Response, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = 2 << 20
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	if err != nil {
+		return nil, err
+	}
+	isGzip := strings.Contains(strings.ToLower(resp.Header.Get("Content-Encoding")), "gzip") ||
+		(len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
+	if !isGzip {
+		return raw, nil
+	}
+	zr, zerr := gzip.NewReader(bytes.NewReader(raw))
+	if zerr != nil {
+		return raw, nil
+	}
+	defer zr.Close()
+	decoded, derr := io.ReadAll(io.LimitReader(zr, maxBytes*4))
+	if derr != nil {
+		return raw, nil
+	}
+	return decoded, nil
+}
 
 // cleanHTML removes HTML tags and unescapes HTML entities from a string.
 func cleanHTML(s string) string {

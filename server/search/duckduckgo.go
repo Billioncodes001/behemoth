@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -26,11 +25,13 @@ func (d *DuckDuckGoSearchEngine) Engine() SearchEngineType { return EngineDuckDu
 
 func (d *DuckDuckGoSearchEngine) IsAvailable() bool { return d.enabled }
 
-// ddgResultRegex parses DDG HTML results (<div class="links_main ... result__body"> blocks).
+// ddgResultRegex parses DDG HTML and DDG Lite results.
 var (
 	ddgResultRegex = regexp.MustCompile(`(?s)<h2 class="result__title"[^>]*>\s*<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h2>.*?(?:<a[^>]*class="result__snippet"[^>]*>(.*?)</a>|<div[^>]*class="result__snippet"[^>]*>(.*?)</div>)`)
 	ddgTitleLinkRe = regexp.MustCompile(`(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 	ddgSnippetRe   = regexp.MustCompile(`(?s)class="result__snippet"[^>]*>(.*?)</(?:a|div)>`)
+	ddgLiteLinkRe  = regexp.MustCompile(`(?s)<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>(.*?)</a>`)
+	ddgLiteSnipRe  = regexp.MustCompile(`(?s)<td[^>]*class=['"]result-snippet['"][^>]*>(.*?)</td>`)
 )
 
 func (d *DuckDuckGoSearchEngine) Handle(ctx context.Context, req Request) (Response, error) {
@@ -60,40 +61,20 @@ func (d *DuckDuckGoSearchEngine) Handle(ctx context.Context, req Request) (Respo
 		}
 	}
 
-	// Build DDG HTML request URL
-	apiURL := "https://html.duckduckgo.com/html/"
-	formData := url.Values{}
-	formData.Set("q", q)
-	formData.Set("kl", "wt-wt")
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL,
-		strings.NewReader(formData.Encode()))
-	if err != nil {
-		return Response{}, fmt.Errorf("failed to create ddg request: %w", err)
+	// Query DDG Lite first (avoids html.duckduckgo.com 202 anti-bot challenges),
+	// falling back to html.duckduckgo.com if needed.
+	results, err := d.fetchDDGEndpoint(ctx, "https://lite.duckduckgo.com/lite/", "https://lite.duckduckgo.com", q, req.MaxResults)
+	if len(results) == 0 {
+		if htmlRes, herr := d.fetchDDGEndpoint(ctx, "https://html.duckduckgo.com/html/", "https://html.duckduckgo.com", q, req.MaxResults); len(htmlRes) > 0 {
+			results = htmlRes
+			err = nil
+		} else if err == nil {
+			err = herr
+		}
 	}
-
-	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		return Response{}, fmt.Errorf("ddg search failed: %w", err)
+	if err != nil && len(results) == 0 {
+		return Response{}, err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2MB limit
-	if err != nil {
-		return Response{}, fmt.Errorf("failed to read ddg response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return Response{}, fmt.Errorf("ddg API error: status %d", resp.StatusCode)
-	}
-
-	htmlBody := string(body)
-	results := d.parseResults(htmlBody, req.MaxResults)
 
 	return Response{
 		Results:    results,
@@ -104,6 +85,42 @@ func (d *DuckDuckGoSearchEngine) Handle(ctx context.Context, req Request) (Respo
 	}, nil
 }
 
+func (d *DuckDuckGoSearchEngine) fetchDDGEndpoint(ctx context.Context, apiURL, origin, q string, maxResults int) ([]Result, error) {
+	formData := url.Values{}
+	formData.Set("q", q)
+	formData.Set("kl", "wt-wt")
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL,
+		strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ddg request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	httpReq.Header.Set("Origin", origin)
+	httpReq.Header.Set("Referer", origin+"/")
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("ddg search failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := readResponseBytes(resp, 2<<20) // 2MB limit
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ddg response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("ddg API error: status %d", resp.StatusCode)
+	}
+
+	return d.parseResults(string(body), maxResults), nil
+}
+
 // parseResults extracts search results from DDG HTML response.
 func (d *DuckDuckGoSearchEngine) parseResults(htmlBody string, maxResults int) []Result {
 	if maxResults <= 0 {
@@ -111,7 +128,10 @@ func (d *DuckDuckGoSearchEngine) parseResults(htmlBody string, maxResults int) [
 	}
 	matches := ddgResultRegex.FindAllStringSubmatch(htmlBody, -1)
 	if len(matches) == 0 {
-		return d.parseResultsAlt(htmlBody, maxResults)
+		if alt := d.parseResultsAlt(htmlBody, maxResults); len(alt) > 0 {
+			return alt
+		}
+		return d.parseResultsLite(htmlBody, maxResults)
 	}
 
 	results := make([]Result, 0, min(len(matches), maxResults))
@@ -159,6 +179,40 @@ func (d *DuckDuckGoSearchEngine) parseResultsAlt(htmlBody string, maxResults int
 		block := htmlBody[idx[0]:endIdx]
 		var snippet string
 		if sm := ddgSnippetRe.FindStringSubmatch(block); len(sm) > 1 {
+			snippet = cleanHTML(sm[1])
+		}
+		results = append(results, Result{
+			Title:   cleanHTML(rawTitle),
+			URL:     cleanURL,
+			Snippet: snippet,
+			Engine:  string(EngineDuckDuckGo),
+			Rank:    len(results) + 1,
+		})
+	}
+	return results
+}
+
+// parseResultsLite extracts search results from DuckDuckGo Lite HTML markup.
+func (d *DuckDuckGoSearchEngine) parseResultsLite(htmlBody string, maxResults int) []Result {
+	var results []Result
+	linkMatches := ddgLiteLinkRe.FindAllStringSubmatchIndex(htmlBody, -1)
+	for i, idx := range linkMatches {
+		if len(results) >= maxResults {
+			break
+		}
+		rawURL := htmlBody[idx[2]:idx[3]]
+		rawTitle := htmlBody[idx[4]:idx[5]]
+		cleanURL := extractDDGURL(rawURL)
+		if cleanURL == "" || strings.Contains(cleanURL, "duckduckgo.com/y.js") {
+			continue
+		}
+		endIdx := len(htmlBody)
+		if i+1 < len(linkMatches) {
+			endIdx = linkMatches[i+1][0]
+		}
+		block := htmlBody[idx[0]:endIdx]
+		var snippet string
+		if sm := ddgLiteSnipRe.FindStringSubmatch(block); len(sm) > 1 {
 			snippet = cleanHTML(sm[1])
 		}
 		results = append(results, Result{

@@ -11,13 +11,70 @@ import { useLiveTranslation } from "@/i18n/use-live-translation";
 import { api } from "@/lib/api";
 import type { SearchEngineType, SearchEnginesStatus } from "@/lib/types";
 
-const ENGINES = [
-  { type: "firecrawl" as SearchEngineType, label: "Firecrawl", desc: "Search + crawl API (cloud or self-hosted)", key: true, keyLabel: "API Key | Base URL", env: "SEARCH_FIRECRAWL_API_KEY" },
-  { type: "duckduckgo" as SearchEngineType, label: "DuckDuckGo", desc: "Free HTML search (no key)", key: false, keyLabel: "", env: "" },
-  { type: "tavily" as SearchEngineType, label: "Tavily AI", desc: "AI-powered search", key: true, keyLabel: "API Key", env: "SEARCH_TAVILY_API_KEY" },
-  { type: "brave" as SearchEngineType, label: "Brave", desc: "Brave Search API", key: true, keyLabel: "API Key", env: "SEARCH_BRAVE_API_KEY" },
-  { type: "searxng" as SearchEngineType, label: "SearXNG", desc: "Self-hosted meta-search", key: true, keyLabel: "Instance URL", env: "SEARCH_SEARXNG_URL" },
-  { type: "sploitus" as SearchEngineType, label: "Sploitus", desc: "Exploit database", key: false, keyLabel: "", env: "" },
+const ENGINES: {
+  type: SearchEngineType;
+  label: string;
+  desc: string;
+  key: boolean;
+  keyLabel: string;
+  placeholder?: string;
+  env: string;
+  builtInNote?: string;
+}[] = [
+  {
+    type: "firecrawl",
+    label: "Firecrawl",
+    desc: "Search + crawl API (cloud or self-hosted)",
+    key: true,
+    keyLabel: "API Key | Base URL",
+    placeholder: "fc-... (or http://127.0.0.1:3002)",
+    env: "SEARCH_FIRECRAWL_API_KEY",
+  },
+  {
+    type: "duckduckgo",
+    label: "DuckDuckGo",
+    desc: "Free HTML search (no key)",
+    key: false,
+    keyLabel: "",
+    env: "",
+    builtInNote: "No API key required",
+  },
+  {
+    type: "tavily",
+    label: "Tavily AI",
+    desc: "AI-powered search",
+    key: true,
+    keyLabel: "API Key",
+    placeholder: "tvly-...",
+    env: "SEARCH_TAVILY_API_KEY",
+  },
+  {
+    type: "brave",
+    label: "Brave",
+    desc: "Brave Search API",
+    key: true,
+    keyLabel: "API Key",
+    placeholder: "API Key",
+    env: "SEARCH_BRAVE_API_KEY",
+  },
+  {
+    type: "searxng",
+    label: "SearXNG",
+    desc: "Self-hosted meta-search (runs locally on this server)",
+    key: false,
+    keyLabel: "",
+    env: "",
+    builtInNote: "Self-hosted on server — no API key or URL required",
+  },
+  {
+    type: "sploitus",
+    label: "Sploitus",
+    desc: "Exploit database",
+    key: false,
+    keyLabel: "",
+    env: "",
+    builtInNote: "No API key required",
+  },
 ];
 
 interface Props {
@@ -28,6 +85,7 @@ interface Props {
 export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
   const { t } = useLiveTranslation();
   const [keys, setKeys] = React.useState<Record<string, string>>({});
+  const [savedKeys, setSavedKeys] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState<string | null>(null);
   const [testing, setTesting] = React.useState<string | null>(null);
 
@@ -40,37 +98,72 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
       }
     });
     setKeys(k);
+    setSavedKeys(k);
   }, []);
 
-  const saveKey = async (type: string) => {
-    const val = (keys[type] || "").trim();
-    if (!val) {
-      toast.warning(`Please enter a value for ${type} before saving.`);
+  React.useEffect(() => {
+    if (!enginesStatus?.searxng_provisioning && enginesStatus?.engine_status?.searxng) {
       return;
     }
-    if (type === "firecrawl" && val.startsWith("http") && (val.includes("|") || !val.includes(" "))) {
-      // A bare base URL is valid for self-hosted Firecrawl instances (no API key).
-    } else if (type === "firecrawl" && val && !val.startsWith("http") && !val.includes("|")) {
-      toast.warning("For Firecrawl enter an API key (fc-...), a self-hosted base URL (http://host:3002), or both as 'key|url'.");
+    if (!enginesStatus?.searxng_provisioning) {
       return;
+    }
+    const timer = window.setInterval(() => {
+      onRefresh();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [enginesStatus?.searxng_provisioning, enginesStatus?.engine_status?.searxng, onRefresh]);
+
+  const validateEngineValue = (type: string, val: string): string | null => {
+    if (!val) {
+      return `Please enter a value for ${type} before saving.`;
+    }
+    if (/\s/.test(val)) {
+      return `Invalid ${type} value: remove any spaces or line breaks.`;
+    }
+    return null;
+  };
+
+  const saveKey = async (type: string): Promise<boolean> => {
+    const val = (keys[type] || "").trim();
+    const errMsg = validateEngineValue(type, val);
+    if (errMsg) {
+      toast.warning(errMsg);
+      return false;
     }
     setSaving(type);
     try {
       await api.search.saveConfig({ engine: type, api_key: val });
       localStorage.setItem("behemoth_search_" + type, val);
+      setSavedKeys(p => ({ ...p, [type]: val }));
       toast.success(`${type.toUpperCase()} search configuration saved`);
       onRefresh();
+      return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setSaving(null);
     }
   };
 
-  const testEngine = async (type: string) => {
+  const testEngine = async (type: SearchEngineType) => {
+    const meta = ENGINES.find(e => e.type === type);
+    const typed = (keys[type] || "").trim();
+    // If the user pasted a new or unsaved API key and clicked Test directly, persist it first.
+    if (meta?.key && typed && (typed !== (savedKeys[type] || "") || !avail(type))) {
+      const ok = await saveKey(type);
+      if (!ok) return;
+    }
     setTesting(type);
     try {
-      const res = await api.search.search({ query: "cve-2024", mode: type === "sploitus" ? "exploit" : "general", engine: type, max_results: 3 });
+      const res = await api.search.search({
+        query: "cve-2024",
+        mode: type === "sploitus" ? "exploit" : "general",
+        engine: type,
+        max_results: 3,
+      });
+      onRefresh();
       if (res.results && res.results.length > 0) {
         toast.success(`${type.toUpperCase()} test succeeded (${res.results.length} results in ${res.query_time_ms ?? 0}ms)`);
       } else {
@@ -83,7 +176,7 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
     }
   };
 
-  const avail = (type: SearchEngineType) => enginesStatus?.engine_status[type] ?? false;
+  const avail = (type: SearchEngineType) => enginesStatus?.engine_status?.[type] ?? false;
 
   return (
     <Card>
@@ -144,31 +237,23 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
                 </div>
                 <div className="flex gap-2">
                   <Input
-                    type={e.type === "searxng" || e.type === "firecrawl" ? "url" : "password"}
-                    placeholder={e.keyLabel}
+                    type="password"
+                    placeholder={
+                      avail(e.type) || enginesStatus?.configured_keys?.[e.type]
+                        ? "Configured on server — enter new key to replace"
+                        : e.placeholder || e.keyLabel
+                    }
                     value={keys[e.type] || ""}
                     onChange={ev => setKeys(p => ({ ...p, [e.type]: ev.target.value }))}
                     className="font-mono text-sm"
                   />
-                  <Button size="sm" onClick={() => saveKey(e.type)} disabled={saving === e.type}>
+                  <Button size="sm" onClick={() => void saveKey(e.type)} disabled={saving === e.type}>
                     {saving === e.type ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => testEngine(e.type)} disabled={testing === e.type}>
+                  <Button variant="outline" size="sm" onClick={() => void testEngine(e.type)} disabled={testing === e.type || saving === e.type}>
                     {testing === e.type ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test"}
                   </Button>
                 </div>
-                {e.type === "searxng" && enginesStatus?.searxng_local_url && (() => {
-                  const localURL = enginesStatus.searxng_local_url;
-                  return (
-                    <button
-                      type="button"
-                      className="text-xs text-emerald-600 dark:text-emerald-400 underline underline-offset-2"
-                      onClick={() => setKeys(p => ({ ...p, searxng: localURL }))}
-                    >
-                      Local instance detected at {localURL} — click to fill
-                    </button>
-                  );
-                })()}
                 {e.type === "firecrawl" && (
                   <p className="text-xs text-muted-foreground">
                     Cloud: paste your fc-… key. Self-hosted: enter the base URL (e.g. http://127.0.0.1:3002) — no key needed.
@@ -177,8 +262,23 @@ export function SearchConfigCard({ enginesStatus, onRefresh }: Props) {
                 <p className="text-xs text-muted-foreground">Env: {e.env}</p>
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-xs text-green-600 bg-green-50 dark:bg-green-950 p-2 rounded">
-                <CheckCircle className="h-4 w-4" /> No API key required
+              <div className="flex items-center justify-between gap-2 text-xs text-green-600 bg-green-50 dark:bg-green-950 p-2 rounded">
+                <div className="flex items-center gap-2">
+                  {e.type === "searxng" && !avail("searxng") && enginesStatus?.searxng_provisioning ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
+                      <span className="text-amber-600 dark:text-amber-400">Starting local SearXNG service on server...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="h-4 w-4" />
+                      <span>{e.builtInNote || "No API key required"}</span>
+                    </>
+                  )}
+                </div>
+                <Button variant="outline" size="sm" onClick={() => void testEngine(e.type)} disabled={testing === e.type}>
+                  {testing === e.type ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test"}
+                </Button>
               </div>
             )}
           </div>

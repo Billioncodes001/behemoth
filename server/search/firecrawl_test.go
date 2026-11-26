@@ -141,6 +141,10 @@ func TestOrchestratorFirecrawlConfig(t *testing.T) {
 	if !containsEngine(orch.GetAvailableEngines(), EngineFirecrawl) {
 		t.Fatal("firecrawl should be registered from a bare base URL")
 	}
+	orch.UpdateEngine("firecrawl", "fc-32ad00a9ddb2433fae975daf1e7ce222")
+	if !containsEngine(orch.GetAvailableEngines(), EngineFirecrawl) {
+		t.Fatal("firecrawl should be registered from a cloud fc-... API key")
+	}
 }
 
 func containsEngine(list []SearchEngineType, want SearchEngineType) bool {

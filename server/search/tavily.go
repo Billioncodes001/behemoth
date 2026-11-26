@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
@@ -95,7 +94,7 @@ func (t *TavilySearchEngine) Handle(ctx context.Context, req Request) (Response,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	respBody, err := readResponseBytes(resp, 2<<20)
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to read tavily response: %w", err)
 	}
