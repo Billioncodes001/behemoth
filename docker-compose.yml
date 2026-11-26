@@ -62,9 +62,10 @@ services:
       # 把数据目录（含 jwt.key、SQLite 等）绑定到项目根目录的 data/，
       # 方便在宿主机直接查看/备份，容器重建也不丢。
       - ./data:/app/data
-      # 把项目根目录的 skills 挂进容器（覆盖镜像内置的 /app/skills）；
-      # 改 skill 无需重建镜像，容器读的就是宿主机这份。
+      # 把项目根目录的 skills 与 setup.sh 挂进容器：改 skill 或扩展 setup.sh 军火库无需重建镜像，容器启动/自愈即读宿主机最新脚本。
       - ./skills:/app/skills
+      - ./setup.sh:/app/setup.sh:ro
+      - arsenal_opt:/opt/behemoth-venvs
     depends_on:
       searxng:
         condition: service_healthy
@@ -91,3 +92,4 @@ services:
 
 volumes:
   pgdata:
+  arsenal_opt:

@@ -19,6 +19,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
+export PATH="/usr/local/bin:/opt/google-cloud-sdk/bin:${HOME:-/root}/.local/bin:/usr/local/go/bin:${HOME:-/root}/go/bin:$PATH"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

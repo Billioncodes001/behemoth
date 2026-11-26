@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,11 +13,49 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Autumn-27/behemoth/server/browser"
 	actool "github.com/Autumn-27/norma/tool"
 )
+
+var (
+	arsenalProvisionMu  sync.Mutex
+	arsenalProvisioning atomic.Bool
+)
+
+func ensureArsenalPATH() {
+	cur := os.Getenv("PATH")
+	parts := strings.Split(cur, string(os.PathListSeparator))
+	have := map[string]bool{}
+	for _, p := range parts {
+		have[p] = true
+	}
+	var prepend []string
+	for _, want := range []string{"/usr/local/bin", "/opt/google-cloud-sdk/bin"} {
+		if !have[want] {
+			prepend = append(prepend, want)
+		}
+	}
+	if len(prepend) > 0 {
+		_ = os.Setenv("PATH", strings.Join(prepend, string(os.PathListSeparator))+string(os.PathListSeparator)+cur)
+	}
+}
+
+func resolveSetupScriptPath() string {
+	candidates := []string{"./setup.sh", "/app/setup.sh"}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		candidates = append([]string{filepath.Join(filepath.Dir(exe), "setup.sh")}, candidates...)
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
 
 var defaultCommonWebPaths = strings.Join([]string{
 	".env", ".env.backup", ".env.example", ".env.local", ".env.production",
@@ -79,13 +118,27 @@ func (s *Server) ensureDefaultWordlists() {
 			_ = os.Symlink("/usr/share/wordlists/behemoth/common.txt", "/usr/share/wordlists/dirb/common.txt")
 		}
 	}
-	if runtime.GOOS == "linux" {
+	ensureArsenalPATH()
+	if runtime.GOOS == "linux" && flag.Lookup("test.v") == nil {
 		go s.autoProvisionLinuxArsenal()
 	}
 }
 
+type arsenalProvisionState struct {
+	SetupSHA256     string `json:"setup_sha256"`
+	LastAttemptUnix int64  `json:"last_attempt_unix"`
+}
+
 func (s *Server) autoProvisionLinuxArsenal() {
-	setupBytes, err := os.ReadFile("./setup.sh")
+	if flag.Lookup("test.v") != nil {
+		return
+	}
+	ensureArsenalPATH()
+	setupPath := resolveSetupScriptPath()
+	if setupPath == "" {
+		return
+	}
+	setupBytes, err := os.ReadFile(setupPath)
 	if err != nil {
 		return
 	}
@@ -95,39 +148,80 @@ func (s *Server) autoProvisionLinuxArsenal() {
 		return
 	}
 
+	if !arsenalProvisionMu.TryLock() {
+		return
+	}
+	defer arsenalProvisionMu.Unlock()
+
 	sum := sha256.Sum256(setupBytes)
 	wantHash := hex.EncodeToString(sum[:])
 	stateFile := filepath.Join(s.dataDir, "wordlists", ".arsenal_setup_sha256")
+	metaFile := filepath.Join(s.dataDir, "wordlists", ".arsenal_setup_state.json")
 	prevHashBytes, _ := os.ReadFile(stateFile)
 	prevHash := strings.TrimSpace(string(prevHashBytes))
 
-	coreExpected := []string{"tor", "tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql"}
-	missingCore := false
-	for _, bin := range coreExpected {
-		if _, lookErr := exec.LookPath(bin); lookErr != nil {
-			missingCore = true
-			break
+	var meta arsenalProvisionState
+	if rawMeta, merr := os.ReadFile(metaFile); merr == nil {
+		_ = json.Unmarshal(rawMeta, &meta)
+		if prevHash == "" && meta.SetupSHA256 != "" {
+			prevHash = meta.SetupSHA256
 		}
 	}
+
+	// Binaries whose absence triggers a (re)run of ./setup.sh arsenal so a fresh
+	// or partially provisioned host/container converges to the full arsenal.
+	coreExpected := []string{
+		"tor", "tesseract", "nuclei", "subfinder", "ffuf", "gobuster", "trivy", "grype", "rustscan", "mysql", "psql",
+		"msfvenom", "impacket-secretsdump", "responder", "linpeas.sh", "winpeas.exe", "vol", "az", "gcloud", "pacu", "scout",
+	}
+	var missingBins []string
+	for _, bin := range coreExpected {
+		if _, lookErr := exec.LookPath(bin); lookErr != nil {
+			missingBins = append(missingBins, bin)
+		}
+	}
+	missingCore := len(missingBins) > 0
 	if prevHash == wantHash && !missingCore {
 		return
 	}
+	// If setup.sh hash hasn't changed (we already ran this exact setup.sh version)
+	// and only an optional/unavailable upstream package is missing, wait 6h before
+	// retrying so rapid live-update restarts never trigger back-to-back apt runs.
+	if prevHash == wantHash && missingCore && meta.LastAttemptUnix > 0 &&
+		time.Since(time.Unix(meta.LastAttemptUnix, 0)) < 6*time.Hour {
+		return
+	}
 
-	log.Printf("[arsenal] Auto-provisioning Linux security CLI, OCR & client dependencies in background...")
-	ctx, cancel := context.WithTimeout(s.ctx, 20*time.Minute)
+	arsenalProvisioning.Store(true)
+	defer arsenalProvisioning.Store(false)
+
+	log.Printf("[arsenal] Auto-provisioning Linux security CLI, OCR & extended arsenal via %s in background (missing=%d)...", setupPath, len(missingBins))
+	ctx, cancel := context.WithTimeout(s.ctx, 35*time.Minute)
 	defer cancel()
 
 	var cmd *exec.Cmd
 	if isRoot {
-		cmd = exec.CommandContext(ctx, "bash", "./setup.sh", "arsenal")
+		cmd = exec.CommandContext(ctx, "bash", setupPath, "arsenal")
 	} else {
-		cmd = exec.CommandContext(ctx, "sudo", "-n", "bash", "./setup.sh", "arsenal")
+		cmd = exec.CommandContext(ctx, "sudo", "-n", "bash", setupPath, "arsenal")
 	}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("[arsenal] Background provisioning finished with warning: %v (%s)", err, firstLine(string(out), 200))
+	cmd.Dir = filepath.Dir(setupPath)
+	out, runErr := cmd.CombinedOutput()
+	ensureArsenalPATH()
+
+	newMeta := arsenalProvisionState{
+		SetupSHA256:     wantHash,
+		LastAttemptUnix: time.Now().Unix(),
+	}
+	if b, jerr := json.Marshal(newMeta); jerr == nil {
+		_ = os.WriteFile(metaFile, b, 0o644)
+	}
+	_ = os.WriteFile(stateFile, []byte(wantHash+"\n"), 0o644)
+
+	if runErr != nil {
+		log.Printf("[arsenal] Background provisioning finished with warning: %v (%s)", runErr, firstLine(string(out), 200))
 	} else {
-		_ = os.WriteFile(stateFile, []byte(wantHash+"\n"), 0o644)
-		log.Printf("[arsenal] Linux security CLI & OCR dependencies provisioned successfully")
+		log.Printf("[arsenal] Linux security CLI, OCR & extended arsenal provisioned successfully")
 	}
 }
 
@@ -195,7 +289,7 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				"socat", "openssl", "curl", "python3", "rg", "jq", "tor", "tesseract", "mysql", "psql",
 				"rustscan", "masscan", "smtp-user-enum", "onesixtyone", "snmpwalk",
 				"impacket-secretsdump", "impacket-GetNPUsers", "bloodhound-python",
-				"msfvenom", "trivy", "grype", "semgrep",
+				"msfvenom", "responder", "linpeas.sh", "winpeas.exe", "vol", "volatility", "trivy", "grype", "semgrep",
 				"aws", "az", "gcloud", "pacu", "scout",
 			}
 			installed := make([]map[string]string, 0, len(cliNames))
@@ -222,10 +316,11 @@ func (s *Server) toolListSecurityArsenal() actool.CoreTool {
 				}
 			}
 			return jsonResult(map[string]any{
-				"installed_cli": installed,
-				"missing_cli":   missing,
-				"wordlists":     s.resolveWordlistPaths(),
-				"catalog_tools": catalogIDs,
+				"provisioning_in_progress": arsenalProvisioning.Load(),
+				"installed_cli":            installed,
+				"missing_cli":              missing,
+				"wordlists":                s.resolveWordlistPaths(),
+				"catalog_tools":            catalogIDs,
 			})
 		})
 }

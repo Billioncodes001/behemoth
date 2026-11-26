@@ -272,6 +272,7 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 	pkgJSONChanged := false
 	webChanged := false
 	goBackendChanged := false
+	setupChanged := false
 	if diffOut, err := exec.CommandContext(ctx, "git", "diff", "--name-only", localSHA+".."+remoteSHA).Output(); err == nil {
 		for _, rel := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
 			rel = strings.TrimSpace(rel)
@@ -283,6 +284,9 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 			}
 			if strings.HasPrefix(rel, "web/") {
 				webChanged = true
+			}
+			if rel == "setup.sh" || rel == "start.sh" || strings.HasPrefix(rel, "deploy/") {
+				setupChanged = true
 			}
 			if strings.HasSuffix(rel, ".go") || rel == "go.mod" || rel == "go.sum" || strings.HasPrefix(rel, "db/schema.sql") {
 				goBackendChanged = true
@@ -320,6 +324,8 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		setMaintenanceUpdating(false, "", "")
 		return
 	}
+	_ = os.Chmod("setup.sh", 0o755)
+	_ = os.Chmod("start.sh", 0o755)
 
 	needNpmInstall := "0"
 	if pkgJSONChanged {
@@ -353,6 +359,9 @@ func (s *Server) checkAndApplyGitUpdate(ctx context.Context, manual bool) {
 		if s != nil {
 			s.syncDiscoveredSkillsVisibility()
 			s.ensureDefaultWordlists()
+			if setupChanged {
+				go s.ensureLocalSearXNGService(s.ctx)
+			}
 		}
 		if headOut, herr := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD").Output(); herr == nil {
 			maintState.mu.Lock()
