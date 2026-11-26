@@ -745,6 +745,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedProxyPoolAgentToolsV1()
 	s.seedSelfImprovingScannerToolsV1()
 	s.seedLootAndCaptchaToolsV1()
+	s.seedCaptchaAndSearchToolsV2()
 	s.seedAgentRequestToolsV1()
 	s.seedC2ToolsV1()
 	s.seedC2ProxyToolsV1()
@@ -1437,6 +1438,31 @@ func (s *Server) seedLootAndCaptchaToolsV1() {
 		keys = append(keys, t.Name())
 	}
 	for _, agKey := range []string{"auto", "pentest", "worker", "planner", "mainagent", "reporter", "patch_watch", "retester"} {
+		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// seedCaptchaAndSearchToolsV2 refreshes solve_captcha (2Captcha v2 Image, Turnstile,
+// reCAPTCHA v2/v3, hCaptcha) and multi_engine_search (Brave, Firecrawl, Tavily,
+// local SearXNG, Sploitus, DuckDuckGo) schemas and agent bindings on existing DBs.
+func (s *Server) seedCaptchaAndSearchToolsV2() {
+	const flag = "captcha_and_search_tools_v2"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	refreshTools := append([]actool.CoreTool{}, s.captchaTools()...)
+	refreshTools = append(refreshTools, s.toolMultiEngineSearch(), s.toolExploitSearch())
+	targetAgents := []string{"auto", "pentest", "worker", "planner", "mainagent", "patch_watch", "retester", "proxy_harvester"}
+	binds, _ := json.Marshal(targetAgents)
+	keys := make([]string, 0, len(refreshTools))
+	for _, t := range refreshTools {
+		schema, _ := json.Marshal(t.InputSchema())
+		_ = s.m.pg.SeedTool(t.Name(), t.Description(), schema, binds)
+		_ = s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema)
+		keys = append(keys, t.Name())
+	}
+	for _, agKey := range targetAgents {
 		_ = s.m.pg.AddAgentToToolBinding(agKey, keys)
 	}
 	_ = s.m.pg.SetSetting(flag, "true")

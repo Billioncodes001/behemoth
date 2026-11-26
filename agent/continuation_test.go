@@ -123,6 +123,36 @@ func TestDynamicProxyEnvToolUpdatesMidTurn(t *testing.T) {
 	if !found {
 		t.Fatalf("expected HTTP_PROXY injected after mid-turn activation, got env=%v", capturedEnv)
 	}
+
+	// 3. Service API keys (2Captcha + Search) saved mid-turn -> immediately injected on next tool call!
+	prevExtra := ExtraServiceEnv
+	ExtraServiceEnv = func() []string {
+		return []string{
+			"TWO_CAPTCHA_API_KEY=2cap-live-key",
+			"SEARCH_FIRECRAWL_API_KEY=fc-live-key",
+			"SEARCH_SEARXNG_URL=http://127.0.0.1:8888",
+		}
+	}
+	defer func() { ExtraServiceEnv = prevExtra }()
+
+	_, _ = wrapped.Call(context.Background(), json.RawMessage(`{}`), &actool.ToolContext{
+		Env: []string{"FOO=bar", "TWO_CAPTCHA_API_KEY=old-key"},
+	})
+	seen2Cap, seenFC := false, false
+	for _, kv := range capturedEnv {
+		if kv == "TWO_CAPTCHA_API_KEY=old-key" {
+			t.Fatalf("stale TWO_CAPTCHA_API_KEY was not replaced: %v", capturedEnv)
+		}
+		if kv == "TWO_CAPTCHA_API_KEY=2cap-live-key" {
+			seen2Cap = true
+		}
+		if kv == "SEARCH_FIRECRAWL_API_KEY=fc-live-key" {
+			seenFC = true
+		}
+	}
+	if !seen2Cap || !seenFC {
+		t.Fatalf("expected live 2Captcha & Firecrawl keys in tc.Env, got %v", capturedEnv)
+	}
 }
 
 func TestAutoWholeWebsiteScanNudgesSpawnTaskAndPostFindingExploitation(t *testing.T) {

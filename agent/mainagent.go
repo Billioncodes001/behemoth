@@ -106,7 +106,7 @@ Never fabricate findings; answer strictly based on authentic data returned by to
 
 func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir) + needReportNote
+	return body + artifactSpec(workDir) + systemTail()
 }
 
 // Chat handles one human message and returns the assistant reply. emit, if

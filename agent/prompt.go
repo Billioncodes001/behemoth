@@ -17,6 +17,24 @@ var PromptOverride func(agentKey string) (string, bool)
 // cannot accidentally remove the operational safety guidance.
 var OpsecEnabled func() bool
 
+// ExtraServiceEnv, when wired by the server, returns live KEY=VALUE environment
+// pairs (2Captcha API key, Multi-Engine Search API keys, SearXNG local URL) so
+// every Bash/Python/tool execution picks up newly saved keys immediately.
+var ExtraServiceEnv func() []string
+
+// ServiceIntegrationsNote, when wired by the server, returns a live status and
+// usage summary of configured CAPTCHA & Search services appended to every agent's
+// system prompt tail.
+var ServiceIntegrationsNote func() string
+
+func systemTail() string {
+	var svc string
+	if ServiceIntegrationsNote != nil {
+		svc = ServiceIntegrationsNote()
+	}
+	return svc + needReportNote
+}
+
 const opsecPromptBlock = `[OPSEC & Stealth Guidelines (Hard Constraint — second only to Authorization Scope & Task Constraints)]
 
 - Reuse existing recorded traffic, browser sessions, and verified evidence first; when traffic_search/traffic_get or existing responses already contain the answer, do not issue redundant requests to the target.

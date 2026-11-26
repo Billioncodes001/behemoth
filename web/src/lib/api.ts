@@ -100,6 +100,7 @@ import type {
   Recipe,
   RepeaterSendRequest,
   RepeaterSendResponse,
+  CaptchaStatus,
   SearchEnginesStatus,
   SearchRequest,
   SearchResult,
@@ -2212,6 +2213,17 @@ export const api = {
     exploit: (query: string, maxResults?: number) =>
       post<SearchResult>("/v2/search/exploit", { query, max_results: maxResults ?? 15 }),
     saveConfig: (config: { engine: string; api_key: string }) => post<{ ok: boolean }>("/v2/search/config", config),
+  },
+
+  // ============================================================
+  // 2CAPTCHA & CAPTCHA SOLVER API
+  // ============================================================
+  captcha: {
+    status: () => get<CaptchaStatus>("/v2/captcha/status"),
+    saveConfig: (config: { api_key?: string; base_url?: string }) =>
+      post<{ ok: boolean; configured: boolean; base_url: string }>("/v2/captcha/config", config),
+    test: (config?: { api_key?: string; base_url?: string }) =>
+      post<{ ok: boolean; provider: string; balance: number }>("/v2/captcha/test", config ?? {}),
   },
 
   // ============================================================

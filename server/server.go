@@ -460,6 +460,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if m.traffic != nil {
 		m.traffic.SetUpstreamFailureHandler(s.handleProxyTrafficFailure)
 	}
+	// Wire live service API keys (2Captcha, Firecrawl, Tavily, Brave, SearXNG) and
+	// live service integration prompts into every agent runtime.
+	agent.ExtraServiceEnv = s.serviceEnvPairs
+	agent.ServiceIntegrationsNote = s.serviceIntegrationsNote
+
 	// Wire DB-stored prompt templates into the agents (new approach S3.3 / S5a). With no
 	// override row, agents keep their built-in defaults -- behavior is unchanged.
 	if m.pg != nil {
@@ -1531,6 +1536,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v2/search", s.handleSearch)
 	mux.HandleFunc("POST /api/v2/search/exploit", s.handleSearchExploit)
 	mux.HandleFunc("POST /api/v2/search/config", s.handleSearchConfig)
+
+	// 2Captcha & CAPTCHA Solver API
+	mux.HandleFunc("GET /api/v2/captcha/status", s.handleCaptchaStatus)
+	mux.HandleFunc("POST /api/v2/captcha/config", s.handleCaptchaConfig)
+	mux.HandleFunc("POST /api/v2/captcha/test", s.handleCaptchaTest)
 
 	// Browser Automation API (Pentagi-inspired)
 	mux.HandleFunc("POST /api/v2/browser/screenshot", s.handleBrowserScreenshot)

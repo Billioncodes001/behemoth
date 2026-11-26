@@ -37,6 +37,7 @@ import { CommercialBrandingCard } from "./_components/commercial-branding-card";
 import { McpServerCard } from "./_components/mcp-server-card";
 import { UpdateCard } from "./_components/update-card";
 import { SearchConfigCard } from "./_components/search-config-card";
+import { CaptchaConfigCard } from "./_components/captcha-config-card";
 import { BrowserConfigCard } from "./_components/browser-config-card";
 import { SecurityConfigCard } from "./_components/security-config-card";
 
@@ -702,6 +703,7 @@ export default function SystemSettingsPage() {
             {isSettingVisible("system", "settings.keywords.basicAuth") ? <BasicAuthCard /> : null}
             {isSettingVisible("system", "settings.keywords.mcpServer") ? <McpServerCard /> : null}
             {isSettingVisible("network", "settings.keywords.search") ? <SearchConfigCard enginesStatus={enginesStatus} onRefresh={refreshEngines} /> : null}
+            {isSettingVisible("network", "settings.keywords.captcha") ? <CaptchaConfigCard /> : null}
             {isSettingVisible("traffic", "settings.keywords.browser") ? <BrowserConfigCard /> : null}
             {isSettingVisible("traffic", "settings.keywords.security") ? <SecurityConfigCard /> : null}
 

@@ -331,7 +331,7 @@ Be concise, focused, and effective.`
 
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir) + needReportNote
+	return body + artifactSpec(workDir) + systemTail()
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution

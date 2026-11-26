@@ -2450,6 +2450,20 @@ export interface SearchRequest {
   site_filter?: string;
 }
 
+export interface CaptchaStatus {
+  configured: boolean;
+  provider: string;
+  base_url: string;
+  local_ocr_available: boolean;
+  capabilities: {
+    image: boolean;
+    turnstile: boolean;
+    recaptcha_v2: boolean;
+    recaptcha_v3: boolean;
+    hcaptcha: boolean;
+  };
+}
+
 // ============================================================
 // BROWSER AUTOMATION TYPES (Pentagi-inspired)
 // ============================================================

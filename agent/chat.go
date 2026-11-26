@@ -96,7 +96,7 @@ func chatWorkDirSpec(workDir, model string) string {
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, model, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model) + needReportNote
+	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir, model) + systemTail()
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.
@@ -242,9 +242,12 @@ func (d *dynamicProxyEnvTool) AcceptsRawInput() bool {
 }
 
 func (d *dynamicProxyEnvTool) Call(ctx context.Context, in json.RawMessage, tc *actool.ToolContext) (actool.Result, error) {
-	if tc != nil && d.resolveProxy != nil {
-		liveAddr := d.resolveProxy()
-		cleaned := make([]string, 0, len(tc.Env)+12)
+	if tc != nil && (d.resolveProxy != nil || ExtraServiceEnv != nil) {
+		var liveAddr string
+		if d.resolveProxy != nil {
+			liveAddr = d.resolveProxy()
+		}
+		cleaned := make([]string, 0, len(tc.Env)+20)
 		for _, kv := range tc.Env {
 			k := kv
 			if eq := strings.IndexByte(kv, '='); eq >= 0 {
@@ -252,12 +255,20 @@ func (d *dynamicProxyEnvTool) Call(ctx context.Context, in json.RawMessage, tc *
 			}
 			switch strings.ToUpper(k) {
 			case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY",
-				"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS":
+				"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS",
+				"TWO_CAPTCHA_API_KEY", "CAPTCHA_API_KEY", "CAPTCHA_BASE_URL",
+				"SEARCH_FIRECRAWL_API_KEY", "FIRECRAWL_API_KEY", "SEARCH_FIRECRAWL_URL",
+				"SEARCH_TAVILY_API_KEY", "TAVILY_API_KEY",
+				"SEARCH_BRAVE_API_KEY", "BRAVE_API_KEY",
+				"SEARCH_SEARXNG_URL":
 				continue
 			}
 			cleaned = append(cleaned, kv)
 		}
 		cleaned = append(cleaned, proxyEnv(liveAddr, d.caCert)...)
+		if ExtraServiceEnv != nil {
+			cleaned = append(cleaned, ExtraServiceEnv()...)
+		}
 		tcCopy := *tc
 		tcCopy.Env = cleaned
 		tc = &tcCopy

@@ -122,6 +122,10 @@ export const settingsMessages = {
     "搜索 引擎 Firecrawl DuckDuckGo Tavily SearXNG Brave Sploitus 多引擎 Web Search",
     "search engine firecrawl google duckduckgo tavily searxng brave sploitus multi-engine web search pentagi",
   ],
+  "settings.keywords.captcha": [
+    "验证码 2Captcha Turnstile reCAPTCHA hCaptcha 图片验证码 OCR CAPTCHA",
+    "captcha 2captcha turnstile cloudflare recaptcha v2 v3 hcaptcha image ocr solver",
+  ],
   "settings.keywords.browser": [
     "浏览器 截图 内容抓取 Chrome 自动化 Browser screenshot content scraper automation",
     "browser screenshot content scraper chrome automation pentagi",

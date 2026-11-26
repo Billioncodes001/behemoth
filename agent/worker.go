@@ -223,9 +223,14 @@ func proxyEnv(proxyAddr, caCert string) []string {
 }
 
 // agentBashEnv includes PIP_BREAK_SYSTEM_PACKAGES=1 (so `pip install` works on
-// Ubuntu 24.04 / Debian 12 PEP 668 without failing) plus proxyEnv when active.
+// Ubuntu 24.04 / Debian 12 PEP 668 without failing), proxyEnv when active, and
+// live platform service API keys (2Captcha, Firecrawl, Tavily, Brave, SearXNG).
 func agentBashEnv(proxyAddr, caCert string) []string {
-	return append([]string{"PIP_BREAK_SYSTEM_PACKAGES=1"}, proxyEnv(proxyAddr, caCert)...)
+	out := append([]string{"PIP_BREAK_SYSTEM_PACKAGES=1"}, proxyEnv(proxyAddr, caCert)...)
+	if ExtraServiceEnv != nil {
+		out = append(out, ExtraServiceEnv()...)
+	}
+	return out
 }
 
 // workerDefaultTmpl is the built-in EDITABLE body (段 [A]) of the worker system
@@ -284,7 +289,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + needReportNote
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + systemTail()
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
