@@ -1103,6 +1103,43 @@ func (s *Server) fsSkillUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"calls": calls})
 }
 
+// reconcileExistingSkillMisses heals any `NOT found` skill_usage rows whose name
+// or alias matches a skill directory currently present under s.skillDir.
+func (s *Server) reconcileExistingSkillMisses() map[string]bool {
+	existing := map[string]bool{}
+	if s == nil || strings.TrimSpace(s.skillDir) == "" {
+		return existing
+	}
+	entries, err := os.ReadDir(s.skillDir)
+	if err != nil {
+		return existing
+	}
+	byLower := map[string]string{}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		if _, stErr := os.Stat(filepath.Join(s.skillDir, ent.Name(), "SKILL.md")); stErr != nil {
+			continue
+		}
+		existing[ent.Name()] = true
+		byLower[strings.ToLower(ent.Name())] = ent.Name()
+	}
+	if s.m != nil && s.m.pg != nil && len(byLower) > 0 {
+		_ = s.m.pg.ReconcileMissingSkillCalls(func(raw string) (string, bool) {
+			if c, ok := byLower[strings.ToLower(strings.TrimSpace(raw))]; ok {
+				return c, true
+			}
+			norm := normalizeRequestedSkillName(raw)
+			if c, ok := byLower[norm]; ok {
+				return c, true
+			}
+			return "", false
+		})
+	}
+	return existing
+}
+
 // fsMissingSkills lists skill names agents asked for that do not exist — the gap
 // list, i.e. which procedures are worth writing next.
 func (s *Server) fsMissingSkills(w http.ResponseWriter, r *http.Request) {
@@ -1110,13 +1147,37 @@ func (s *Server) fsMissingSkills(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
+	existing := s.reconcileExistingSkillMisses()
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	missing, err := pg.MissingSkillStats(limit)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"missing": missing})
+	filtered := make([]db.SkillStat, 0, len(missing))
+	for _, m := range missing {
+		norm := normalizeRequestedSkillName(m.Skill)
+		if existing[m.Skill] || existing[norm] {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	writeJSON(w, 200, map[string]any{"missing": filtered})
+}
+
+// fsClearMissingSkills clears unresolved missing-skill ledger entries (all or one ?skill=...).
+func (s *Server) fsClearMissingSkills(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	target := strings.TrimSpace(r.URL.Query().Get("skill"))
+	deleted, err := pg.ClearMissingSkillCalls(target)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
 }
 
 // cleanStrs trims each string and drops empties.
@@ -1192,6 +1253,7 @@ func (s *Server) fsCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.reconcileExistingSkillMisses()
 	writeJSON(w, 201, map[string]any{"name": body.Name})
 }
 

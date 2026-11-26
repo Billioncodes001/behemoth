@@ -1664,7 +1664,7 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 	if err != nil {
 		return
 	}
-	const settingKey = "auto_seeded_skill_dirs_v1"
+	const settingKey = "auto_seeded_skill_dirs_v2"
 	seeded := map[string]bool{}
 	if raw, ok, _ := s.m.pg.GetSetting(settingKey); ok && strings.TrimSpace(raw) != "" {
 		var list []string
@@ -1675,7 +1675,7 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 		}
 	}
 
-	targetAgents := []string{"auto", "pentest", "worker", "patch_watch", "mainagent"}
+	targetAgents := []string{"auto", "pentest", "worker", "planner", "retester", "bounty_scout", "patch_watch", "mainagent"}
 	var agentIDs []int64
 	for _, ak := range targetAgents {
 		if a, aerr := s.m.pg.GetAgentByKey(ak); aerr == nil && a != nil {
@@ -1716,4 +1716,5 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 			_ = s.m.pg.SetSetting(settingKey, string(b))
 		}
 	}
+	s.reconcileExistingSkillMisses()
 }

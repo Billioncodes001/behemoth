@@ -904,18 +904,49 @@ export default function SkillsPage() {
                 {missing.length} {ui("screen.8636ddf3cecf1b")}
               </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-80">
-              <p className="mb-2 text-xs text-muted-foreground">{ui("screen.9d47262a9aa6dd")}</p>
-              <div className="space-y-1">
+            <PopoverContent align="end" className="w-96">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">{ui("screen.9d47262a9aa6dd")}</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => {
+                    void api.clearMissingSkills().then(() => {
+                      toast.success("Cleared missing Skill call log");
+                      load();
+                    });
+                  }}
+                >
+                  Clear all
+                </Button>
+              </div>
+              <div className="space-y-1.5">
                 {missing.map((m) => (
-                  <div key={m.skill} className="flex items-center gap-2 text-sm">
+                  <div key={m.skill} className="flex items-center gap-2 rounded bg-muted/30 px-2 py-1 text-sm">
                     <code className="min-w-0 flex-1 truncate font-mono text-xs" title={m.skill}>
                       {m.skill}
                     </code>
                     <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                       {m.calls} {ui("screen.172fb7e67b9b09")}
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">{fmtTime(m.last_used, ui)}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={() => {
+                        const slug = m.skill
+                          .toLowerCase()
+                          .replace(/[^a-z0-9-]+/g, "-")
+                          .replace(/^-+|-+$/g, "");
+                        setNewName(slug || m.skill);
+                        setNewDesc(`Specialized playbook for ${m.skill}`);
+                        setNewVisibility(agents.map((a) => a.id));
+                        setNewOpen(true);
+                      }}
+                    >
+                      + Create
+                    </Button>
                   </div>
                 ))}
               </div>

@@ -128,6 +128,7 @@ func (s *Server) toolCreateSkill() actool.CoreTool {
 					}
 				}
 			}
+			s.reconcileExistingSkillMisses()
 			log.Printf("[skills] Created and enabled skill %q for auto, pentest, and worker", a.Name)
 			return actool.Text("skill created and enabled for operational agents: " + a.Name), nil
 		})

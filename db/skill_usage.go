@@ -215,3 +215,51 @@ ORDER BY COUNT(*) DESC, skill`, taskID)
 	}
 	return out, rows.Err()
 }
+
+// ReconcileMissingSkillCalls upgrades historical `found = false` rows whose
+// requested skill name (or normalized alias) matches a skill directory now
+// present on disk into `found = true` under the canonical skill directory name.
+func (d *DB) ReconcileMissingSkillCalls(resolve func(raw string) (canonical string, exists bool)) error {
+	if d == nil || resolve == nil {
+		return nil
+	}
+	rows, err := d.Query(`SELECT DISTINCT skill FROM skill_usage WHERE NOT found`)
+	if err != nil {
+		return err
+	}
+	var rawNames []string
+	for rows.Next() {
+		var s string
+		if rows.Scan(&s) == nil && s != "" {
+			rawNames = append(rawNames, s)
+		}
+	}
+	rows.Close()
+
+	for _, raw := range rawNames {
+		if canon, ok := resolve(raw); ok && canon != "" {
+			_, _ = d.Exec(`UPDATE skill_usage SET skill = $1, found = true WHERE NOT found AND skill = $2`, canon, raw)
+		}
+	}
+	return nil
+}
+
+// ClearMissingSkillCalls deletes unresolved `NOT found` rows from skill_usage
+// (either for a single skill name when skillName != "" or all unresolved misses).
+func (d *DB) ClearMissingSkillCalls(skillName string) (int64, error) {
+	skillName = strings.TrimSpace(skillName)
+	var (
+		res sql.Result
+		err error
+	)
+	if skillName != "" {
+		res, err = d.Exec(`DELETE FROM skill_usage WHERE NOT found AND skill = $1`, skillName)
+	} else {
+		res, err = d.Exec(`DELETE FROM skill_usage WHERE NOT found`)
+	}
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

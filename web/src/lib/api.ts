@@ -1982,6 +1982,10 @@ export const api = {
     get<{ calls: SkillCall[] }>(`/skills/${name}/usage?limit=${limit}`).then((r) => arr(r.calls)),
   missingSkills: (limit = 20) =>
     get<{ missing: MissingSkill[] }>(`/skills/missing?limit=${limit}`).then((r) => arr(r.missing)),
+  clearMissingSkills: (skill?: string) =>
+    del<{ ok: boolean; deleted: number }>(
+      skill ? `/skills/missing?skill=${encodeURIComponent(skill)}` : "/skills/missing",
+    ),
 
   // ---- visibility (MCP resource side) ---- (agent ids are strings per spec)
   resourceVisibility: (kind: string, id: number) =>
