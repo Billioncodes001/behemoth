@@ -153,7 +153,7 @@
   ],
   "screen.7ecf1cde648680": [
     "已选",
-    "Selected"
+    "Selected "
   ],
   "screen.f004f1d84cf962": [
     "条",
@@ -177,7 +177,7 @@
   ],
   "screen.76e547a8fa5463": [
     "共",
-    "Total"
+    "Total "
   ],
   "screen.e618ab1e086a8c": [
     "{{v0}}（任务 #{{v1}}）",
@@ -1765,7 +1765,7 @@
   ],
   "screen.dd4503e875e58b": [
     "当前任务共关联",
-    "Assets linked to this task:"
+    "Assets linked to this task: "
   ],
   "screen.a5670ed30b06da": [
     "项资产",
@@ -2549,7 +2549,7 @@
   ],
   "screen.166f5a8e8ab338": [
     "范围内",
-    "In scope"
+    "In scope "
   ],
   "screen.1d9f3033dc8842": [
     "· 已测",
@@ -8325,7 +8325,7 @@
   ],
   "punctuation.da047c04c9": [
     "（",
-    "("
+    " ("
   ],
   "punctuation.797409056c": [
     "finding：",

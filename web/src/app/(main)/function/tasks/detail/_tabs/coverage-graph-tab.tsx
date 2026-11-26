@@ -316,31 +316,32 @@ function toG6Nodes(
   const virtualHeight =
     viewMode === "network"
       ? Math.max(760, maxRows * 78 + 120)
-      : Math.max(760, Math.max(buckets.internet.length, buckets.boundary.length, buckets.internal.length, 1) * 42);
+      : Math.max(780, Math.max(buckets.internet.length, buckets.boundary.length, buckets.internal.length, 1) * 58);
   const positions = new Map<string, { x: number; y: number }>();
-  const xByZone: Record<Zone, number> = { internet: 150, boundary: 600, internal: 1050 };
   const xByAssetKind: Partial<Record<Kind, number>> = {
     company: 120,
-    root_domain: 180,
-    subdomain: 360,
-    ip: 520,
-    service: 680,
-    app: 680,
-    endpoint: 1000,
+    root_domain: 200,
+    subdomain: 390,
+    ip: 560,
+    service: 740,
+    app: 740,
+    endpoint: 1120,
   };
-  const placeGrid = (items: RenderNode[], left: number, right: number) => {
+  const placeGrid = (items: RenderNode[], center: number, colGap: number) => {
     if (items.length === 0) return;
-    // Keep the layout deterministic while using multiple columns. A wider
-    // graph gets more columns, so large asset groups stop forming a single
-    // unreadable vertical chain.
+    // Space columns wide enough (`colGap`) and stagger odd columns vertically so
+    // long endpoint paths (e.g. `✓ /bapi/accounts/v1/private...`) never collide.
     const columns = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(items.length / 1.5))));
     const rows = Math.ceil(items.length / columns);
+    const totalSpan = (columns - 1) * colGap;
+    const startX = center - totalSpan / 2;
     items.forEach((rn, index) => {
       const column = index % columns;
       const row = Math.floor(index / columns);
+      const staggerY = columns > 1 && column % 2 === 1 ? 20 : 0;
       positions.set(rn.key, {
-        x: left + ((column + 1) * (right - left)) / (columns + 1),
-        y: 70 + ((row + 1) * (virtualHeight - 140)) / (rows + 1),
+        x: columns === 1 ? center : startX + column * colGap,
+        y: 70 + ((row + 1) * (virtualHeight - 160)) / (rows + 1) + staggerY,
       });
     });
   };
@@ -386,8 +387,8 @@ function toG6Nodes(
     }
     for (const [kind, items] of byKind) {
       const center = xByAssetKind[kind] ?? 600;
-      const width = items.length > 1 ? 180 : 0;
-      placeGrid(items, center - width / 2, center + width / 2);
+      const colGap = kind === "endpoint" ? 168 : 135;
+      placeGrid(items, center, colGap);
     }
   }
   return renderNodes.map((rn) => {

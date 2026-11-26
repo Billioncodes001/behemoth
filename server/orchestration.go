@@ -331,7 +331,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"no_result_seconds":      map[string]any{"type": "integer", "description": "Optional: check once after accumulating this many active run seconds and stop if minimum findings are not met. 0 = disabled, positive min 60s; paused/queued time is excluded"},
 			"no_result_min_findings": map[string]any{"type": "integer", "description": "Minimum distinct findings required for no-result stop-loss, default 1; false positives excluded"},
 			"no_result_min_severity": map[string]any{"type": "string", "enum": []string{"", "low", "medium", "high", "critical"}, "description": "Minimum vulnerability severity to count (inclusive), empty = any"},
-			"timeout_seconds":        map[string]any{"type": "integer", "description": "Optional: task-level timeout in seconds. Triggers graceful wrap-up and enters timeout terminal state when reached; leave empty or 0 = unlimited"},
+			"timeout_seconds":        map[string]any{"type": "integer", "description": "Optional: leave empty or 0 (unlimited until all sub-goals are achieved)! Only set a positive wall-clock timeout when the operator explicitly asks for a specific time limit."},
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "Optional: planner heartbeat interval in seconds. Triggers a planning round when this time elapses without other triggers since task start or last round end; leave empty or 0 = default 600 (10min)"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "Optional: for simple tasks, dispatch an initial seed intent (description + goal) immediately on creation so a worker starts testing without waiting for round-0 planner; default false (plan first, then execute)"},
 			"force_new":              map[string]any{"type": "boolean", "description": "Optional: set true only when explicitly asked by the operator to create a brand-new separate task even if an active task already exists for the same target domain"},
@@ -800,6 +800,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	s.seedAutoTaskDelegationV2()
+	s.reconcileBountyTaskScopeIsolation()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -1760,7 +1761,7 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 // automatically converted into pre-filled parallel Multi-Agent Tasks with
 // live Task -> Chat callback updates instead of burning tokens solo in Chat.
 func (s *Server) seedAutoTaskDelegationV2() {
-	const flag = "auto_task_delegation_prompt_v2"
+	const flag = "auto_task_delegation_prompt_v3"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

@@ -850,6 +850,64 @@ func (s *Server) launchBountyScoutAgentRun(profileID *int64) int64 {
 
 // ---------- One-Click Automated Bounty Hunt & Scope Enrollment ----------
 
+var knownBountyPlatformHosts = map[string]bool{
+	"bugcrowd.com":       true,
+	"hackerone.com":      true,
+	"intigriti.com":      true,
+	"app.intigriti.com":  true,
+	"yeswehack.com":      true,
+	"federacy.com":       true,
+	"immunefi.com":       true,
+	"huntr.com":          true,
+	"openbugbounty.org":  true,
+	"code4rena.com":      true,
+	"sherlock.xyz":       true,
+	"cantina.xyz":        true,
+	"hackenproof.com":    true,
+	"inspectiv.com":      true,
+	"synack.com":         true,
+	"cobalt.io":          true,
+	"yogosha.com":        true,
+}
+
+func isKnownBountyPlatformHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(host, "*.")))
+	if h == "" {
+		return false
+	}
+	if knownBountyPlatformHosts[h] {
+		return true
+	}
+	for plat := range knownBountyPlatformHosts {
+		if strings.HasSuffix(h, "."+plat) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHeavyNativeBinaryBountyAsset(a db.BountyScopeAsset) bool {
+	at := strings.ToLower(strings.TrimSpace(a.AssetType))
+	switch at {
+	case "android", "ios", "mobile", "google_play_app_id", "apple_store_app_id",
+		"other_apk", "other_ipa", "windows_app_store_app_id", "executable", "hardware", "iot":
+		return true
+	}
+	targetLower := strings.ToLower(strings.TrimSpace(a.Target))
+	if strings.Contains(targetLower, "chrome extension") || strings.Contains(targetLower, "browser extension") || strings.Contains(targetLower, "firefox") {
+		return false
+	}
+	for _, kw := range []string{
+		"desktop application", "macos application", "windows application",
+		"android app", "ios app", "mobile application", ".apk", ".ipa", ".dmg", ".exe", ".msi",
+	} {
+		if strings.Contains(targetLower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractCleanTargetHost(raw string) string {
 	v := strings.TrimSpace(raw)
 	if v == "" {
@@ -905,17 +963,31 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 		}
 	}
 
-	// 1. Collect authorized in-scope targets & out-of-scope exclusions.
-	var inScopeLines []string
-	var scopeRuleLines []string
-	var seedDomains []string
-	seenHost := map[string]bool{}
+	// 1. Collect authorized in-scope targets & out-of-scope exclusions, separating
+	// live Web/API/Extension targets from heavy Desktop/Mobile binary installers so
+	// workers do not burn hundreds of MiB of proxy bandwidth downloading installers.
+	var webInScopeAssets, binaryInScopeAssets []db.BountyScopeAsset
 	for _, a := range prog.InScopeAssets {
-		t := strings.TrimSpace(a.Target)
-		if t == "" {
+		if strings.TrimSpace(a.Target) == "" {
 			continue
 		}
-		line := "- `" + t + "`"
+		if isHeavyNativeBinaryBountyAsset(a) {
+			binaryInScopeAssets = append(binaryInScopeAssets, a)
+		} else {
+			webInScopeAssets = append(webInScopeAssets, a)
+		}
+	}
+	primaryScopeAssets := webInScopeAssets
+	var deferredBinaryAssets []db.BountyScopeAsset
+	if len(primaryScopeAssets) > 0 {
+		deferredBinaryAssets = binaryInScopeAssets
+	} else {
+		// Mobile/desktop-only bounty program with zero web/API assets: keep them primary.
+		primaryScopeAssets = binaryInScopeAssets
+	}
+
+	formatScopeLine := func(a db.BountyScopeAsset) string {
+		line := "- `" + strings.TrimSpace(a.Target) + "`"
 		if a.AssetType != "" {
 			line += " (" + a.AssetType + ")"
 		}
@@ -929,10 +1001,19 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 		if a.Instruction != "" {
 			line += " — " + a.Instruction
 		}
+		return line
+	}
+
+	var inScopeLines []string
+	var deferredBinaryLines []string
+	var scopeRuleLines []string
+	var seedDomains []string
+	seenHost := map[string]bool{}
+	for _, a := range primaryScopeAssets {
 		if len(inScopeLines) < 30 {
-			inScopeLines = append(inScopeLines, line)
+			inScopeLines = append(inScopeLines, formatScopeLine(a))
 		}
-		if host := extractCleanTargetHost(t); host != "" && !seenHost[host] {
+		if host := extractCleanTargetHost(a.Target); host != "" && !seenHost[host] {
 			seenHost[host] = true
 			seedDomains = append(seedDomains, host)
 			if strings.HasPrefix(strings.TrimSpace(a.Target), "*.") {
@@ -942,8 +1023,13 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 			}
 		}
 	}
+	for _, a := range deferredBinaryAssets {
+		if len(deferredBinaryLines) < 12 {
+			deferredBinaryLines = append(deferredBinaryLines, formatScopeLine(a))
+		}
+	}
 	if len(inScopeLines) == 0 {
-		inScopeLines = []string{"- Refer to program URL: " + prog.ProgramURL}
+		inScopeLines = []string{"- Refer to in-scope targets for " + prog.Name}
 	}
 
 	type blockedRule struct {
@@ -951,6 +1037,15 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 	}
 	var outScopeLines []string
 	var blockedHosts []blockedRule
+	seenBlocked := map[string]bool{}
+	addBlockedHost := func(kind, host string) {
+		host = strings.ToLower(strings.TrimSpace(host))
+		if host == "" || seenHost[host] || seenBlocked[kind+":"+host] {
+			return
+		}
+		seenBlocked[kind+":"+host] = true
+		blockedHosts = append(blockedHosts, blockedRule{kind: kind, pattern: host})
+	}
 	for _, o := range prog.OutOfScopeAssets {
 		t := strings.TrimSpace(o.Target)
 		if t == "" {
@@ -963,12 +1058,21 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 			}
 			outScopeLines = append(outScopeLines, line)
 		}
-		if host := extractCleanTargetHost(t); host != "" && !seenHost[host] {
+		if host := extractCleanTargetHost(t); host != "" {
 			kind := "exact_domain"
 			if strings.HasPrefix(t, "*.") {
 				kind = "fuzzy_domain"
 			}
-			blockedHosts = append(blockedHosts, blockedRule{kind: kind, pattern: host})
+			addBlockedHost(kind, host)
+		}
+	}
+	// Mechanically protect the Bug Bounty platform host itself (e.g. bugcrowd.com,
+	// hackerone.com, intigriti.com, yeswehack.com) from ever being probed as a target
+	// unless the operator is explicitly hunting that platform's own program!
+	for _, metaURL := range []string{prog.ProgramURL, prog.SubmissionURL} {
+		if platHost := extractCleanTargetHost(metaURL); platHost != "" && !seenHost[platHost] {
+			addBlockedHost("fuzzy_domain", platHost)
+			outScopeLines = append(outScopeLines, fmt.Sprintf("- OUT OF SCOPE (Bounty Platform Host — NEVER probe): `%s`", platHost))
 		}
 	}
 
@@ -1001,21 +1105,29 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 		desc += " — " + seedDomains[0]
 	}
 
+	deferredSection := ""
+	if len(deferredBinaryLines) > 0 {
+		deferredSection = "\n\n### Deferred Native/Mobile Binary Targets (Skip Large Installer Downloads by Default):\n" +
+			strings.Join(deferredBinaryLines, "\n") +
+			"\n*(Do NOT download multi-hundred-MB desktop/mobile binary installers `.dmg`/`.exe`/`.apk`/`.ipa` over Proxy Pool unless explicitly requested by the operator — focus worker budgets on live Web/API endpoints and lightweight JS/extension bundles.)*"
+	}
+
 	goal := fmt.Sprintf(
 		"Autonomous Bug Bounty Hunting Engagement for **%s** (%s · %s)\n"+
-			"Program Policy URL: %s\n"+
-			"Submission URL: %s\n\n"+
-			"### Authorized In-Scope Assets (Hunt ONLY within these targets):\n%s\n\n"+
+			"Program Reference: `%s` | Submission Reference: `%s`\n\n"+
+			"### Authorized In-Scope Web/API Assets (Hunt ONLY within these targets):\n%s%s\n\n"+
 			"### Strict Out-of-Scope Exclusions (NEVER touch):\n%s\n\n"+
 			"### Priority Bounty-Eligible Vulnerability Focus:\n%s\n\n"+
 			"### Execution & Bounty Reporting Mandate:\n"+
 			"1. Check `check_proxy_status` first and strictly honor proxy routing & auth-page rate discipline (use `schedule_cooldown_resume` if cooling down between batches).\n"+
 			"2. Map the attack surface across the authorized in-scope domains/APIs (`subfinder`, `dnsx`, `httpx`, `whatweb`, `ffuf`, `nuclei`, `audit_frontend_api_surface`, `browser_inspect`), checking `detect_deception_and_honeypot` on any exposed `.env`/`.git`/`.map` files.\n"+
-			"3. Prioritize **high/critical impact, bounty-eligible vulnerabilities** (RCE, SQLi, SSRF, Auth Bypass, IDOR/BOLA, Privilege Escalation, Business Logic flaws) over low-value informational headers.\n"+
-			"4. Drive every candidate vulnerability all the way to a **deterministic, non-destructive Proof-of-Concept**, persist it via `report_finding` + `update_finding_report` (with complete submission-ready Reproduction Steps, HTTP request/response evidence, Impact, and Remediation), and immediately call `update_bounty_tracker(program_id=%d, tracker_status=\"bug_found\", notes=\"...\")` once a reportable vulnerability is verified!",
+			"3. Do NOT probe the Bug Bounty platform host (`bugcrowd.com`, `hackerone.com`, etc.) and do NOT download massive native OS/mobile binary installers over proxy unless explicitly asked.\n"+
+			"4. Prioritize **high/critical impact, bounty-eligible vulnerabilities** (RCE, SQLi, SSRF, Auth Bypass, IDOR/BOLA, Privilege Escalation, Business Logic flaws) over low-value informational headers.\n"+
+			"5. Drive every candidate vulnerability all the way to a **deterministic, non-destructive Proof-of-Concept**, persist it via `report_finding` + `update_finding_report` (with complete submission-ready Reproduction Steps, HTTP request/response evidence, Impact, and Remediation), and immediately call `update_bounty_tracker(program_id=%d, tracker_status=\"bug_found\", notes=\"...\")` once a reportable vulnerability is verified!",
 		prog.Name, strings.ToUpper(prog.Platform), payoutNote,
 		prog.ProgramURL, firstNonEmptyBounty(prog.SubmissionURL, prog.ProgramURL),
 		strings.Join(inScopeLines, "\n"),
+		deferredSection,
 		func() string {
 			if len(outScopeLines) == 0 {
 				return "- Respect standard Safe Harbor rules: no DoS/DDoS, no social engineering, no third-party infrastructure attacks."
@@ -1059,9 +1171,97 @@ func (s *Server) startBountyHuntForProgram(ctx context.Context, progID int64, cu
 		}
 	}
 
-	s.launchTask(taskObj, desc+" "+goal, false)
+	seedTarget := ""
+	if len(seedDomains) > 0 {
+		seedTarget = "https://" + seedDomains[0]
+	}
+	s.launchTask(taskObj, seedTarget, false)
 	appendBountyLog("success", fmt.Sprintf("Started automated Bounty Hunt for %q -> Task #%s (%d in-scope seed domains)", prog.Name, taskObj.ID, len(seedDomains)))
 	return prog, taskObj.ID, nil
+}
+
+// reconcileBountyTaskScopeIsolation cleans up any historical bounty tasks where
+// `seed()` previously parsed the Bug Bounty platform URL (e.g. bugcrowd.com,
+// hackerone.com) out of `Program Policy URL:` and attached it as a Test Asset,
+// while also installing protective out-of-scope block rules on those tasks.
+func (s *Server) reconcileBountyTaskScopeIsolation() {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return
+	}
+	const flag = "bounty_scope_isolation_reconcile_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	progs, err := s.m.pg.ListBountyPrograms(db.BountyProgramFilter{TrackerOnly: true})
+	if err != nil {
+		return
+	}
+	as := s.m.Assets()
+	for _, p := range progs {
+		if p.LinkedTaskID == nil || *p.LinkedTaskID <= 0 {
+			continue
+		}
+		tid := *p.LinkedTaskID
+		inScopeHosts := map[string]bool{}
+		for _, a := range p.InScopeAssets {
+			if h := extractCleanTargetHost(a.Target); h != "" {
+				inScopeHosts[h] = true
+			}
+		}
+		var platHosts []string
+		for _, rawURL := range []string{p.ProgramURL, p.SubmissionURL} {
+			if ph := extractCleanTargetHost(rawURL); ph != "" && !inScopeHosts[ph] && isKnownBountyPlatformHost(ph) {
+				platHosts = append(platHosts, ph)
+			}
+		}
+		for plat := range knownBountyPlatformHosts {
+			if !inScopeHosts[plat] {
+				platHosts = append(platHosts, plat)
+			}
+		}
+		seenPlat := map[string]bool{}
+		for _, ph := range platHosts {
+			if seenPlat[ph] {
+				continue
+			}
+			seenPlat[ph] = true
+			// Detach accidental bounty-platform asset links & auto-scope rows on this task.
+			rows, qerr := s.m.pg.Query(`
+				SELECT id FROM assets
+				WHERE $1 = ANY(task_ids)
+				  AND (LOWER(COALESCE(domain, '')) = $2
+				       OR LOWER(COALESCE(domain, '')) LIKE '%.' || $2
+				       OR LOWER(COALESCE(root_domain, '')) = $2
+				       OR LOWER(COALESCE(url, '')) LIKE 'https://' || $2 || '%'
+				       OR LOWER(COALESCE(url, '')) LIKE 'http://' || $2 || '%')
+			`, tid, ph)
+			if qerr == nil {
+				var detachIDs []int64
+				for rows.Next() {
+					var aid int64
+					if rows.Scan(&aid) == nil && aid > 0 {
+						detachIDs = append(detachIDs, aid)
+					}
+				}
+				rows.Close()
+				for _, aid := range detachIDs {
+					if as != nil {
+						_, _ = as.DetachAssetFromTask(tid, aid)
+					}
+					_, _ = s.m.pg.Exec(`DELETE FROM task_asset_links WHERE task_id = $1 AND asset_id = $2`, tid, aid)
+					log.Printf("[bounty-scope] Detached accidental platform asset #%d (%s) from bounty Task #%d", aid, ph, tid)
+				}
+			}
+			_, _ = s.m.pg.Exec(`DELETE FROM task_asset_scopes WHERE task_id = $1 AND LOWER(value) IN ($2, '*.' || $2)`, tid, ph)
+		}
+		// Ensure explicit out-of-scope block rule exists for the program's hosting platform.
+		if as != nil {
+			if ph := extractCleanTargetHost(p.ProgramURL); ph != "" && !inScopeHosts[ph] {
+				_, _ = as.CreateTaskInterceptRule(tid, "block", "fuzzy_domain", ph, "Bounty platform host protection for "+p.Name, true)
+			}
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
 }
 
 // ---------- Enriched DTOs & HTTP API Handlers ----------

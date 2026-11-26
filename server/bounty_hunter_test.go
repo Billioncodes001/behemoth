@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autumn-27/behemoth/db"
+	"github.com/Autumn-27/behemoth/report"
 )
 
 func TestResetTokenUsageStatsPreservesFindingsAndTranscripts(t *testing.T) {
@@ -165,5 +167,101 @@ func TestBountyScoutAgentAndBountyFinderTrackerWorkflow(t *testing.T) {
 	summary, err := s.m.pg.GetBountyStatsSummary()
 	if err != nil || summary.TotalEarnedUSD < 5000 || summary.NoRegistrationNeeded < 1 {
 		t.Fatalf("unexpected bounty summary: %+v (err=%v)", summary, err)
+	}
+}
+
+func TestBountyPlatformIsolationBinaryDeferralAndReportFormatting(t *testing.T) {
+	s, _, _ := trafficEvidenceServer(t)
+
+	prog := &db.BountyProgram{
+		ProgramKey:    "bugcrowd:binance-test",
+		Name:          "Binance",
+		Platform:      "bugcrowd",
+		ProgramURL:    "https://bugcrowd.com/engagements/binance",
+		SubmissionURL: "https://bugcrowd.com/engagements/binance",
+		OffersBounty:  true,
+		MinBountyUSD:  0,
+		MaxBountyUSD:  10000,
+		Currency:      "USD",
+		InScopeAssets: []db.BountyScopeAsset{
+			{Target: "api.coinmarketcap.com", AssetType: "api", EligibleForBounty: true},
+			{Target: "https://www.binance.com/", AssetType: "website", EligibleForBounty: true},
+			{Target: "Trustwallet Chrome Extension", AssetType: "website", EligibleForBounty: true},
+			{Target: "Binance Desktop Application", AssetType: "other", EligibleForBounty: true},
+			{Target: "Binance Mobile Application for Android", AssetType: "android", EligibleForBounty: true},
+		},
+		InScopeCount: 5,
+	}
+	progID, _, err := s.m.pg.UpsertBountyProgram(prog)
+	if err != nil || progID <= 0 {
+		t.Fatalf("UpsertBountyProgram: err=%v id=%d", err, progID)
+	}
+
+	updatedProg, taskIDStr, err := s.startBountyHuntForProgram(context.Background(), progID, "", nil)
+	if err != nil || updatedProg == nil || updatedProg.LinkedTaskID == nil {
+		t.Fatalf("startBountyHuntForProgram failed: err=%v task=%s", err, taskIDStr)
+	}
+	tid := *updatedProg.LinkedTaskID
+	taskObj, ok := s.m.Task(taskIDStr)
+	if !ok || taskObj == nil {
+		t.Fatalf("expected task %s in manager", taskIDStr)
+	}
+
+	// 1. Verify heavy desktop/mobile installers are deferred while Web/API/Chrome Extension stay primary!
+	if !strings.Contains(taskObj.Goal, "Deferred Native/Mobile Binary Targets") || !strings.Contains(taskObj.Goal, "Trustwallet Chrome Extension") {
+		t.Fatalf("expected binary deferral + Chrome Extension kept in scope, got Goal:\n%s", taskObj.Goal)
+	}
+
+	// 2. Verify bugcrowd.com was NEVER attached to Test Assets, and IS mechanically blocked!
+	var bugcrowdLinked int
+	_ = s.m.pg.QueryRow(`SELECT COUNT(*) FROM assets WHERE $1 = ANY(task_ids) AND LOWER(COALESCE(domain, '')) LIKE '%bugcrowd.com%'`, tid).Scan(&bugcrowdLinked)
+	if bugcrowdLinked != 0 {
+		t.Fatalf("expected 0 bugcrowd.com test assets linked to Task #%d, got %d", tid, bugcrowdLinked)
+	}
+
+	rules, err := s.m.Assets().ListTaskInterceptRules(tid)
+	if err != nil {
+		t.Fatalf("ListTaskInterceptRules: %v", err)
+	}
+	blockedBugcrowd := false
+	for _, r := range rules {
+		if r.Action == "block" && strings.Contains(r.Pattern, "bugcrowd.com") {
+			blockedBugcrowd = true
+			break
+		}
+	}
+	if !blockedBugcrowd {
+		t.Fatalf("expected task-scoped block rule protecting bugcrowd.com, got %+v", rules)
+	}
+
+	// 3. Simulate historical pollution (attaching bugcrowd.com to the task) and verify reconcileBountyTaskScopeIsolation detaches it while keeping binance.com!
+	pollutedID, err := s.m.Assets().UpsertRootDomain(db.UpsertRootDomainReq{Domain: "bugcrowd.com", TaskID: tid})
+	if err != nil || pollutedID <= 0 {
+		t.Fatalf("UpsertRootDomain bugcrowd.com: %v", err)
+	}
+	_ = s.m.pg.SetSetting("bounty_scope_isolation_reconcile_v1", "")
+	s.reconcileBountyTaskScopeIsolation()
+	_ = s.m.pg.QueryRow(`SELECT COUNT(*) FROM assets WHERE $1 = ANY(task_ids) AND LOWER(COALESCE(domain, '')) LIKE '%bugcrowd.com%'`, tid).Scan(&bugcrowdLinked)
+	if bugcrowdLinked != 0 {
+		t.Fatalf("expected reconcileBountyTaskScopeIsolation to detach bugcrowd.com from Task #%d, still found %d", tid, bugcrowdLinked)
+	}
+	var binanceLinked int
+	_ = s.m.pg.QueryRow(`SELECT COUNT(*) FROM assets WHERE $1 = ANY(task_ids) AND LOWER(COALESCE(domain, '')) LIKE '%binance.com%'`, tid).Scan(&binanceLinked)
+	if binanceLinked == 0 {
+		t.Fatalf("expected legitimate in-scope binance.com asset preserved on Task #%d", tid)
+	}
+
+	// 4. Verify Report Markdown renders multi-paragraph Goals under a clean Engagement Scope & Briefing section without breaking top metadata bullets!
+	md := report.Markdown(report.Input{
+		TaskID:      taskIDStr,
+		Title:       "Bounty · Binance",
+		Goal:        taskObj.Goal,
+		Status:      "running",
+		Scope:       []string{"api.coinmarketcap.com", "binance.com"},
+		CreatedAt:   time.Now().Add(-15 * time.Minute),
+		GeneratedAt: time.Now(),
+	})
+	if !strings.Contains(md, "### Engagement Scope & Briefing") || strings.Contains(md, "- **Primary Objective**: Autonomous Bug Bounty") {
+		t.Fatalf("expected multi-line Goal rendered under Engagement Scope & Briefing section, got:\n%s", md[:min(len(md), 600)])
 	}
 }

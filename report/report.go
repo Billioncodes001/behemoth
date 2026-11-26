@@ -238,7 +238,11 @@ func Markdown(in Input) string {
 	if in.TaskID != "" {
 		fmt.Fprintf(&b, "- **Task ID**: `#%s`\n", in.TaskID)
 	}
-	fmt.Fprintf(&b, "- **Primary Objective**: %s\n", nz(in.Goal, "(Not specified)"))
+	goalTrimmed := strings.TrimSpace(in.Goal)
+	inlineObjective := goalTrimmed == "" || (!strings.Contains(goalTrimmed, "\n") && len(goalTrimmed) <= 220)
+	if inlineObjective {
+		fmt.Fprintf(&b, "- **Primary Objective**: %s\n", nz(goalTrimmed, "(Not specified)"))
+	}
 	if in.Status != "" {
 		fmt.Fprintf(&b, "- **Engagement Status**: `%s`\n", strings.ToUpper(in.Status))
 	}
@@ -252,6 +256,11 @@ func Markdown(in Input) string {
 		fmt.Fprintf(&b, "- **Completed At**: %s\n", in.CompletedAt.Format("2006-01-02 15:04:05"))
 	}
 	fmt.Fprintf(&b, "- **Report Generated**: %s\n\n", in.GeneratedAt.Format("2006-01-02 15:04:05"))
+	if !inlineObjective {
+		b.WriteString("### Engagement Scope & Briefing\n\n")
+		b.WriteString(goalTrimmed)
+		b.WriteString("\n\n---\n\n")
+	}
 
 	// 2. Executive & Telemetry Summary
 	totalSteps := 0

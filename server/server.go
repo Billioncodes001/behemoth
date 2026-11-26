@@ -2435,9 +2435,18 @@ func (s *Server) llmHost() string {
 }
 
 func (s *Server) seed(t *Task, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
 	scheme, host, port, ok := parseTarget(text)
 	if !ok {
 		log.Printf("[seed] task %s: 未能从 %q 解析出目标 host/IP，不创建站点（请手动配置 scope）", t.ID, text)
+		return
+	}
+	// Never accidentally seed a Bug Bounty hosting platform URL (e.g. bugcrowd.com,
+	// hackerone.com) referenced in metadata headers when the task targets a different company.
+	if isKnownBountyPlatformHost(host) && (strings.Contains(text, "Program Policy URL:") || strings.Contains(text, "Program Reference:") || strings.HasPrefix(t.Description, "Bug Bounty Hunt")) {
+		log.Printf("[seed] task %s: skipping bounty platform metadata host %q during task seed", t.ID, host)
 		return
 	}
 	// P0-1 guard: never treat the configured LLM gateway as a target.

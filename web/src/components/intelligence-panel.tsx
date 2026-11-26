@@ -202,7 +202,7 @@ export function IntelligencePanel({
             <TabsList className="max-w-full overflow-x-auto">
               <TabsTrigger value="all">
                 {ui("screen.5c55a67935af8f")}
-                {data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : ""}
+                {data ? ` ${Object.values(data.counts).reduce((a, b) => a + b, 0)}` : ""}
               </TabsTrigger>
               {KINDS(ui).map((item) => (
                 <TabsTrigger key={item.value} value={item.value}>
@@ -260,9 +260,9 @@ export function IntelligencePanel({
           ) : data?.items.length ? (
             <Table className="min-w-[68rem] table-fixed">
               <colgroup>
-                <col className="w-[20%]" />
-                <col className="w-[35%]" />
-                <col className="w-[8%]" />
+                <col className="w-[19%]" />
+                <col className="w-[31%]" />
+                <col className="w-[13%]" />
                 <col className="w-[12%]" />
                 <col className="w-[6%]" />
                 <col className="w-[12%]" />
@@ -309,7 +309,9 @@ export function IntelligencePanel({
                     </TableCell>
                     <TableCell className="align-top whitespace-normal [overflow-wrap:anywhere]">
                       <div className="flex flex-col items-start gap-1">
-                        <Badge variant="outline">{STATUS(ui)[item.kind]?.[item.status] ?? item.status}</Badge>
+                        <Badge variant="outline" className="max-w-full whitespace-normal text-left leading-tight">
+                          {STATUS(ui)[item.kind]?.[item.status] ?? item.status}
+                        </Badge>
                         <span className="text-xs text-muted-foreground">
                           {item.confidence === "observed" ? ui("screen.96159c750bd67e") : ui("screen.aa1259dcc001cc")}
                         </span>
