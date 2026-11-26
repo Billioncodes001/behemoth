@@ -60,6 +60,9 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	if chkPayload["proxy_enabled"] != false || chkPayload["effective_routing_mode"] != "direct" {
 		t.Fatalf("expected proxy_enabled=false & direct before import, got %+v", chkPayload)
 	}
+	if policy, _ := chkPayload["auth_page_policy"].(string); !strings.Contains(policy, "does not apply") {
+		t.Fatalf("expected direct-mode auth_page_policy to be a no-op notice, got %q", policy)
+	}
 
 	// Write a Webshare-format file in a temp workspace and call import_and_test_proxies
 	tmpFile := filepath.Join(t.TempDir(), "proxies.txt")
@@ -120,6 +123,10 @@ func TestAgentImportAndTestProxiesToolAndMidSessionRouting(t *testing.T) {
 	stRes2, _ := s.toolGetProxyPoolStatus().Call(context.Background(), json.RawMessage(`{}`), nil)
 	if !strings.Contains(stRes2.Content[0].Text, `"effective_routing_mode":"proxy_pool"`) {
 		t.Fatalf("expected proxy_pool routing restored after re-enable, got %s", stRes2.Content[0].Text)
+	}
+	// An active proxy must surface the auth-page throttle policy to the agent.
+	if !strings.Contains(stRes2.Content[0].Text, "AUTH-PAGE THROTTLE") {
+		t.Fatalf("expected proxy-active auth_page_policy, got %s", stRes2.Content[0].Text)
 	}
 }
 

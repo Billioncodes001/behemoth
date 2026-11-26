@@ -814,6 +814,15 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		// Direct egress is allowed ONLY when fail-closed Proxy Pool / Exclusive Tor
 		// mode is OFF and no Global Proxy is set.
 		fp.direct = func() bool { return !m.IsProxyPoolFailClosed() && strings.TrimSpace(m.GlobalProxy()) == "" }
+		// Auth-page throttle: proxy providers meter login/sign-up traffic and revoke
+		// auth when it is hammered. The gate answers 429 + Retry-After before the
+		// request leaves, and opens a cooldown when the provider refuses (407/429/403).
+		fp.guardRequest = func(_ context.Context, method, targetHost, reqPath string) (int, int, string) {
+			return authGate.gate(method, targetHost, reqPath)
+		}
+		fp.onUpstreamFail = func(targetHost, _ string, status int, method, reqPath string) {
+			authGate.noteUpstream(targetHost, status, method, reqPath)
+		}
 	} else {
 		log.Printf("[proxy] local forwarder disabled: %v", ferr)
 	}

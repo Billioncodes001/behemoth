@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+// The proxy-provider auth-page discipline is a code-owned OPSEC tail: it must
+// reach every role's system prompt so DB-edited bodies cannot drop it, and it
+// must disappear only when the operator turns OPSEC off entirely.
+func TestOpsecBlockProxyAuthPageDiscipline(t *testing.T) {
+	t.Cleanup(func() {
+		OpsecEnabled = nil
+		PromptOverride = nil
+	})
+	PromptOverride = nil
+	OpsecEnabled = func() bool { return true }
+
+	planner := plannerSystem("goal", "scope", "/data")
+	worker := workerSystem("", "", "/data", "/data")
+	chat := chatSystem("auto", "test-model", "/data", "/data")
+	for name, got := range map[string]string{"planner": planner, "worker": worker, "chat": chat} {
+		for _, want := range []string{
+			"Proxy-Provider Etiquette on Authentication Pages",
+			"<= 5 credential attempts per target domain per hour",
+			">= 30-60 minutes",
+			"script-managed proxy exits",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s system prompt missing %q", name, want)
+			}
+		}
+	}
+
+	OpsecEnabled = func() bool { return false }
+	if got := workerSystem("", "", "/data", "/data"); strings.Contains(got, "Proxy-Provider Etiquette") {
+		t.Fatalf("opsec block should be absent when OPSEC is disabled: %q", got)
+	}
+}
+
 func TestRenderSystemOverrideAndFallback(t *testing.T) {
 	t.Cleanup(func() { PromptOverride = nil })
 

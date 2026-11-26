@@ -222,6 +222,14 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		routingMode = "static_global_proxy"
 	}
 	anyOutbound := routingMode != "direct"
+	// Auth-page throttle hint: commercial rotating proxy providers (Webshare et
+	// al.) meter login/signup traffic far more aggressively than normal pages and
+	// flag accounts that hammer them, so every proxy-status response reminds the
+	// agent of the pacing policy exactly when it is about to route via proxies.
+	authPagePolicy := "No outbound proxy is active — the proxy-provider authentication-page throttle policy does not apply."
+	if anyOutbound {
+		authPagePolicy = "OUTBOUND PROXY ACTIVE — AUTH-PAGE THROTTLE: shared/rotating commercial providers (Webshare, Bright Data, ...) meter login/signup pages heavily and flag accounts that hammer them. Through provider proxies keep <= ~20 auth-page loads and <= 5 credential attempts per target domain per hour, >= 10s apart; NEVER brute-force / credential-stuff or mass sign-up via rotating residential proxies — do credential testing direct or via operator-owned dedicated/self-hosted proxy exits. On 403/429/CAPTCHA/auth-revoked: stop the auth phase, cool down >= 30-60 minutes, record remaining work + counts, then resume later (pause_task / later run / operator schedule) — never retry in a tight loop."
+	}
 	localForwarder := ""
 	if s.m != nil {
 		localForwarder = s.m.OutboundProxyAddr()
@@ -267,6 +275,7 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 		"active_proxy":               activeProxy,
 		"tor":                        torSnap,
 		"instruction":                instruction,
+		"auth_page_policy":           authPagePolicy,
 		"config":                     cfg,
 		"stats":                      stats,
 		"proxies":                    proxies,
@@ -275,7 +284,7 @@ func (s *Server) buildProxyStatusPayload() (map[string]any, error) {
 
 func (s *Server) toolCheckProxyStatus() actool.CoreTool {
 	return roTool("check_proxy_status",
-		"Always call this tool BEFORE attempting to use any proxy. Checks whether the user enabled Proxy Pool or configured a Global Proxy in Settings. If proxy_enabled is false, NO proxy is enabled and you must connect directly without -x / --proxy flags.",
+		"Always call this tool BEFORE attempting to use any proxy. Checks whether the user enabled Proxy Pool or configured a Global Proxy in Settings. If proxy_enabled is false, NO proxy is enabled and you must connect directly without -x / --proxy flags. When a proxy is active, read auth_page_policy (login/signup throttle discipline for shared proxy providers) before touching authentication pages.",
 		objSchema(map[string]any{}),
 		func(_ context.Context, _ json.RawMessage) (actool.Result, error) {
 			payload, err := s.buildProxyStatusPayload()

@@ -182,3 +182,64 @@ Reopening a log (resumed intent) continues the same chain. Detail digests also
 let you check one activity row's blob with `LogRecord.VerifyDetail`.
 
 Code: `evidence/runlog.go`; wiring in `agent/worker.go`.
+
+---
+
+## 6. Proxy-provider etiquette on authentication pages
+
+Rotating residential proxy providers meter authentication traffic far harder
+than ordinary browsing. Webshare, for example, flags an account once its
+"activity meter" for authentication pages trips: *large numbers of login attempts
+with different credentials is strictly forbidden*, and repeated waves force
+manual verification or suspend the pool. Agents used to brute-force logins
+through the pool until it tripped.
+
+The pacing policy is now code-owned and shipped in the OPSEC system-prompt block
+(`agent/prompt.go`, bullet *Proxy-Provider Etiquette on Authentication Pages*),
+so every role — planner, worker, main agent, chat, Auto — receives it no matter
+how its DB prompt is edited, and it disappears only when `opsec_enabled` is off:
+
+- Through shared/rotating provider proxies: **≤ ~20 auth-page loads and ≤ 5
+  credential attempts per target domain per hour**, **≥ 10 s** apart.
+- Credential testing goes **direct** (disable the proxy for that phase) or over
+  operator-owned dedicated / self-hosted / script-managed exits, which provider
+  meters do not count. Unauthenticated recon stays on the proxy.
+- On `403` / `429` / CAPTCHA / `client_connect_auth_revoked`: stop the auth phase,
+  cool down ≥ 30–60 min, persist attempts + a resume plan, and resume on a later
+  run or operator calendar schedule instead of retrying in a tight loop.
+
+`check_proxy_status` and `get_proxy_pool_status` also return an `auth_page_policy`
+field — the full reminder when any outbound proxy is active, a no-op notice when
+routing is direct — so the rule arrives at the moment the agent checks routing.
+The `auth-and-jwt-attacks` skill repeats it in its pacing section.
+
+### Mechanical throttle in the local forward proxy
+
+Prompt text alone still relies on the model obeying it, so the local forwarder
+enforces the budget too (`server/auth_page_throttle.go`, wired in
+`server/manager.go`). For every request that would leave through an upstream
+proxy:
+
+| Guard | Behaviour |
+|---|---|
+| Auth-page budget | `GET/HEAD/POST` paths matching login/sign-in/sign-up/register/password/reset/OTP/MFA/SSO/OAuth/session/auth get a per-host window: **6/min, 20/hour** by default. Over budget → **429 + `Retry-After`** with an explanatory body, request never leaves. |
+| Burst cap | Any proxied request: 180/min per host. CONNECT tunnels carry no path, so tunneled traffic is only burst-capped. |
+| Cooldown | Upstream **407** (provider auth revoked — the WebShare "authentication pages" strike) or 429/403 **on an auth page** stops that host for 30 min. |
+
+The 429 body names the host, the budget used and the wait, so a blocked agent can
+`Bash sleep`, retry, or record the attempt and resume later. Everything is
+env-tunable and can be switched off entirely:
+
+```bash
+BEHEMOTH_AUTH_THROTTLE=0                        # disable the throttle
+BEHEMOTH_AUTH_THROTTLE_PER_MINUTE=6             # auth-page budget, minute window
+BEHEMOTH_AUTH_THROTTLE_PER_HOUR=20              # auth-page budget, hour window
+BEHEMOTH_AUTH_THROTTLE_HOST_PER_MINUTE=180      # all-traffic burst cap per host
+BEHEMOTH_AUTH_THROTTLE_COOLDOWN_SECONDS=1800    # 407 / auth 429-403 cooldown
+```
+
+Raise the budgets when the operator runs dedicated/script-managed proxies instead
+of a shared residential pool, or disable the throttle for a pure brute-force run.
+
+Code: `server/auth_page_throttle.go`; hook wiring in `server/manager.go`,
+`server/forward_proxy.go`; tests in `server/auth_page_throttle_test.go`.

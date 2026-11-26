@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,17 +20,19 @@ import (
 // dynamicForwardProxy is a credential-free, stable local proxy. Each request
 // resolves the current upstream, so pool switches do not rebuild agents or MCP.
 type dynamicForwardProxy struct {
-	ln          net.Listener
-	addr        string
-	current     func() string
-	direct      func() bool
-	outboundMod func(host string, hdr http.Header)
-	server      *http.Server
-	once        sync.Once
-	mu          sync.Mutex
-	conns       map[net.Conn]struct{}
-	ctx         context.Context
-	cancel      context.CancelFunc
+	ln             net.Listener
+	addr           string
+	current        func() string
+	direct         func() bool
+	outboundMod    func(host string, hdr http.Header)
+	guardRequest   func(ctx context.Context, method, targetHost, reqPath string) (status, retrySeconds int, msg string)
+	onUpstreamFail func(targetHost, upstreamURL string, status int, method, reqPath string)
+	server         *http.Server
+	once           sync.Once
+	mu             sync.Mutex
+	conns          map[net.Conn]struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func newDynamicForwardProxy(current func() string) (*dynamicForwardProxy, error) {
@@ -104,6 +107,15 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "BEHEMOTH Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
 		return
 	}
+	if up != "" && p.guardRequest != nil {
+		if code, retry, msg := p.guardRequest(r.Context(), r.Method, targetHost, r.URL.Path); code != 0 {
+			if retry > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(retry))
+			}
+			http.Error(w, msg, code)
+			return
+		}
+	}
 	tr := &http.Transport{Proxy: nil}
 	if up != "" {
 		u, err := url.Parse(up)
@@ -142,10 +154,22 @@ func (p *dynamicForwardProxy) serveHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	resp, err := tr.RoundTrip(rr)
 	if err != nil {
-		http.Error(w, "proxy unavailable", 502)
+		if up != "" && p.onUpstreamFail != nil {
+			p.onUpstreamFail(targetHost, up, 0, r.Method, r.URL.Path)
+		}
+		http.Error(w, "proxy unavailable: "+err.Error(), 502)
 		return
 	}
 	defer resp.Body.Close()
+	if up != "" && resp.StatusCode == http.StatusProxyAuthRequired {
+		if p.onUpstreamFail != nil {
+			p.onUpstreamFail(targetHost, up, resp.StatusCode, r.Method, r.URL.Path)
+		}
+	}
+	// 429/403 are only interesting on auth pages; the throttle filters the rest.
+	if up != "" && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden) && p.onUpstreamFail != nil {
+		p.onUpstreamFail(targetHost, up, resp.StatusCode, r.Method, r.URL.Path)
+	}
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -163,6 +187,15 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 	} else if up == "" && p.direct != nil && !p.direct() {
 		http.Error(w, "BEHEMOTH Fail-Closed Proxy Guard: Proxy Pool is enabled, and all configured proxies are currently unhealthy or out of bandwidth. Direct connections are blocked to protect server IP.", http.StatusServiceUnavailable)
 		return
+	}
+	if up != "" && p.guardRequest != nil {
+		if code, retry, msg := p.guardRequest(r.Context(), http.MethodConnect, target, ""); code != 0 {
+			if retry > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(retry))
+			}
+			http.Error(w, msg, code)
+			return
+		}
 	}
 	var conn net.Conn
 	var err error
@@ -184,7 +217,14 @@ func (p *dynamicForwardProxy) serveConnect(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if err != nil {
-		http.Error(w, "proxy unavailable", 502)
+		if up != "" && p.onUpstreamFail != nil {
+			code := 0
+			if strings.Contains(err.Error(), "407") {
+				code = http.StatusProxyAuthRequired
+			}
+			p.onUpstreamFail(target, up, code, http.MethodConnect, "")
+		}
+		http.Error(w, "proxy unavailable: "+err.Error(), 502)
 		return
 	}
 	h, ok := w.(http.Hijacker)

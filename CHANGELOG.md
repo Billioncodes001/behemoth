@@ -18,6 +18,8 @@
 
 ### 新增与改进
 
+- 代理供应商「认证页节流」纪律：OPSEC 提示块新增常驻硬规则（全部角色生效，仅 `opsec_enabled` 关闭时移除）——共享/轮换住宅代理下每个域名的登录/注册/重置页与凭证尝试限速（≤ ~20 次页面、≤ 5 次凭证尝试/小时，间隔 ≥ 10s），凭证爆破改走直连或自建/脚本管理的出口代理，遇 403/429/CAPTCHA/`client_connect_auth_revoked` 立即停止该阶段、冷却 ≥ 30–60 分钟并落库续跑计划；`check_proxy_status`/`get_proxy_pool_status` 新增 `auth_page_policy` 字段（代理启用时下发完整提醒），`auth-and-jwt-attacks` Skill 增补对应节流章节。同一策略在本地正向代理机械执行（`server/auth_page_throttle.go`）：认证页每域名默认 6/分钟、20/小时，超限返回 429 + `Retry-After` 且请求不出网，全量流量按 180/分钟突发上限，上游 407 或认证页 429/403 触发 30 分钟冷却；`BEHEMOTH_AUTH_THROTTLE*` 可调或整体关闭。
+
 - 单次 run 新增两个硬预算维度：累计令牌数（`agents.token_budget`）与工具调用数（`agents.tool_call_budget`）。超限后探测工具直接返回「预算耗尽、请落库收尾」，写回类工具（record_fact/insert_assets/report_finding 等）不受限制，避免烂尾；后台 Agent 编辑页可配置，`0`=不限。
 - 任务范围（`task_scope`）从提示词约定升级为机械校验：Bash 命令中的 URL/IP 字面量、WebFetch 与新增 `http_request` 工具均先授权再请求；重定向逐跳重新授权并按主机限速；已配置范围时无法解析的主机按 fail-closed 拒绝。限速可用 `BEHEMOTH_SCOPE_RPS` 调整。
 - 新增 `sandbox_exec`：在一次性 Docker 容器（工作目录挂载到 `/work`）内执行单条命令，用于高风险/重型工具；镜像、网络模式、超时与额外参数由 `BEHEMOTH_SANDBOX_*` 配置，缺少 docker 时给出回退提示。
