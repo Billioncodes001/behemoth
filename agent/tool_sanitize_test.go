@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -342,5 +343,74 @@ func TestStreamYieldsThinkingImmediatelyAndFastReasoningCap(t *testing.T) {
 	rewrittenExp, _, _ := rewriteOutboundChatCompletions([]byte(wireExplicit), false)
 	if !strings.Contains(string(rewrittenExp), `"reasoning_effort":"high"`) {
 		t.Fatalf("expected explicit reasoning_effort='high' preserved, got %s", string(rewrittenExp))
+	}
+}
+
+type maxTokensRejectProvider struct {
+	limit   int
+	seenMax []int
+}
+
+func (p *maxTokensRejectProvider) rejectErr(mt int) error {
+	effective := mt
+	if effective <= 0 {
+		effective = 32768
+	}
+	if effective > p.limit {
+		return fmt.Errorf(`openai: status 400: {"error":{"message":"max_tokens=%d leaves no room for the prompt in the model's context size of 32768 tokens for 'xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic'. Set max_tokens below 32768, leaving room for the prompt.","type":"invalid_request_error","param":"max_tokens","code":"max_tokens_too_large"}}`, effective)
+	}
+	return nil
+}
+
+func (p *maxTokensRejectProvider) Complete(_ context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	p.seenMax = append(p.seenMax, req.MaxTokens)
+	if err := p.rejectErr(req.MaxTokens); err != nil {
+		return llm.Message{}, "", llm.Usage{}, err
+	}
+	return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.TextBlock("recovered-complete")}}, "end_turn", llm.Usage{}, nil
+}
+
+func (p *maxTokensRejectProvider) Stream(_ context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		p.seenMax = append(p.seenMax, req.MaxTokens)
+		if err := p.rejectErr(req.MaxTokens); err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
+		if !yield(llm.StreamEvent{Type: llm.SETextDelta, Text: "recovered-stream"}, nil) {
+			return
+		}
+		_ = yield(llm.StreamEvent{Type: llm.SEMessageDelta, StopReason: "end_turn"}, nil)
+		_ = yield(llm.StreamEvent{Type: llm.SEMessageStop}, nil)
+	}
+}
+
+func TestMaxTokensTooLargeAutoStepDownFromZeroAndHighCap(t *testing.T) {
+	// 1. Stream with MaxTokens=0 (unset) on a 32K model where only <= 4096 fits after prompt
+	srcStream := &maxTokensRejectProvider{limit: 4096}
+	provStream := wrapToolSanitizingProvider(srcStream)
+	acc := llm.NewAccumulator()
+	for ev, err := range provStream.Stream(context.Background(), llm.CompletionRequest{
+		Messages:  []llm.Message{llm.UserText("continue")},
+		MaxTokens: 0,
+	}) {
+		if err != nil {
+			t.Fatalf("expected Stream to auto-step-down max_tokens and succeed, got error: %v (attempts=%v)", err, srcStream.seenMax)
+		}
+		acc.Add(ev)
+	}
+	if !strings.Contains(acc.Message().Text(), "recovered-stream") {
+		t.Fatalf("unexpected stream recovery text: %q", acc.Message().Text())
+	}
+
+	// 2. Complete with MaxTokens=32768 where only <= 2048 fits
+	srcComp := &maxTokensRejectProvider{limit: 2048}
+	provComp := wrapToolSanitizingProvider(srcComp)
+	msg, _, _, err := provComp.Complete(context.Background(), llm.CompletionRequest{
+		Messages:  []llm.Message{llm.UserText("continue")},
+		MaxTokens: 32768,
+	})
+	if err != nil || !strings.Contains(msg.Text(), "recovered-complete") {
+		t.Fatalf("expected Complete to auto-step-down max_tokens from 32768 -> 2048, got err=%v text=%q (attempts=%v)", err, msg.Text(), srcComp.seenMax)
 	}
 }

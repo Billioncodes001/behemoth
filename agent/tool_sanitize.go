@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/norma/llm"
@@ -772,12 +773,20 @@ func prepareRequest(req llm.CompletionRequest) llm.CompletionRequest {
 	return req
 }
 
+var reErrContextSize = regexp.MustCompile(`(?i)(?:context\s+(?:size|length)\s+(?:of|is)\s+|below\s+)(\d{4,7})`)
+
 func isMaxTokensContextError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return (strings.Contains(msg, "context_length_exceeded") || strings.Contains(msg, "exceeds the model's context size") || strings.Contains(msg, "maximum context length")) &&
+	if strings.Contains(msg, "max_tokens_too_large") ||
+		strings.Contains(msg, "leaves no room for the prompt") ||
+		strings.Contains(msg, "set max_tokens below") ||
+		strings.Contains(msg, "max_completion_tokens") && (strings.Contains(msg, "too large") || strings.Contains(msg, "exceed")) {
+		return true
+	}
+	return (strings.Contains(msg, "context_length_exceeded") || strings.Contains(msg, "exceeds the model's context size") || strings.Contains(msg, "maximum context length") || strings.Contains(msg, "context size of")) &&
 		(strings.Contains(msg, "max_tokens") || strings.Contains(msg, "completion"))
 }
 
@@ -837,15 +846,42 @@ func dedupRepeatedLines(s string) string {
 }
 
 func stepDownMaxTokens(cur int) int {
+	return stepDownMaxTokensForError(cur, nil)
+}
+
+func stepDownMaxTokensForError(cur int, err error) int {
+	if cur <= 0 {
+		// Profile left MaxTokens=0 (unset), so the SDK/gateway defaulted max_tokens
+		// to the model's full context size (e.g. 32768). Pick a safe output cap
+		// immediately (at most 1/4 of reported context size, capped at 8192).
+		if err != nil {
+			if m := reErrContextSize.FindStringSubmatch(err.Error()); len(m) >= 2 {
+				if ctxSize, perr := strconv.Atoi(m[1]); perr == nil && ctxSize >= 4096 {
+					quarter := ctxSize / 4
+					if quarter > 8192 {
+						return 8192
+					}
+					if quarter >= 1024 {
+						return quarter
+					}
+				}
+			}
+		}
+		return 4096
+	}
 	switch {
 	case cur > 16384:
-		return 16384
-	case cur > 8192:
 		return 8192
-	case cur > 4096:
+	case cur > 8192:
 		return 4096
-	default:
+	case cur > 4096:
+		return 2048
+	case cur > 2048:
 		return 1024
+	case cur > 512:
+		return 512
+	default:
+		return 0
 	}
 }
 
@@ -899,7 +935,8 @@ func isTransientStreamError(err error) bool {
 func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	req = prepareRequest(req)
 	return func(yield func(llm.StreamEvent, error) bool) {
-		for attempt := 0; attempt < 3; attempt++ {
+		maxTokenSteps := 0
+		for attempt := 0; attempt < 5; attempt++ {
 			var (
 				buildingTool  bool
 				curToolID     string
@@ -953,10 +990,13 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 				if err != nil {
 					cancelStream()
 					_ = flushTool()
-					if !emittedAny && attempt < 2 && isMaxTokensContextError(err) && req.MaxTokens > 1024 {
-						req.MaxTokens = stepDownMaxTokens(req.MaxTokens)
-						retryAttempt = true
-						break
+					if !emittedAny && maxTokenSteps < 4 && isMaxTokensContextError(err) {
+						if nextCap := stepDownMaxTokensForError(req.MaxTokens, err); nextCap > 0 && nextCap != req.MaxTokens {
+							req.MaxTokens = nextCap
+							maxTokenSteps++
+							retryAttempt = true
+							break
+						}
 					}
 					if retryAttempt {
 						break
@@ -1183,8 +1223,12 @@ func (p *toolSanitizingProvider) Stream(ctx context.Context, req llm.CompletionR
 func (p *toolSanitizingProvider) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
 	req = prepareRequest(req)
 	msg, stop, usage, err := p.inner.Complete(ctx, req)
-	for step := 0; step < 3 && err != nil && isMaxTokensContextError(err) && req.MaxTokens > 1024; step++ {
-		req.MaxTokens = stepDownMaxTokens(req.MaxTokens)
+	for step := 0; step < 4 && err != nil && isMaxTokensContextError(err); step++ {
+		nextCap := stepDownMaxTokensForError(req.MaxTokens, err)
+		if nextCap <= 0 || nextCap == req.MaxTokens {
+			break
+		}
+		req.MaxTokens = nextCap
 		msg, stop, usage, err = p.inner.Complete(ctx, req)
 	}
 	if err != nil {
