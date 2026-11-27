@@ -229,6 +229,13 @@ func TestAutoDelegatesScanToTaskAndSoloPentestRunsExploitationLoop(t *testing.T)
 		t.Fatal("explicit in-chat-only request must allow direct Bash in Auto")
 	}
 
+	// Multi-finding continuation prompt (like Findings -> Continue Pentest with @[finding#35:...] + @[finding#34:...]) MUST still delegate to Tasks!
+	multiFindingPrompt := "Continue comprehensive penetration testing and post-discovery exploitation on target website **https://federalpolyede.edu.ng** (attached to existing Task #1 — reuse Task #1 via `add_task_hint`).\n- @[finding#35:Unauthenticated OoB password mailer] (critical, pending)\n- @[finding#34:Public phpinfo] (medium, confirmed)"
+	multiHooks := WrapChatContinuationHooks(nil, "auto", bound, multiFindingPrompt, "conv-86", 4)
+	if blocked, reason, _ := multiHooks.PreToolUse(context.Background(), "Bash", []byte(`{"command":"curl -sS https://federalpolyede.edu.ng"}`)); !blocked || !strings.Contains(reason, "Task Orchestration Guard") {
+		t.Fatalf("expected multi-finding website pentest continuation in Auto to enforce Task delegation, got blocked=%v reason=%q", blocked, reason)
+	}
+
 	// --- Part B: Explicitly selected `pentest` (Solo Pentest) agent still runs full solo assessment + exploitation ---
 	t1a, t1u := toolTurn("c1", "Bash")
 	t2a, t2u := toolTurn("c2", "Bash")

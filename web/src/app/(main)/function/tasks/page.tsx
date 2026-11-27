@@ -1593,7 +1593,7 @@ const TaskRow = React.memo(function TaskRow({
           "—"
         )}
       </TableCell>
-      <TableCell className="sticky right-0 z-10 bg-card text-right shadow-[-1px_0_0_0_hsl(var(--border))] group-hover:bg-muted/50">
+      <TableCell className="sticky right-0 z-20 bg-card text-right shadow-[-1px_0_0_0_hsl(var(--border))] group-hover:bg-accent">
         <div className="flex items-center justify-end gap-0.5">
           <TaskGlobalAssetsAction task={task} onToggle={onToggleGlobalAssets} />
           <TaskActionTooltip label={translate("taskUI.viewTask")} description={translate("taskUI.viewTaskHelp")}>

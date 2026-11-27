@@ -14,8 +14,8 @@ import (
 
 var (
 	reActionIntentAnnouncement     = regexp.MustCompile(`(?i)(?:^|[.!?]\s+|\n\s*)(?:let\s+me\b|let's\b|i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|going\s+to\b|starting\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|investigation|analysis|enumeration)|running\s+(?:a\s+|the\s+)?(?:scan|recon|test|probe|check|command|tool)|checking\s+(?:the\s+)?(?:current\s+status|target|site|web|http|headers|ports|endpoints|vulnerabilities)|investigating\s+the\b|scanning\s+the\b|probing\s+the\b|now\s+let\s+me\b|next,?\s+let\s+me\b|next,?\s+i\s+will\b|first,?\s+let\s+me\b|allow\s+me\b)`)
-	reActiveTaskPrompt             = regexp.MustCompile(`(?i)\b(scan|pentest|penetration\s+test|exploit|vulnerabilit(?:y|ies)|recon|reconnaissance|enumerate|probe|audit|assess|find\s+something|use\s+.*tools|check\s+.*for\s+vulnerabilit|attack|fuzz|crawl|spider|discover|bug\s*hunt|hunt\s+for\s+bugs)\b`)
-	reWholeSiteEngagementPrompt    = regexp.MustCompile(`(?i)\b(scan\s+(?:this|the|entire|whole)?\s*(?:website|site|domain|portal|app|application|target|https?://|[a-z0-9.-]+\.[a-z]{2,})|pentest|penetration\s+test|full\s+(?:scan|assessment|audit)|find\s+vulnerabilit.*exploit|scan.*and\s+exploit)\b`)
+	reActiveTaskPrompt             = regexp.MustCompile(`(?i)\b(scan(?:ning)?|pentest(?:ing)?|penetration\s+test(?:ing)?|exploit(?:ation|ing)?|vulnerabilit(?:y|ies)|recon|reconnaissance|enumerate|probe|audit(?:ing)?|assess(?:ment)?|find\s+something|use\s+.*tools|check\s+.*for\s+vulnerabilit|attack|fuzz|crawl|spider|discover|bug\s*hunt|hunt\s+for\s+bugs)\b`)
+	reWholeSiteEngagementPrompt    = regexp.MustCompile(`(?i)\b(scan\s+(?:this|the|entire|whole)?\s*(?:website|site|domain|portal|app|application|target|https?://|[a-z0-9.-]+\.[a-z]{2,})|pentest(?:ing)?|penetration\s+test(?:ing)?|full\s+(?:scan|assessment|audit)|find\s+vulnerabilit.*exploit|scan.*and\s+exploit)\b`)
 	reSingleFindingMention         = regexp.MustCompile(`(?i)@\[finding#\d+`)
 	reExplicitDirectChatOnlyPrompt = regexp.MustCompile(`(?i)\b(?:in\s+chat\s+only|directly\s+in\s+chat|without\s+(?:creating\s+|spawning\s+|using\s+)?(?:a\s+)?task|don'?t\s+(?:create|spawn|start)\s+(?:a\s+)?task|do\s+not\s+(?:create|spawn|start)\s+(?:a\s+)?task|no\s+task\b)`)
 	reSystemReminderBlock          = regexp.MustCompile(`(?is)<system-reminder>.*?</system-reminder>`)
@@ -60,7 +60,16 @@ func shouldAutoDelegateToTask(agentKey string, boundTools map[string]bool, promp
 		return false
 	}
 	clean := stripSystemReminders(prompt)
-	if reSingleFindingMention.MatchString(clean) || reExplicitDirectChatOnlyPrompt.MatchString(clean) {
+	if reExplicitDirectChatOnlyPrompt.MatchString(clean) {
+		return false
+	}
+	// Only exempt a narrow single-finding Q&A/check when there is at most one
+	// @[finding#...] reference AND the prompt is NOT a full-site or multi-finding
+	// pentest continuation (e.g. "Continue comprehensive penetration testing...").
+	findingMentions := reSingleFindingMention.FindAllString(clean, -1)
+	if len(findingMentions) == 1 && !reWholeSiteEngagementPrompt.MatchString(clean) &&
+		!strings.Contains(strings.ToLower(clean), "reuse task #") &&
+		!strings.Contains(strings.ToLower(clean), "add_task_hint") {
 		return false
 	}
 	return isLiveTargetScanPrompt("auto", clean)

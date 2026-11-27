@@ -820,23 +820,62 @@ export default function FindingsPage() {
     setDeepenDescription("");
   }, []);
 
+  const resolveTargetTaskId = React.useCallback(
+    async (website: string, siteFindings: Finding[]): Promise<string | undefined> => {
+      const direct = siteFindings.find((x) => x.task_id)?.task_id;
+      if (direct) return String(direct);
+      if (!website || website === "Unassigned / General") return undefined;
+      try {
+        const res = await api.tasks();
+        const needle = website.toLowerCase();
+        // Prefer an active/paused task first, otherwise reuse the most recent completed task for this domain.
+        const matching = res.tasks.filter((t) => {
+          const hay = `${t.name || ""} ${t.description || ""} ${t.goal || ""}`.toLowerCase();
+          return hay.includes(needle);
+        });
+        const active = matching.find((t) => !["done", "failed", "timeout"].includes(t.status));
+        return active?.id ?? matching[0]?.id;
+      } catch {
+        return undefined;
+      }
+    },
+    [],
+  );
+
   const continueExploitingFinding = React.useCallback(
     async (f: Finding) => {
-      if (!f.finding_id || launchingChat) return;
-      const site = extractFindingWebsite(f);
-      const lockKey = `finding-${f.finding_id}`;
-      setLaunchingChat(lockKey);
+      if (launchingChat) return;
+      const key = `finding-${f.finding_id ?? f.id}`;
+      setLaunchingChat(key);
       try {
-        const title =
-          site !== "Unassigned / General" ? `${site} — Exploit #${f.finding_id}` : `Exploit Finding #${f.finding_id}`;
-        const conv = await api.createConversation("auto", title);
+        const site = extractFindingWebsite(f);
+        const targetTaskId = f.task_id ? String(f.task_id) : await resolveTargetTaskId(site, [f]);
         const prompt =
-          `Continue penetration testing and active exploitation on @[finding#${f.finding_id}:${f.name || f.vulnclass || "Finding"}]` +
+          `Continue penetration testing and active multi-agent exploitation on @[finding#${f.finding_id}:${f.name || f.vulnclass || "Finding"}]` +
           (site !== "Unassigned / General" ? ` (Target website: https://${site})` : "") +
-          (f.task_id ? ` (Existing Task #${f.task_id} — reuse this task, do NOT create a duplicate task)` : "") +
-          `.\n\n1. Check \`check_proxy_status\` and \`search_patch_arsenal\` first.\n` +
+          `.\n\nUse \`set_goals\` and \`add_hint\` to dispatch parallel Worker agents immediately (do NOT grind solo):\n` +
+          `1. Check \`check_proxy_status\` and \`search_patch_arsenal\` first.\n` +
           `2. Actively attempt to exploit, chain, and prove maximum impact for this finding.\n` +
           `3. Call \`update_finding\` and \`update_finding_report\` if higher severity/impact is verified, save any working PoC via \`save_verified_exploit_to_patch_monitor\`, and document any credentials or accessed portal HTML snapshots under \`domains/${site !== "Unassigned / General" ? site : "target"}/\`.`;
+
+        if (targetTaskId) {
+          await api.chat(prompt, targetTaskId);
+          toast.success(`Resumed Task #${targetTaskId} Main Agent to exploit Finding #${f.finding_id}`);
+          router.push(`/function/tasks/detail?id=${encodeURIComponent(targetTaskId)}&tab=sessions`);
+          return;
+        }
+        if (site && site !== "Unassigned / General") {
+          const created = await api.createTask({
+            name: `Exploit · ${site} (#${f.finding_id})`,
+            description: `Active Exploitation of Finding #${f.finding_id} on ${site}`,
+            goal: prompt,
+            planHeartbeatSeconds: 180,
+          });
+          toast.success(`Created Multi-Agent Task #${created.id} for Finding #${f.finding_id}`);
+          router.push(`/function/tasks/detail?id=${encodeURIComponent(created.id)}&tab=sessions`);
+          return;
+        }
+        const conv = await api.createConversation("auto", `Exploit Finding #${f.finding_id}`);
         await api.sendConversationMessage(Number(conv.id), prompt);
         router.push(`/chat?c=${conv.id}`);
       } catch (err) {
@@ -845,7 +884,7 @@ export default function FindingsPage() {
         setLaunchingChat(null);
       }
     },
-    [launchingChat, router],
+    [launchingChat, resolveTargetTaskId, router],
   );
 
   const continueWebsitePentest = React.useCallback(
@@ -853,29 +892,48 @@ export default function FindingsPage() {
       if (launchingChat) return;
       setLaunchingChat(`site-${website}`);
       try {
-        const taskId = siteFindings.find((x) => x.task_id)?.task_id;
+        const taskId = await resolveTargetTaskId(website, siteFindings);
         const topRefs = siteFindings
           .filter((x) => x.finding_id)
-          .slice(0, 8)
+          .slice(0, 12)
           .map((x) => `- @[finding#${x.finding_id}:${x.name || x.vulnclass || "Finding"}] (${x.severity}, ${x.status})`)
           .join("\n");
-        const conv = await api.createConversation("auto", website);
-        const prompt =
-          `Continue comprehensive penetration testing and post-discovery exploitation on target website **https://${website}**` +
-          (taskId
-            ? ` (attached to existing Task #${taskId} — reuse Task #${taskId} via \`add_task_hint\`, do NOT spawn a duplicate task)`
-            : "") +
-          `.\n\nDiscovered findings so far on ${website}:\n${topRefs || "- None yet"}\n\n` +
-          `Systematically test and exploit every finding above, hunt for deeper attack chains (auth bypass, SQLi, XSS, SSRF, BOLA/IDOR, exposed portals), update confirmed severities via \`update_finding\`, tabularize all created/found portal credentials in \`domains/${website}/CREDENTIALS.md\`, and save offline HTML snapshots of any accessed portals in \`domains/${website}/portal-simulation/\`.`;
-        await api.sendConversationMessage(Number(conv.id), prompt);
-        router.push(`/chat?c=${conv.id}`);
+
+        if (taskId) {
+          const mainAgentPrompt =
+            `Continue comprehensive multi-agent penetration testing and post-discovery exploitation on **https://${website}**.\n\n` +
+            `Discovered findings so far on ${website}:\n${topRefs || "- None yet"}\n\n` +
+            `Immediately call \`set_goals\` (adding new open follow-up goals so this Task resumes in parallel multi-agent mode) and \`add_hint\` so the Planner fans out concurrent Workers to:\n` +
+            `1. Systematically exploit, chain, and escalate every pending/confirmed finding above (auth bypass, SQLi, XSS, SSRF, BOLA/IDOR, exposed portals, admin/DB access).\n` +
+            `2. Audit remaining uncovered subdomains, ports, APIs, and business logic.\n` +
+            `3. Update verified severities via \`update_finding\` + \`update_finding_report\`, save working PoCs to Patch Monitor via \`save_verified_exploit_to_patch_monitor\`, and store credentials/portal snapshots under \`domains/${website}/\`.`;
+          await api.chat(mainAgentPrompt, taskId);
+          toast.success(`Resumed Task #${taskId} in Multi-Agent Main Console`);
+          router.push(`/function/tasks/detail?id=${encodeURIComponent(taskId)}&tab=sessions`);
+          return;
+        }
+
+        const taskGoal =
+          `Comprehensive multi-agent penetration testing and post-discovery exploitation on **https://${website}**.\n\n` +
+          `Previously discovered findings on ${website}:\n${topRefs || "- None yet"}\n\n` +
+          `1. Systematically exploit, chain, and prove maximum impact for every finding above.\n` +
+          `2. Map and test all remaining subdomains, services, APIs, and authenticated/public portals in parallel.\n` +
+          `3. Update confirmed severities via \`update_finding\` + \`update_finding_report\`, save working PoCs to Patch Monitor via \`save_verified_exploit_to_patch_monitor\`, and document verified credentials/snapshots under \`domains/${website}/\`.`;
+        const created = await api.createTask({
+          name: `Pentest · ${website}`,
+          description: `Continue Pentest & Post-Discovery Exploitation — ${website}`,
+          goal: taskGoal,
+          planHeartbeatSeconds: 180,
+        });
+        toast.success(`Launched Multi-Agent Task #${created.id} for ${website}`);
+        router.push(`/function/tasks/detail?id=${encodeURIComponent(created.id)}&tab=sessions`);
       } catch (err) {
         toast.error((err as Error).message);
       } finally {
         setLaunchingChat(null);
       }
     },
-    [launchingChat, router],
+    [launchingChat, resolveTargetTaskId, router],
   );
 
   const websiteGroups = React.useMemo(() => {
@@ -1315,7 +1373,11 @@ export default function FindingsPage() {
                                 variant="secondary"
                                 disabled={Boolean(launchingChat)}
                                 onClick={() => void continueWebsitePentest(wg.website, wg.items)}
-                                title="Continue scanning and exploiting this website in Chat"
+                                title={
+                                  wg.taskId
+                                    ? `Resume Task #${wg.taskId} in Multi-Agent Main Console`
+                                    : "Launch a new Multi-Agent Pentest Task for this website"
+                                }
                               >
                                 {busySite ? (
                                   <Spinner data-icon="inline-start" />

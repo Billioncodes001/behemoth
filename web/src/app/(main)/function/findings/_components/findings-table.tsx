@@ -451,8 +451,7 @@ export function FindingsTable({
                       </Badge>
                     ) : null}
                     <Badge variant="outline">
-                      {ui("screen.8a7bc1e3a1c1dd")}
-                      {f.traffic_count ?? 0} {ui("screen.f004f1d84cf962")}
+                      {ui("screen.8a7bc1e3a1c1dd")} {f.traffic_count ?? 0} {ui("screen.f004f1d84cf962")}
                     </Badge>
                   </div>
                 </TableCell>
