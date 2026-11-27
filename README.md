@@ -99,4 +99,5 @@ sudo ./start.sh domain pentest.yourdomain.com --ssl
 - **[Run Hardening (`docs/RUN_HARDENING.md`)](./docs/RUN_HARDENING.md)** — per-run token/tool-call budgets, mechanical scope enforcement (redirect re-authorization, per-host rate limits, fail-closed DNS), the Docker `sandbox_exec` backend, the offline mock provider, and tamper-evident evidence logs (`behemoth evidence verify`).
 - **[GPU Host (`docs/GPU_HOST.md`)](./docs/GPU_HOST.md)** — droplet sizing for hashcat/John, GPU passthrough for `sandbox_exec`, and the IP-preserving migration runbook.
 - **[C2 Guide (`docs/C2_GUIDE.md`)](./docs/C2_GUIDE.md)** — self-contained command & control: implant generation (bash/python3/powershell, malleable profiles, AES check-ins), SSH deployment with persistence helpers, the agent tool set (`c2_build_implant` … `c2_kill`), and the token-authed operator console at `/c2/ui/`.
+- **[AiTM Phishing Guide (`docs/PHISH_GUIDE.md`)](./docs/PHISH_GUIDE.md)** — DOMDIFFER-style adversary-in-the-middle phishing (reverse-proxy relay + true DOM mirroring, scanner evasion) with the `manage_phish_site` / `phish_captures` agent tools, for any login target.
 

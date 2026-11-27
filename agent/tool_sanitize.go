@@ -535,6 +535,8 @@ var primaryChatTools = map[string]bool{
 	"c2_task":                                true,
 	"c2_results":                             true,
 	"c2_kill":                                true,
+	"manage_phish_site":                      true,
+	"phish_captures":                         true,
 	"manage_auth_sessions":                   true,
 	"verify_access_control_matrix":           true,
 	"audit_frontend_api_surface":             true,

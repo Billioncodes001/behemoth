@@ -273,6 +273,7 @@ func analyzeRunToolProgressSummary(messages []llm.Message) runProgressSummary {
 				"detect_deception_and_honeypot", "multi_engine_search", "exploit_search",
 				"solve_captcha", "save_artifact", "proxied_tcp_relay", "create_callback_listener", "poll_callback_events",
 				"c2_build_implant", "c2_deploy", "c2_agents", "c2_task", "c2_results", "c2_kill",
+				"manage_phish_site", "phish_captures",
 				"manage_auth_sessions", "verify_access_control_matrix", "audit_frontend_api_surface",
 				"verify_endpoint_idempotency", "audit_source_routes",
 				"import_and_test_proxies", "manage_proxy_pool", "scrape_online_proxies",

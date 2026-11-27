@@ -45,17 +45,19 @@ func jsonResult(v any) (actool.Result, error) {
 // per-turn input token bloat by ~60% for faster Time-To-First-Token) while
 // remaining unlocked and advertised in the cached <available-deferred-tools> block.
 var autoDeferredSpecialistTools = map[string]bool{
-	"c2_build_implant":                         true,
-	"c2_deploy":                                true,
-	"c2_agents":                                true,
-	"c2_task":                                  true,
-	"c2_results":                               true,
-	"c2_kill":                                  true,
-	"c2_proxy_open":                            true,
-	"c2_proxy_close":                           true,
-	"c2_proxy_list":                            true,
-	"check_patch_feeds":                        true,
-	"add_patch_watch_feed":                     true,
+	"c2_build_implant":     true,
+	"c2_deploy":            true,
+	"c2_agents":            true,
+	"c2_task":              true,
+	"c2_results":           true,
+	"c2_kill":              true,
+	"c2_proxy_open":        true,
+	"c2_proxy_close":       true,
+	"c2_proxy_list":        true,
+	"manage_phish_site":    true,
+	"phish_captures":       true,
+	"check_patch_feeds":    true,
+	"add_patch_watch_feed": true,
 	"discover_affected_sites_for_notification": true,
 	"match_vuln_targets":                       true,
 	"generate_vuln_exploit":                    true,
@@ -166,6 +168,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 	out = append(out, s.patchMonitorTools()...)
 	out = append(out, s.arsenalTools()...)
 	out = append(out, s.c2Tools()...)
+	out = append(out, s.phishTools()...)
 	out = append(out, s.artifactTools()...)
 	out = append(out, s.captchaTools()...)
 	out = append(out, s.agentRequestTools()...)
@@ -808,6 +811,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedAgentRequestToolsV1()
 	s.seedC2ToolsV1()
 	s.seedC2ProxyToolsV1()
+	s.seedPhishToolsV1()
 	s.syncDiscoveredSkillsVisibility()
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	s.seedAutoTaskDelegationV2()
@@ -1772,7 +1776,7 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 // automatically converted into pre-filled parallel Multi-Agent Tasks with
 // live Task -> Chat callback updates instead of burning tokens solo in Chat.
 func (s *Server) seedAutoTaskDelegationV2() {
-	const flag = "auto_task_delegation_prompt_v3"
+	const flag = "auto_task_delegation_prompt_v4"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

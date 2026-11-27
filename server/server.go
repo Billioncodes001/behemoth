@@ -26,6 +26,7 @@ import (
 	"github.com/Autumn-27/behemoth/intercept/jev"
 	"github.com/Autumn-27/behemoth/llmpool"
 	"github.com/Autumn-27/behemoth/llmrec"
+	"github.com/Autumn-27/behemoth/phish"
 	"github.com/Autumn-27/behemoth/report"
 	"github.com/Autumn-27/behemoth/server/browser"
 	"github.com/Autumn-27/behemoth/server/factgraph"
@@ -94,8 +95,8 @@ type Server struct {
 	// immediately, so a page reload / proxy timeout can't abort a live run. This
 	// map serializes turns per task — one main-agent run at a time per task, so
 	// concurrent messages don't corrupt the shared exp<id>-main transcript.
-	chatMu     sync.Mutex
-	chatBusy   map[string]bool
+	chatMu   sync.Mutex
+	chatBusy map[string]bool
 	// chatCancel holds the cancel func for each in-flight conversation run (keyed by
 	// convBusyKey), so a manual stop can abort JUST that session's agent run. Set/
 	// cleared alongside chatBusy under chatMu. Aborting a run does NOT touch the P3
@@ -182,6 +183,13 @@ type Server struct {
 	c2Handler *c2.Handler
 	c2Console *c2.Console
 	c2srv     *http.Server
+
+	// AiTM phishing (DOMDIFFER-style): lazily initialized manager + dedicated
+	// listener serving all phish sites (Host-multiplexed).
+	phishMu  sync.Mutex
+	phishM   *phish.Manager
+	phishSrv *http.Server
+	phishLn  net.Listener
 
 	targetMu sync.Mutex
 	targets  map[string]targets.TargetConnector // keyed by target ID
@@ -540,10 +548,10 @@ When writing reports, for each reproduction step with a real HTTP page that is s
 		}
 		wireAgentAugment(m.pg, s.skillDir, s.hostTools, s.m.OutboundProxyAddr) // 可见 skills/MCP + 流量/编排 host 工具装配进 agent 工具集
 		domainReg := buildDomainReg(m.Assets(), m.pg)
-		wireTools(m.pg, domainReg) // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
+		wireTools(m.pg, domainReg)        // 内置工具表：按 agent 过滤 + 覆盖描述/schema + 注入默认值
 		toolErrorHook = s.handleToolError // repeated tool failures → automatic Agent Requests
-		seedPrompts(m.pg)          // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
-		s.seedOrchestrationTools() // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
+		seedPrompts(m.pg)                 // 内置 agent 默认提示词正文播种进 agent_prompts(仅空时)
+		s.seedOrchestrationTools()        // P2 跨任务编排工具 seed 进 tools 表(可按 agent 绑定)
 		if err := s.seedFindingRetester(); err != nil {
 			log.Printf("[retester] seed: %v", err)
 		}
@@ -625,6 +633,7 @@ func (s *Server) Close() {
 		if s.c2mgr != nil {
 			_ = s.c2mgr.Close()
 		}
+		s.stopPhishListener()
 	}
 }
 
@@ -1344,7 +1353,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats)
 	mux.HandleFunc("GET /api/tokens/daily", s.tokenDailyStats)
 	mux.HandleFunc("GET /api/tokens/conversations", s.conversationTokens)
-	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)      // 全局 llm_usage 聚合（仪表盘新版视图）
+	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)       // 全局 llm_usage 聚合（仪表盘新版视图）
 	mux.HandleFunc("POST /api/tokens/reset", s.pgResetUsageStats) // 重置仪表盘 Token 统计与图表（保留漏洞/资产）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
@@ -1481,9 +1490,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/skills", s.fsCreateSkill)
 	mux.HandleFunc("POST /api/skills/upload", s.fsUploadSkill)
 	mux.HandleFunc("DELETE /api/skills/{name}", s.fsDeleteSkill)
-	mux.HandleFunc("GET /api/skills/missing", s.fsMissingSkills)       // 未命中(想调但不存在)的 skill 名
+	mux.HandleFunc("GET /api/skills/missing", s.fsMissingSkills)         // 未命中(想调但不存在)的 skill 名
 	mux.HandleFunc("DELETE /api/skills/missing", s.fsClearMissingSkills) // 清除已处理/历史未命中 skill 记录
-	mux.HandleFunc("GET /api/skills/{name}/usage", s.fsSkillUsage) // 单个 skill 的最近调用
+	mux.HandleFunc("GET /api/skills/{name}/usage", s.fsSkillUsage)       // 单个 skill 的最近调用
 	mux.HandleFunc("PUT /api/skills/{name}/meta", s.fsUpdateSkillMeta)
 	mux.HandleFunc("POST /api/skills/{name}/dirs", s.fsCreateDir)
 	mux.HandleFunc("GET /api/skills/{name}/files", s.fsListFiles)
