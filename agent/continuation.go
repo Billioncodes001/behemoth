@@ -84,7 +84,7 @@ func isActiveProbingAgent(agentKey string) bool {
 		return true // preserve legacy callers & unit tests that omit agentKey
 	}
 	switch strings.ToLower(strings.TrimSpace(agentKey)) {
-	case "reporter", "asset_mapper", "goals", "credential_processor", "retester", "patch_watch", "proxy_harvester", "bounty_scout", "planner":
+	case "reporter", "asset_mapper", "goals", "credential_processor", "retester", "patch_watch", "proxy_harvester", "bounty_scout", "planner", "mainagent":
 		return false
 	default:
 		return true

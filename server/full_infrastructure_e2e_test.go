@@ -532,10 +532,10 @@ func TestFullInfrastructureEndToEndViaTaskEntrypoint(t *testing.T) {
 				return
 			case 1:
 				var calls []map[string]any
-				if jm := reCooldownJobID.FindStringSubmatch(promptBlob); len(jm) >= 2 {
+				if jms := reCooldownJobID.FindAllStringSubmatch(promptBlob, -1); len(jms) > 0 {
 					calls = append(calls, map[string]any{
 						"name": "cancel_cooldown_schedule",
-						"args": map[string]any{"job_id": jm[1]},
+						"args": map[string]any{"job_id": jms[len(jms)-1][1]},
 					})
 				}
 				calls = append(calls, map[string]any{
@@ -826,6 +826,7 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatalf("SaveMCP: %v", err)
 	}
+	t.Cleanup(func() { _ = m.pg.DeleteMCP(mcpID) })
 	_ = m.pg.SaveMCPTools(mcpID, []db.MCPTool{{
 		Name:        "lookup_internal_advisory",
 		Description: "Lookup internal vulnerability advisory over MCP",
