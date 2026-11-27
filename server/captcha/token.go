@@ -111,10 +111,10 @@ func (s *TokenSolver) v2Endpoint() (string, bool) {
 	case "https://rucaptcha.com", "https://api.rucaptcha.com":
 		return "https://api.rucaptcha.com", true
 	default:
-		if strings.Contains(u, "api.2captcha.com") || strings.Contains(u, "api.rucaptcha.com") {
-			return s.BaseURL, true
+		if strings.HasSuffix(u, "/in.php") {
+			return "", false
 		}
-		return "", false
+		return strings.TrimRight(strings.TrimSpace(s.BaseURL), "/"), true
 	}
 }
 

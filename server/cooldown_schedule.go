@@ -362,7 +362,7 @@ func (s *Server) dispatchCooldownResumeJob(j CooldownResumeJob) {
 			"text":    fullMsg,
 		})
 		_, _ = s.toolAddHint().Call(context.Background(), hintPayload, nil)
-		s.reviveTask(t)
+		s.ensureOpenGoalAndReviveTask(t, fmt.Sprintf("%s: %s", waveNote, j.ResumePrompt))
 		log.Printf("[cooldown-cron] Woke Task #%d for cooldown continuation %s (wave %d/%d)", j.TaskID, j.ID, j.RunsCompleted, j.MaxRuns)
 		return
 	}

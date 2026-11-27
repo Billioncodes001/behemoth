@@ -31,7 +31,7 @@ func (s *Server) captchaTools() []actool.CoreTool {
 // captchaAPIKey resolves the 2Captcha solving-service key: settings override first, then env.
 func (s *Server) captchaAPIKey() string {
 	if s != nil && s.m != nil && s.m.pg != nil {
-		for _, k := range []string{"captcha_api_key", "twocaptcha_api_key"} {
+		for _, k := range []string{"captcha_api_key", "twocaptcha_api_key", "two_captcha_api_key", "2captcha_api_key"} {
 			if v, ok, _ := s.m.pg.GetSetting(k); ok && strings.TrimSpace(v) != "" {
 				return strings.TrimSpace(v)
 			}

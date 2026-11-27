@@ -375,7 +375,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 								"text":    "Additional objective from Chat: " + strings.TrimSpace(a.Goal),
 							})
 							_, _ = s.delegateToTask(ctx, hintJSON, (*agent.ToolSet).AddHintTool)
-							if existing.Paused {
+							if open, oerr := existing.Store.HasOpenGoal(); oerr == nil && !open {
+								s.ensureOpenGoalAndReviveTask(existing, strings.TrimSpace(a.Goal))
+							} else if existing.Paused {
 								_, _ = s.admitPausedTask(existing)
 							}
 							extra := ""
@@ -536,6 +538,10 @@ func (s *Server) toolAddHint() actool.CoreTool {
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var parsed struct {
 				TaskID string `json:"task_id"`
+				Text   string `json:"text"`
+				Hints  []struct {
+					Text string `json:"text"`
+				} `json:"hints"`
 			}
 			_ = json.Unmarshal(in, &parsed)
 			var convID int64
@@ -546,8 +552,13 @@ func (s *Server) toolAddHint() actool.CoreTool {
 			if err == nil && !res.IsError && convID > 0 && s.m != nil {
 				if t, ok := s.m.Task(strings.TrimSpace(parsed.TaskID)); ok && t != nil {
 					st := t.lifecycleSnapshot()
-					if isTerminalStatus(st.Status) {
-						s.reviveTask(t)
+					open, oerr := t.Store.HasOpenGoal()
+					if isTerminalStatus(st.Status) || (oerr == nil && !open) {
+						obj := strings.TrimSpace(parsed.Text)
+						if obj == "" && len(parsed.Hints) > 0 {
+							obj = strings.TrimSpace(parsed.Hints[0].Text)
+						}
+						s.ensureOpenGoalAndReviveTask(t, obj)
 					}
 				}
 			}

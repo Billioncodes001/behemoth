@@ -209,10 +209,41 @@ func (s *Server) triggerTaskChatSyncAsync(taskIDStr string) {
 	go s.syncSingleTaskChatUpdates(tid)
 }
 
+// ensureOpenGoalAndReviveTask guarantees that when a terminal or goalless task
+// receives a new objective (e.g. from a Cooldown/Cron continuation wave or a
+// follow-up prompt in /chat), at least one open Goal node exists on its
+// ExplorationStore BEFORE reviveTask wakes plannerLoop — otherwise engine.go's
+// `!t.Store.HasOpenGoal()` gate would immediately re-close the task as `done`
+// without running the Planner.
+func (s *Server) ensureOpenGoalAndReviveTask(t *Task, objectiveText string) {
+	if s == nil || t == nil || t.Store == nil {
+		return
+	}
+	open, err := t.Store.HasOpenGoal()
+	if err == nil && !open {
+		goalText := strings.TrimSpace(objectiveText)
+		if goalText == "" {
+			goalText = "Execute follow-up exploration and verification objective"
+		}
+		if len(goalText) > 800 {
+			goalText = goalText[:800] + "..."
+		}
+		if gid, gerr := t.Store.AddGoal(map[string]any{"text": goalText}, "human"); gerr == nil && gid > 0 {
+			if of, _ := t.Store.OriginFactID(); of > 0 {
+				_ = t.Store.Link(of, db.RelSpawns, gid)
+			}
+			t.NotifyGoal([]string{goalText})
+		}
+	}
+	s.reviveTask(t)
+}
+
 func (s *Server) syncSingleTaskChatUpdates(taskID int64) {
 	if s == nil || s.m == nil || s.m.pg == nil || taskID <= 0 {
 		return
 	}
+	s.syncBountyTrackerFromTaskFindings(taskID)
+
 	taskChatSyncMu.Lock()
 	defer taskChatSyncMu.Unlock()
 
@@ -223,13 +254,15 @@ func (s *Server) syncSingleTaskChatUpdates(taskID int64) {
 	s.processTaskChatLinksLocked(links)
 }
 
-// syncTaskChatUpdates sweeps all linked Task <-> Chat pairs so newly recorded
-// findings, proxy blockers, and terminal completions are reliably delivered back
-// to their originating /chat conversations.
+// syncTaskChatUpdates sweeps all linked Task <-> Chat pairs (plus active Bounty
+// Tracker tasks) so newly recorded findings, proxy blockers, and terminal
+// completions are reliably delivered across the platform.
 func (s *Server) syncTaskChatUpdates() {
 	if s == nil || s.m == nil || s.m.pg == nil {
 		return
 	}
+	s.syncAllBountyTrackersFromFindings()
+
 	taskChatSyncMu.Lock()
 	defer taskChatSyncMu.Unlock()
 

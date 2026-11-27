@@ -1264,6 +1264,67 @@ func (s *Server) reconcileBountyTaskScopeIsolation() {
 	_ = s.m.pg.SetSetting(flag, "true")
 }
 
+// syncBountyTrackerFromTaskFindings automatically promotes any Bounty Program
+// linked to taskID from discovered/registered/hunting -> bug_found as soon as
+// a parallel Worker records at least one real finding on that task (without ever
+// downgrading already-submitted or rewarded programs).
+func (s *Server) syncBountyTrackerFromTaskFindings(taskID int64) {
+	if s == nil || s.m == nil || s.m.pg == nil || taskID <= 0 {
+		return
+	}
+	findings, err := s.m.pg.ListTaskFindingsAfter(taskID, 0)
+	if err != nil || len(findings) == 0 {
+		return
+	}
+	latest := findings[len(findings)-1]
+	title := strings.TrimSpace(latest.Name)
+	if title == "" {
+		title = strings.TrimSpace(latest.VulnClass)
+	}
+	autoNote := fmt.Sprintf("[Auto-Tracked from Task #%d] %d confirmed finding(s); latest: [%s] %s",
+		taskID, len(findings), strings.ToUpper(strings.TrimSpace(latest.Severity)), title)
+
+	_, _ = s.m.pg.Exec(`
+		UPDATE bounty_programs
+		SET tracker_status = 'bug_found',
+		    submission_notes = CASE
+		        WHEN COALESCE(submission_notes, '') = '' THEN $2
+		        WHEN POSITION($2 IN submission_notes) > 0 THEN submission_notes
+		        ELSE submission_notes || E'\n' || $2
+		    END,
+		    updated_at = now()
+		WHERE linked_task_id = $1
+		  AND tracker_status IN ('discovered', 'registered', 'hunting')
+	`, taskID, autoNote)
+}
+
+func (s *Server) syncAllBountyTrackersFromFindings() {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return
+	}
+	rows, err := s.m.pg.Query(`
+		SELECT DISTINCT linked_task_id
+		FROM bounty_programs
+		WHERE linked_task_id IS NOT NULL
+		  AND linked_task_id > 0
+		  AND tracker_status IN ('discovered', 'registered', 'hunting')
+	`)
+	if err != nil {
+		return
+	}
+	var taskIDs []int64
+	for rows.Next() {
+		var tid int64
+		if rows.Scan(&tid) == nil && tid > 0 {
+			taskIDs = append(taskIDs, tid)
+		}
+	}
+	rows.Close()
+	for _, tid := range taskIDs {
+		s.syncBountyTrackerFromTaskFindings(tid)
+	}
+}
+
 // ---------- Enriched DTOs & HTTP API Handlers ----------
 
 type EnrichedBountyProgramDTO struct {
