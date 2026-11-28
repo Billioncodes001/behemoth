@@ -57,16 +57,14 @@ func (c *ChromeDP) TakeScreenshot(ctx context.Context, targetURL string) (string
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
 
-	// First run to start the browser (don't use timeout here)
-	initCtx := taskCtx
-
-	// Navigate first
-	if _, err := chromedp.Run(initCtx, chromedp.Navigate(targetURL)); err != nil {
+	// Navigate, wait for DOM readiness + brief SPA hydration, then capture full screenshot on taskCtx.
+	if _, err := chromedp.Run(taskCtx, chromedp.Navigate(targetURL)); err != nil {
 		return "", fmt.Errorf("chromedp navigate failed: %w", err)
 	}
+	_, _ = chromedp.Run(taskCtx, chromedp.WaitReady("body"))
+	_, _ = chromedp.Run(taskCtx, chromedp.Sleep(1500*time.Millisecond))
 
-	// Wait and take screenshot
-	buf, err := chromedp.Run(ctx, chromedp.FullScreenshot(100))
+	buf, err := chromedp.Run(taskCtx, chromedp.FullScreenshot(95))
 	if err != nil {
 		return "", fmt.Errorf("chromedp screenshot failed: %w", err)
 	}
@@ -111,14 +109,23 @@ func (c *ChromeDP) ExtractContent(ctx context.Context, targetURL string) (string
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
 
-	// Navigate first
+	// Navigate, wait for DOM + JS hydration on taskCtx (NOT outer ctx!), then extract title + visible text.
 	if _, err := chromedp.Run(taskCtx, chromedp.Navigate(targetURL)); err != nil {
 		return "", "", fmt.Errorf("chromedp navigate failed: %w", err)
 	}
+	_, _ = chromedp.Run(taskCtx, chromedp.WaitReady("body"))
+	_, _ = chromedp.Run(taskCtx, chromedp.Sleep(2500*time.Millisecond))
 
-	// Get title and content
-	title, _ := chromedp.Run(ctx, chromedp.Title())
-	content, _ := chromedp.Run(ctx, chromedp.Text(`body`))
+	title, _ := chromedp.Run(taskCtx, chromedp.Title())
+	content, _ := chromedp.Run(taskCtx, chromedp.Evaluate[string](`(document.body && (document.body.innerText || document.body.textContent)) ? (document.body.innerText || document.body.textContent).trim() : ""`))
+	if content == "" {
+		content, _ = chromedp.Run(taskCtx, chromedp.Text(`body`))
+	}
+	if content == "" {
+		if rawHTML, err := chromedp.Run(taskCtx, chromedp.OuterHTML("html")); err == nil && rawHTML != "" {
+			content = htmlToMarkdown(rawHTML)
+		}
+	}
 
 	return content, title, nil
 }

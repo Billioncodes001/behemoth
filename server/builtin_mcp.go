@@ -198,8 +198,22 @@ def http_json(url, method="GET", payload=None, timeout=15):
         urllib.request.ProxyHandler(),
         urllib.request.HTTPSHandler(context=SSL_CTX),
     )
-    with opener.open(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", errors="replace"))
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", errors="replace"))
+    except Exception as first_err:
+        # Public CVE/advisory APIs (NVD, OSV, EPSS, CISA KEV, GHSA) never touch the
+        # pentest target; if a flaky scraped proxy returns 502/tunnel error, fall back
+        # to direct egress so vulnerability intelligence remains reliable.
+        direct_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=SSL_CTX),
+        )
+        try:
+            with direct_opener.open(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", errors="replace"))
+        except Exception:
+            raise first_err
 
 TOOLS = [
     {
@@ -383,14 +397,30 @@ import urllib.request
 SSL_CTX = ssl.create_default_context()
 UA = "Mozilla/5.0 (compatible; BEHEMOTH-ReconOSINT-MCP/2.3)"
 
+PASSIVE_PUBLIC_INTEL_HOSTS = {"web.archive.org", "crt.sh", "rdap.org"}
+
 def http_get(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler(),
         urllib.request.HTTPSHandler(context=SSL_CTX),
     )
-    with opener.open(req, timeout=timeout) as r:
-        return r.status, dict(r.headers), r.read().decode("utf-8", errors="replace")
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read().decode("utf-8", errors="replace")
+    except Exception as first_err:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+        if host in PASSIVE_PUBLIC_INTEL_HOSTS:
+            direct_opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=SSL_CTX),
+            )
+            try:
+                with direct_opener.open(req, timeout=timeout) as r:
+                    return r.status, dict(r.headers), r.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        raise first_err
 
 def open_tcp_via_env_proxy(host, port, timeout=10):
     """Tunnels raw TCP (e.g. TLS inspection) via HTTP CONNECT when HTTPS_PROXY/HTTP_PROXY is set so the server IP is never exposed."""
@@ -442,12 +472,14 @@ TOOLS = [
     },
     {
         "name": "wayback_cdx_endpoints",
-        "description": "Query Internet Archive Wayback Machine CDX API for historical URLs, forgotten API routes, and sensitive file paths.",
+        "description": "Query Internet Archive Wayback Machine CDX API for historical URLs, forgotten API routes, and sensitive file paths (supports bounded timeout & status filtering).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "domain": {"type": "string", "description": "Domain or host, e.g. api.example.com"},
                 "limit": {"type": "integer", "description": "Max URLs to return (default 50, max 200)"},
+                "timeout_seconds": {"type": "integer", "description": "Optional HTTP timeout in seconds (default 30, max 60)"},
+                "status_filter": {"type": "string", "description": "Optional HTTP status code filter, e.g. '200'"},
             },
             "required": ["domain"],
         },
@@ -500,13 +532,29 @@ def call_tool(name, args):
         }
 
     if name == "wayback_cdx_endpoints":
-        dom = str(args.get("domain", "")).strip()
+        dom = str(args.get("domain", "")).strip().lstrip("*.")
         lim = min(max(int(args.get("limit") or 50), 1), 200)
-        url = f"https://web.archive.org/cdx/search/cdx?url=*.{urllib.parse.quote(dom)}/*&output=json&fl=original,mimetype,statuscode&collapse=urlkey&limit={lim}"
-        _, _, raw = http_get(url, timeout=20)
-        rows = json.loads(raw)
-        items = [{"url": r[0], "mime": r[1], "status": r[2]} for r in rows[1:]] if len(rows) > 1 else []
-        return {"domain": dom, "count": len(items), "endpoints": items}
+        to = min(max(int(args.get("timeout_seconds") or 30), 10), 60)
+        st_filter = str(args.get("status_filter") or "").strip()
+        extra_filter = f"&filter=statuscode:{urllib.parse.quote(st_filter)}" if st_filter.isdigit() else ""
+        # Try exact host first when a subdomain is passed (much faster than wildcard *.domain/* on Wayback CDX),
+        # falling back between wildcard and exact host if one times out.
+        patterns = [f"{dom}/*", f"*.{dom}/*"] if dom.count(".") >= 2 else [f"*.{dom}/*", f"{dom}/*"]
+        last_err = None
+        for pat in patterns:
+            url = (
+                f"https://web.archive.org/cdx/search/cdx?url={urllib.parse.quote(pat)}"
+                f"&output=json&fl=original,mimetype,statuscode&collapse=urlkey&fastLatest=true&limit={lim}{extra_filter}"
+            )
+            try:
+                _, _, raw = http_get(url, timeout=to)
+                rows = json.loads(raw) if raw.strip() else []
+                items = [{"url": r[0], "mime": r[1], "status": r[2]} for r in rows[1:]] if len(rows) > 1 else []
+                return {"domain": dom, "pattern": pat, "count": len(items), "endpoints": items}
+            except Exception as e:
+                last_err = e
+                continue
+        raise RuntimeError(f"Wayback CDX lookup timed out/failed for {dom}: {last_err}")
 
     if name == "tls_certificate_inspect":
         host = str(args.get("host", "")).strip()

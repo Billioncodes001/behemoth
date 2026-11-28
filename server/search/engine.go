@@ -195,15 +195,21 @@ func SetProxyProvider(fn func() string) {
 	proxyProviderFn.Store(fn)
 }
 
-// isLocalSearchHost reports whether host is a loopback or internal Compose service
-// that must never be routed through an external outbound proxy / Tor exit.
+// isDirectAPIHost reports whether host is a local service OR a commercial
+// API-key search provider (Tavily, Brave, Firecrawl) that never touches the
+// pentest target and should not be broken by flaky free scraped proxies.
 func isLocalSearchHost(rawHost string) bool {
 	h := strings.ToLower(strings.TrimSpace(rawHost))
 	if idx := strings.LastIndex(h, ":"); idx != -1 && !strings.HasPrefix(h, "[") {
 		h = h[:idx]
 	}
 	h = strings.Trim(h, "[]")
-	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.") || h == "searxng"
+	switch h {
+	case "localhost", "127.0.0.1", "::1", "searxng",
+		"api.tavily.com", "api.search.brave.com", "api.firecrawl.dev":
+		return true
+	}
+	return strings.HasPrefix(h, "127.")
 }
 
 // httpClient is a shared HTTP client for search requests.

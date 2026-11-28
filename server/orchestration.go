@@ -816,6 +816,11 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	s.seedAutoTaskDelegationV2()
 	s.reconcileBountyTaskScopeIsolation()
+	// Always reconcile built-in browser MCP CLI flags on startup so invalid/stale
+	// proxy flags (e.g. --proxy-bypass-list) are repaired immediately on existing DBs.
+	if s.m != nil {
+		s.m.syncBrowserMCPProxy()
+	}
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。

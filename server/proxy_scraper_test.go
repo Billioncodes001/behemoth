@@ -137,4 +137,26 @@ func TestSelectBalancedCandidateBatchPreventsSOCKS5StarvationAndPrefersUSHTTP(t 
 	if verified[0].Country != "US" || verified[0].Protocol != "http" {
 		t.Fatalf("expected US HTTP proxy ranked #1, got %+v", verified[0])
 	}
+
+	// Verify default config polls BOTH http and socks5 (with http ranked first)
+	defCfg := defaultProxyScraperConfig()
+	if len(defCfg.Protocols) != 2 || defCfg.Protocols[0] != "http" || defCfg.Protocols[1] != "socks5" {
+		t.Fatalf("expected default protocols [http socks5], got %v", defCfg.Protocols)
+	}
+
+	// Verify RoundProxies JSON shape (data[].ip + string port + protocols[] array) parses cleanly
+	roundJSON := `{"data":[{"ip":"198.51.100.44","port":"10806","protocols":["socks5"],"anonymityLevel":"elite","country":"US"},{"ip":"203.0.113.21","port":8080,"protocols":["http","https"],"anonymityLevel":"anonymous","country":"FI"}]}`
+	allowedBoth := map[string]bool{"http": true, "socks5": true}
+	rpCands := extractProxiesFromBodyWithHint(roundJSON, "http", "", "roundproxies-api", true, allowedBoth)
+	if len(rpCands) != 2 || rpCands[0].Protocol != "socks5" || rpCands[0].Port != 10806 || rpCands[1].Protocol != "http" {
+		t.Fatalf("expected 2 parsed RoundProxies candidates (socks5:10806 + http:8080), got %+v", rpCands)
+	}
+
+	// Verify rawGitHubToJSDelivr mirrors both branch and refs/heads forms
+	if got := rawGitHubToJSDelivr("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt"); got != "https://cdn.jsdelivr.net/gh/monosans/proxy-list@main/proxies/socks5.txt" {
+		t.Fatalf("unexpected jsDelivr mirror URL: %q", got)
+	}
+	if got := rawGitHubToJSDelivr("https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/socks5.txt"); got != "https://cdn.jsdelivr.net/gh/TheSpeedX/PROXY-List@master/socks5.txt" {
+		t.Fatalf("unexpected refs/heads jsDelivr mirror URL: %q", got)
+	}
 }

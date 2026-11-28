@@ -65,6 +65,7 @@ type ProxyScrapeSource struct {
 	Enabled        bool   `json:"enabled"`
 	LastCandidates int    `json:"last_candidates"`
 	LastVerified   int    `json:"last_verified"`
+	LastHTTPStatus int    `json:"last_http_status,omitempty"`
 	LastError      string `json:"last_error,omitempty"`
 	LastPolledAt   string `json:"last_polled_at,omitempty"`
 }
@@ -304,7 +305,7 @@ func defaultProxyScraperConfig() ProxyScraperConfig {
 		IntervalMinutes: defaultScrapeIntervalMinutes,
 		MaxProxies:      defaultScrapeMaxProxies,
 		MaxLatencyMS:    defaultScrapeMaxLatencyMS,
-		Protocols:       []string{"http"},
+		Protocols:       []string{"http", "socks5"},
 		CountryMode:     "us_preferred",
 	}
 }
@@ -363,17 +364,20 @@ func (s *Server) loadProxyScraperConfig() ProxyScraperConfig {
 	if s != nil && s.m != nil && s.m.pg != nil {
 		if raw, ok, _ := s.m.pg.GetSetting(settingProxyScraperConfig); ok && strings.TrimSpace(raw) != "" {
 			_ = json.Unmarshal([]byte(raw), &cfg)
-			// One-time seamless migration from legacy SOCKS5-first config to HTTP-first + US-preferred
-			if mig, _, _ := s.m.pg.GetSetting(settingProxyScraperV2Migrated); mig != "true" {
-				cfg.Protocols = []string{"http"}
+			// One-time seamless migration to HTTP-first + SOCKS5 enabled (75% HTTP / 25% SOCKS5) + US-preferred
+			const v3Flag = "proxy_scraper_v3_http_and_socks5"
+			if mig, _, _ := s.m.pg.GetSetting(v3Flag); mig != "true" {
+				cfg.Protocols = []string{"http", "socks5"}
 				if cfg.CountryMode == "" {
 					cfg.CountryMode = "us_preferred"
 				}
 				_ = s.m.pg.SetSetting(settingProxyScraperV2Migrated, "true")
+				_ = s.m.pg.SetSetting(v3Flag, "true")
 				_ = s.saveProxyScraperConfig(cfg)
 			}
 		} else {
 			_ = s.m.pg.SetSetting(settingProxyScraperV2Migrated, "true")
+			_ = s.m.pg.SetSetting("proxy_scraper_v3_http_and_socks5", "true")
 		}
 	}
 	return normalizeScraperConfig(cfg)
@@ -418,6 +422,7 @@ func (s *Server) loadAllProxyScrapeSources() []ProxyScrapeSource {
 		if st, ok := scraperRT.sourceStats[src.ID]; ok {
 			src.LastCandidates = st.LastCandidates
 			src.LastVerified = st.LastVerified
+			src.LastHTTPStatus = st.LastHTTPStatus
 			src.LastError = st.LastError
 			src.LastPolledAt = st.LastPolledAt
 		}
@@ -1170,6 +1175,32 @@ func selectBalancedCandidateBatch(cands []rawCandidateProxy, cfg ProxyScraperCon
 	return out
 }
 
+// rawGitHubToJSDelivr converts a raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>
+// URL into its equivalent jsDelivr CDN mirror (https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>)
+// so proxy feed scraping survives transient raw.githubusercontent.com TLS/reset errors.
+func rawGitHubToJSDelivr(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(u.Hostname(), "raw.githubusercontent.com") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	owner, repo := parts[0], parts[1]
+	branch := parts[2]
+	restIdx := 3
+	// Handle refs/heads/<branch>/<path> form too
+	if branch == "refs" && len(parts) >= 6 && parts[3] == "heads" {
+		branch = parts[4]
+		restIdx = 5
+	}
+	if owner == "" || repo == "" || branch == "" || restIdx >= len(parts) {
+		return ""
+	}
+	return fmt.Sprintf("https://cdn.jsdelivr.net/gh/%s/%s@%s/%s", owner, repo, branch, strings.Join(parts[restIdx:], "/"))
+}
+
 func (s *Server) runOnlineScrapeCycle(parentCtx context.Context, manual bool) map[string]any {
 	scraperRT.mu.Lock()
 	if scraperRT.running {
@@ -1249,18 +1280,39 @@ func (s *Server) runOnlineScrapeCycle(parentCtx context.Context, manual bool) ma
 		go func() {
 			defer fwg.Done()
 			t0 := time.Now()
-			req, err := http.NewRequestWithContext(runCtx, http.MethodGet, src.URL, nil)
-			if err != nil {
-				return
+			fetchOne := func(targetURL string) ([]byte, int, error) {
+				req, rerr := http.NewRequestWithContext(runCtx, http.MethodGet, targetURL, nil)
+				if rerr != nil {
+					return nil, 0, rerr
+				}
+				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
+				req.Header.Set("Accept", "text/html,application/json,text/plain,*/*")
+				resp, derr := fetchClient.Do(req)
+				if derr != nil {
+					return nil, 0, derr
+				}
+				bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+				status := resp.StatusCode
+				_ = resp.Body.Close()
+				return bodyBytes, status, nil
 			}
-			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-			req.Header.Set("Accept", "text/html,application/json,text/plain,*/*")
-			resp, err := fetchClient.Do(req)
+
+			bodyBytes, statusCode, err := fetchOne(src.URL)
+			usedMirror := false
+			if (err != nil || statusCode != http.StatusOK) && strings.Contains(strings.ToLower(src.URL), "raw.githubusercontent.com") {
+				if mirrorURL := rawGitHubToJSDelivr(src.URL); mirrorURL != "" {
+					if mBytes, mStatus, mErr := fetchOne(mirrorURL); mErr == nil && mStatus == http.StatusOK {
+						bodyBytes, statusCode, err = mBytes, mStatus, nil
+						usedMirror = true
+					}
+				}
+			}
 			nowStr := time.Now().UTC().Format(time.RFC3339)
 			if err != nil {
 				scraperRT.mu.Lock()
 				st := scraperRT.sourceStats[src.ID]
 				st.ID = src.ID
+				st.LastHTTPStatus = statusCode
 				st.LastError = firstLine(err.Error(), 120)
 				st.LastPolledAt = nowStr
 				scraperRT.sourceStats[src.ID] = st
@@ -1268,17 +1320,16 @@ func (s *Server) runOnlineScrapeCycle(parentCtx context.Context, manual bool) ma
 				appendScraperLog("warn", fmt.Sprintf("[SOURCE] %s failed: %s", src.Name, firstLine(err.Error(), 90)))
 				return
 			}
-			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
+			if statusCode != http.StatusOK {
 				scraperRT.mu.Lock()
 				st := scraperRT.sourceStats[src.ID]
 				st.ID = src.ID
-				st.LastError = fmt.Sprintf("HTTP %d", resp.StatusCode)
+				st.LastHTTPStatus = statusCode
+				st.LastError = fmt.Sprintf("HTTP %d", statusCode)
 				st.LastPolledAt = nowStr
 				scraperRT.sourceStats[src.ID] = st
 				scraperRT.mu.Unlock()
-				appendScraperLog("warn", fmt.Sprintf("[SOURCE] %s returned HTTP %d", src.Name, resp.StatusCode))
+				appendScraperLog("warn", fmt.Sprintf("[SOURCE] %s returned HTTP %d", src.Name, statusCode))
 				return
 			}
 
@@ -1299,12 +1350,17 @@ func (s *Server) runOnlineScrapeCycle(parentCtx context.Context, manual bool) ma
 			st := scraperRT.sourceStats[src.ID]
 			st.ID = src.ID
 			st.LastCandidates = len(extracted)
+			st.LastHTTPStatus = statusCode
 			st.LastError = ""
 			st.LastPolledAt = nowStr
 			scraperRT.sourceStats[src.ID] = st
 			scraperRT.mu.Unlock()
 
-			appendScraperLog("source", fmt.Sprintf("[SOURCE] %s -> %d proxy candidates (%dms)", src.Name, len(extracted), time.Since(t0).Milliseconds()))
+			mirrorTag := ""
+			if usedMirror {
+				mirrorTag = " [via jsDelivr CDN]"
+			}
+			appendScraperLog("source", fmt.Sprintf("[SOURCE] %s%s -> %d proxy candidates (%dms)", src.Name, mirrorTag, len(extracted), time.Since(t0).Milliseconds()))
 
 			candMu.Lock()
 			allRawCands = append(allRawCands, extracted...)

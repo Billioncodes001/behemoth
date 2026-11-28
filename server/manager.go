@@ -1144,7 +1144,9 @@ func (m *Manager) syncBrowserMCPProxy() {
 	}
 	delete(env, "NODE_EXTRA_CA_CERTS")
 	if proxy != "" {
-		args = append(args, "--proxy-server", proxy, "--proxy-bypass-list", "<-loopback>;127.0.0.1;localhost;::1")
+		// @playwright/mcp accepts --proxy-bypass (comma-separated domains), NOT Chromium's
+		// --proxy-bypass-list (which causes @playwright/mcp to exit immediately with unknown option).
+		args = append(args, "--proxy-server", proxy, "--proxy-bypass", "127.0.0.1,localhost,::1")
 		if cert != "" {
 			env["NODE_EXTRA_CA_CERTS"] = cert
 		}
@@ -1220,18 +1222,18 @@ func ensureBrowserMCPArgs(args []string, screenshotEnabled bool) []string {
 	return out
 }
 
-// stripProxyArgs removes any --proxy-server/--proxy-bypass flags (both "--flag val"
-// and "--flag=val" forms) so they can be re-added cleanly from current state,
-// without mutating the input slice.
+// stripProxyArgs removes any --proxy-server/--proxy-bypass/--proxy-bypass-list flags
+// (both "--flag val" and "--flag=val" forms) so they can be re-added cleanly from
+// current state, without mutating the input slice.
 func stripProxyArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--proxy-server" || a == "--proxy-bypass" {
+		if a == "--proxy-server" || a == "--proxy-bypass" || a == "--proxy-bypass-list" {
 			i++ // skip the following value too
 			continue
 		}
-		if strings.HasPrefix(a, "--proxy-server=") || strings.HasPrefix(a, "--proxy-bypass=") {
+		if strings.HasPrefix(a, "--proxy-server=") || strings.HasPrefix(a, "--proxy-bypass=") || strings.HasPrefix(a, "--proxy-bypass-list=") {
 			continue
 		}
 		out = append(out, a)

@@ -9,7 +9,12 @@ import (
 
 func TestPatchArsenalSynergyUpdateFindingAndBrowserMCPChromiumArgs(t *testing.T) {
 	// 1. Verify ensureBrowserMCPArgs always injects --browser chromium and --ignore-https-errors
-	args := ensureBrowserMCPArgs([]string{"@playwright/mcp"}, true)
+	//    and stripProxyArgs cleans legacy invalid --proxy-bypass-list flags!
+	cleaned := stripProxyArgs([]string{"@playwright/mcp", "--proxy-server", "http://127.0.0.1:8788", "--proxy-bypass-list", "<-loopback>;127.0.0.1", "--proxy-bypass-list=localhost", "--proxy-bypass", "localhost"})
+	if strings.Contains(strings.Join(cleaned, " "), "proxy-bypass") || strings.Contains(strings.Join(cleaned, " "), "proxy-server") {
+		t.Fatalf("expected stripProxyArgs to strip all proxy flags including --proxy-bypass-list, got: %v", cleaned)
+	}
+	args := ensureBrowserMCPArgs(cleaned, true)
 	joinedArgs := strings.Join(args, " ")
 	for _, want := range []string{"--headless", "--no-sandbox", "--browser chromium", "--ignore-https-errors", "--isolated"} {
 		if !strings.Contains(joinedArgs, want) {
