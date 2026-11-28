@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 
 import { ProfileRetryFields, RetryPolicyPanel, ZERO_OVERRIDE } from "./_components/retry";
 import { LLM_PRESETS, type LLMModelOption, type LLMProviderPreset } from "./_components/presets";
+import { ColabG4Card } from "./_components/colab-g4-card";
 
 const NONE = "none";
 
@@ -1181,7 +1182,7 @@ export default function LLMPage() {
           <TabsTrigger value="retry">{ui("screen.939dba970cbff9")}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="profiles" className="mt-4">
+        <TabsContent value="profiles" className="mt-4 space-y-6">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {profiles.map((p) => {
               const h = healthOf(p, health.get(p.id), ui);
@@ -1314,6 +1315,10 @@ export default function LLMPage() {
               </div>
             )}
           </div>
+
+          <Separator />
+
+          <ColabG4Card onProfileReady={() => void load()} />
         </TabsContent>
 
         <TabsContent value="retry" className="mt-4">

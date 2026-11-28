@@ -1747,6 +1747,42 @@ export const api = {
       session_header_key,
     }),
   llmProfiles: () => get<{ profiles: LLMProfile[] }>("/llm/profiles").then((r) => arr(r.profiles)),
+  colabG4Status: (probe = false) =>
+    get<{
+      cli_installed: boolean;
+      cli_path?: string;
+      scripts_installed: boolean;
+      authenticated: boolean;
+      google_email?: string;
+      usage_summary?: string;
+      sessions_summary?: string;
+      auth_in_progress: boolean;
+      auth_url?: string;
+      auth_error?: string;
+      state: "idle" | "installing" | "starting" | "running" | "stopping" | "error";
+      phase: string;
+      tier: string;
+      ctx_size: number;
+      port: number;
+      endpoint_url: string;
+      model_name: string;
+      tunnel_healthy: boolean;
+      profile_id?: number;
+      last_error?: string;
+      logs: { timestamp: string; level: string; message: string }[];
+    }>(`/llm/colab-g4/status${probe ? "?probe=1" : ""}`),
+  colabG4Setup: () => post<Record<string, unknown>>("/llm/colab-g4/setup", {}),
+  colabG4AuthStart: () =>
+    post<{ auth_url?: string; already_authenticated?: boolean; status?: Record<string, unknown> }>(
+      "/llm/colab-g4/auth/start",
+      {},
+    ),
+  colabG4AuthComplete: (code: string) => post<Record<string, unknown>>("/llm/colab-g4/auth/complete", { code }),
+  colabG4AuthLogout: () => post<Record<string, unknown>>("/llm/colab-g4/auth/logout", {}),
+  colabG4Start: (input: { tier: string; ctx_size: number; port?: number; auto_activate?: boolean }) =>
+    post<Record<string, unknown>>("/llm/colab-g4/start", input),
+  colabG4Stop: () => post<Record<string, unknown>>("/llm/colab-g4/stop", {}),
+  colabG4Reconnect: () => post<Record<string, unknown>>("/llm/colab-g4/reconnect", {}),
   saveLLMProfile: (p: {
     id?: number; // omit/0 = create; set = update that profile
     name: string;
