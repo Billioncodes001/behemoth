@@ -1,7 +1,9 @@
 "use client";
 import * as React from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
-import { ArrowUpIcon, BotIcon, HistoryIcon, Loader2Icon, PlusIcon, SquareIcon, Trash2Icon, XIcon } from "lucide-react";
+import { ArrowUpIcon, BotIcon, ExternalLinkIcon, HistoryIcon, Loader2Icon, PlusIcon, SquareIcon, Trash2Icon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { MentionTextarea } from "@/components/mention-textarea";
@@ -22,6 +24,7 @@ function mergeActivities(oldItems: Activity[], incoming: Activity[]) {
 export function FindingAutoChat({
   findingId,
   findingTitle,
+  taskId,
   agentKey = "auto",
   agentLabel = "Auto Agent",
   promptPlaceholder,
@@ -32,6 +35,7 @@ export function FindingAutoChat({
 }: {
   findingId: string;
   findingTitle: string;
+  taskId?: string;
   agentKey?: string;
   agentLabel?: string;
   promptPlaceholder?: string;
@@ -41,6 +45,12 @@ export function FindingAutoChat({
   onOpenChange: (open: boolean) => void;
 }) {
   const { ui, liveUI } = useUITranslation();
+  const router = useRouter();
+  // When a Finding belongs to a Task and the operator opens "Ask Auto Agent",
+  // route questions & exploitation requests directly into that Task's Main Agent
+  // session (so Planner + Parallel Workers execute under the same Task rather than
+  // creating orphaned /chat threads).
+  const routeToTaskMain = Boolean(taskId && agentKey === "auto");
 
   promptPlaceholder ??= ui("screen.5ff84ba72427fe");
 
@@ -79,7 +89,7 @@ export function FindingAutoChat({
   }, [agentKey, findingId, safeTitle, storageKey, liveUI]);
 
   React.useEffect(() => {
-    if (!open || conversation || manualEmpty) return;
+    if (!open || routeToTaskMain || conversation || manualEmpty) return;
     if (initialConversationId && initialConversationId > 0) {
       setConversation({
         id: initialConversationId,
@@ -192,7 +202,25 @@ export function FindingAutoChat({
 
   const send = async () => {
     const question = input.trim();
-    if (!conversation || !question || sending || running) return;
+    if (!question || sending || running) return;
+    if (routeToTaskMain && taskId) {
+      setSending(true);
+      setInput("");
+      const message = `@[finding#${findingId} ${safeTitle}] ${question}`;
+      try {
+        await api.chat(message, taskId);
+        toast.success(`Sent to Task #${taskId} Main Agent`);
+        onOpenChange(false);
+        router.push(`/function/tasks/detail?id=${encodeURIComponent(taskId)}&tab=sessions`);
+      } catch (error) {
+        setInput(question);
+        toast.error(ui("screen.21e2615f9d508d", { v0: (error as Error).message }));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    if (!conversation) return;
     setSending(true);
     setInput("");
     const firstQuestion = !messages.some((item) => item.kind === "user");
@@ -364,7 +392,23 @@ export function FindingAutoChat({
           className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3"
         >
           <div className="w-full min-w-0 max-w-full">
-            {loading ? (
+            {routeToTaskMain && taskId ? (
+              <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                <p className="text-sm font-medium text-foreground">
+                  Connected to Task #{taskId} · Main Agent &amp; Parallel Workers
+                </p>
+                <p className="max-w-sm text-xs text-muted-foreground">
+                  Your message about <strong>Finding #{findingId}</strong> will be dispatched directly into Task #
+                  {taskId}&apos;s Main Agent session so the Planner and Parallel Workers stay organized inside this Task.
+                </p>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href={`/function/tasks/detail?id=${encodeURIComponent(taskId)}&tab=sessions`}>
+                    <ExternalLinkIcon className="mr-1.5 size-3.5" />
+                    Open Task #{taskId} Sessions
+                  </Link>
+                </Button>
+              </div>
+            ) : loading ? (
               <div className="flex items-center justify-center py-10 text-muted-foreground text-sm">
                 <Loader2Icon className="mr-2 size-4 animate-spin" /> {ui("screen.7b74301cba38e3")}
               </div>
@@ -389,7 +433,7 @@ export function FindingAutoChat({
               value={input}
               inputGroup
               onValueChange={setInput}
-              disabled={!conversation || loading || sending || running}
+              disabled={(!routeToTaskMain && !conversation) || loading || sending || running}
               placeholder={promptPlaceholder}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

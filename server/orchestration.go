@@ -326,7 +326,8 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 	return wrTool("spawn_task",
 		"Create a new subtask, start the exploration engine, and return task_id. Used to dispatch a specific target or objective as an independent task. parent_ref is optional: pass the parent task ID for parent-child linking.",
 		objSchema(map[string]any{
-			"description":            strParam("Task description (short title)"),
+			"name":                   strParam("Short display title for the Task (3-8 words, e.g. 'INEC Nigeria · Deep Exploitation' or 'Pentest · portal.example.com')"),
+			"description":            strParam("Task description (concise mission summary)"),
 			"goal":                   strParam("Task goal (what to achieve)"),
 			"parent_ref":             strParam("Optional: parent task id (for parent-child linking)"),
 			"source_task_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": fmt.Sprintf("Optional: list of read-only inherited source task IDs (max %d). The subtask can reference assets/conclusions already discovered by those tasks as a starting point; unlike parent_ref, this inherits content.", db.MaxTaskSourceCount)},
@@ -341,6 +342,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 		}, "description", "goal"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
+				Name                 string          `json:"name"`
 				Description          string          `json:"description"`
 				Goal                 string          `json:"goal"`
 				ParentRef            string          `json:"parent_ref"`
@@ -426,9 +428,9 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			if pin != nil {
 				llmIDs = []int64{*pin}
 			}
-			name := ""
+			name := strings.TrimSpace(a.Name)
 			autoTitleEnabled := s.m.pg.GetBool(db.SettingTaskAutoTitle, false)
-			if autoTitleEnabled {
+			if name == "" && autoTitleEnabled {
 				if err := ctx.Err(); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
@@ -453,10 +455,8 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 					log.Printf("[auto-title] task provider unavailable for active profile %d", active.ID)
 				}
 			}
-			if autoTitleEnabled {
-				if err := ctx.Err(); err != nil {
-					return actool.Errorf(err.Error()), nil
-				}
+			if name == "" {
+				name = agent.DeriveFallbackTitle(a.Description, a.Goal)
 			}
 			t, err := s.m.CreateTaskWithOptions(a.Description, a.Goal, db.TaskCreateOptions{
 				Name:            name,
@@ -816,6 +816,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.seedRecommendedPlatformDefaultsAndMCPsV1()
 	s.seedAutoTaskDelegationV2()
 	s.reconcileBountyTaskScopeIsolation()
+	s.backfillUntitledTaskNamesV1()
 	// Always reconcile built-in browser MCP CLI flags on startup so invalid/stale
 	// proxy flags (e.g. --proxy-bypass-list) are repaired immediately on existing DBs.
 	if s.m != nil {
@@ -1776,19 +1777,60 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 	s.reconcileExistingSkillMisses()
 }
 
-// seedAutoTaskDelegationV2 upgrades the default Auto Super-Agent prompt in
+// seedAutoTaskDelegationV2 upgrades the default Auto and Main Agent prompts in
 // existing PostgreSQL databases so engagement/scan requests in /chat are
-// automatically converted into pre-filled parallel Multi-Agent Tasks with
-// live Task -> Chat callback updates instead of burning tokens solo in Chat.
+// automatically converted into named, pre-filled parallel Multi-Agent Tasks and
+// follow-up exploitation prompts in Task Main Agent dispatch Planner & Parallel
+// Workers instead of grinding solo in Bash.
 func (s *Server) seedAutoTaskDelegationV2() {
-	const flag = "auto_task_delegation_prompt_v4"
+	const flag = "auto_and_mainagent_orchestration_v5"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}
-	if a, err := s.m.pg.GetAgentByKey("auto"); err == nil && a != nil {
-		if tmpl := agent.BuiltinPromptSeeds()["auto"]; tmpl != "" {
-			if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
-				_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+	for _, key := range []string{"auto", "mainagent"} {
+		if a, err := s.m.pg.GetAgentByKey(key); err == nil && a != nil {
+			if tmpl := agent.BuiltinPromptSeeds()[key]; tmpl != "" {
+				if cur, err := s.m.pg.CurrentPrompt(a.ID); err == nil && cur != tmpl {
+					_, _ = s.m.pg.ResetPromptToDefault(a.ID, tmpl)
+				}
+			}
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+}
+
+// backfillUntitledTaskNamesV1 repairs historical tasks whose name was left empty
+// ("Untitled") or polluted by a thinking-model auto-title leak ("We need to generate..."),
+// deriving a clean display name from their description/goal.
+func (s *Server) backfillUntitledTaskNamesV1() {
+	if s == nil || s.m == nil || s.m.pg == nil {
+		return
+	}
+	const flag = "backfill_untitled_task_names_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	for _, t := range s.m.List() {
+		st := t.lifecycleSnapshot()
+		curName := strings.TrimSpace(st.Name)
+		low := strings.ToLower(curName)
+		needsFix := curName == "" || strings.EqualFold(curName, "untitled") ||
+			strings.HasPrefix(low, "we need to generate") ||
+			strings.HasPrefix(low, "i need to generate") ||
+			strings.HasPrefix(low, "thinking process")
+		if !needsFix {
+			continue
+		}
+		derived := agent.DeriveFallbackTitle(t.Description, t.Goal)
+		if derived == "" {
+			continue
+		}
+		if tid, err := strconv.ParseInt(t.ID, 10, 64); err == nil && tid > 0 {
+			if _, err := s.m.pg.Exec(`UPDATE tasks SET name = $2 WHERE id = $1`, tid, derived); err == nil {
+				t.updateLifecycle(func(ls *taskLifecycleState) {
+					ls.Name = derived
+				})
+				log.Printf("[tasks] Backfilled clean title for Task #%d: %q", tid, derived)
 			}
 		}
 	}

@@ -57,4 +57,10 @@ func TestGenerateAutoTitleProviderError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected provider error")
 	}
+	if _, err := GenerateAutoTitle(t.Context(), &autoTitleProvider{reply: "We need to generate a concise single-line title"}, "Scan portal"); err == nil {
+		t.Fatal("expected reasoning-leak auto-title to be rejected")
+	}
+	if got := DeriveFallbackTitle("Deep exploitation · INEC Nigeria election systems — push to admin/DB access", "goal"); got == "" || got == "Untitled" || len([]rune(got)) > 64 {
+		t.Fatalf("unexpected fallback title: %q", got)
+	}
 }

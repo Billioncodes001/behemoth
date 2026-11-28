@@ -75,6 +75,25 @@ func shouldAutoDelegateToTask(agentKey string, boundTools map[string]bool, promp
 	return isLiveTargetScanPrompt("auto", clean)
 }
 
+func shouldMainAgentDelegateToWorkers(agentKey string, boundTools map[string]bool, prompt string) bool {
+	if !strings.EqualFold(strings.TrimSpace(agentKey), "mainagent") {
+		return false
+	}
+	if boundTools != nil && !boundTools["set_goals"] && !boundTools["add_intent"] && !boundTools["add_hint"] {
+		return false
+	}
+	clean := stripSystemReminders(prompt)
+	if clean == "" || reReadOnlyQuestionPrompt.MatchString(clean) || reExplicitDirectChatOnlyPrompt.MatchString(clean) {
+		return false
+	}
+	return reActiveTaskPrompt.MatchString(clean) ||
+		strings.Contains(strings.ToLower(clean), "gain access") ||
+		strings.Contains(strings.ToLower(clean), "more access") ||
+		strings.Contains(strings.ToLower(clean), "admin access") ||
+		strings.Contains(strings.ToLower(clean), "continue pentest") ||
+		strings.Contains(strings.ToLower(clean), "exploit")
+}
+
 func IsPrematureActionTurn(messages []llm.Message, initialUserPrompt string) (bool, string) {
 	return IsPrematureActionTurnForAgent("", nil, messages, initialUserPrompt)
 }
@@ -390,7 +409,15 @@ func (c *continuationHooks) PreToolUse(ctx context.Context, name string, input [
 			return true, "[Task Handoff Complete] You have already dispatched this engagement to BEHEMOTH's parallel Multi-Agent Tasks engine, where Planner and concurrent Workers are now executing it simultaneously. Do NOT run duplicate solo scans in Chat — immediately conclude your Chat turn with a clear summary, a clickable `[Task #<id>](/function/tasks/detail?id=<id>)` link, and inform the user that live finding & completion updates will appear automatically in this Chat!", nil
 		}
 		if c.soloProbeAttempts.Add(1) <= 3 {
-			return true, "[Task Orchestration Guard] In default Auto Chat, target vulnerability scans and penetration tests MUST be converted into a parallel Multi-Agent Task instead of grinding sequentially in single-agent Chat. First call `list_tasks` (to avoid duplicate tasks for the same domain), optionally register scope via `add_company_scope` / `insert_assets`, pre-fill a comprehensive Task (`description` + structured `goal`), and dispatch it via `spawn_task` (or `add_task_hint` if an active task already exists for this target). Then reply to the user with the `[Task #<id>](/function/tasks/detail?id=<id>)` link!", nil
+			return true, "[Task Orchestration Guard] In default Auto Chat, target vulnerability scans and penetration tests MUST be converted into a parallel Multi-Agent Task instead of grinding sequentially in single-agent Chat. First call `list_tasks` (to avoid duplicate tasks for the same domain), optionally register scope via `add_company_scope` / `insert_assets`, pre-fill a comprehensive Task (`name` + `description` + structured `goal`), and dispatch it via `spawn_task` (or `add_task_hint` if an active task already exists for this target). Then reply to the user with the `[Task #<id>](/function/tasks/detail?id=<id>)` link!", nil
+		}
+	}
+	if shouldMainAgentDelegateToWorkers(c.agentKey, c.boundTools, c.initialUserPrompt) && isSoloTargetProbingTool(name) {
+		if c.taskDispatched.Load() {
+			return true, "[Task Resumed & Workers Dispatched] You have already registered the new goal(s)/intent(s) so this Task is now Running with Planner and Parallel Workers executing. Do NOT run duplicate solo Bash/probing scans in Main Agent — reply concisely confirming the dispatched goals/intents and let the parallel Workers execute!", nil
+		}
+		if c.soloProbeAttempts.Add(1) <= 3 {
+			return true, "[Main Agent Orchestration Guard] Do NOT grind solo in Main Agent using Bash/probing tools — you have a full Planner and Parallel Multi-Worker Pool inside this Task! Immediately call `set_goals` (which revives a Completed Task back to Running and wakes the Planner to fan out concurrent Workers) and optionally `add_intent` / `add_hint` to dispatch the exploitation tracks, then finish your Main Agent turn concisely.", nil
 		}
 	}
 	if c.inner != nil {
@@ -400,7 +427,7 @@ func (c *continuationHooks) PreToolUse(ctx context.Context, name string, input [
 }
 
 func (c *continuationHooks) PostToolUse(ctx context.Context, name string, input, result []byte, isErr bool) {
-	if !isErr && (name == "spawn_task" || name == "add_task_hint" || name == "set_task_goals") {
+	if !isErr && (name == "spawn_task" || name == "add_task_hint" || name == "set_task_goals" || name == "set_goals" || name == "add_intent" || name == "add_hint") {
 		c.taskDispatched.Store(true)
 	}
 	if c.inner != nil {

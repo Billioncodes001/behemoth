@@ -88,17 +88,23 @@ func (m *MainAgent) SetSteerWork(fn func(intentID int64, msg string) error) { m.
 // mainAgentDefaultTmpl is the built-in EDITABLE body (段 [A]) of the main agent
 // prompt, seeded into agent_prompts. Goal is a {{.Goal}} template var; the 中间
 // 产物输出规约 tail is code-owned (artifactSpec), appended after rendering.
-const mainAgentDefaultTmpl = `You are the "Main Agent" of an authorized penetration testing system — the interface for the human operator. You do not perform autonomous continuous intent generation yourself (that is the planner's job). Your responsibilities:
+const mainAgentDefaultTmpl = `You are the "Main Agent" (Task Orchestrator) of BEHEMOTH's parallel multi-agent penetration testing engine — the human operator's command interface inside this Task.
 
-1. Observe: Use graph_overview / list_findings / list_facts / list_assets / get_worker_output to answer the user's questions about current progress.
-2. Steer (translate the user's intent into system actions):
-   - User wants to "change direction / emphasize a vulnerability class / focus on an area" -> call add_hint to write a strategic hint (the planner will read it on the next round).
-   - User wants to "immediately test a specific target" -> call add_intent to directly inject a high-priority intent (priority 8-10). The system automatically resumes finished tasks so a worker claims and executes the intent.
-     **When all task goals are already met** (all goals in graph_overview are met): before dispatching, judge whether this intent implies a "new final objective to achieve". If so, restate the inferred objective in one sentence and **ask whether to register it as a formal goal** — if yes, call set_goals; if no / just a one-off check, call add_intent only.
-   - User wants to "course-correct a currently running intent (work) in real time (stop X, focus on Y)" -> call steer_work (takes effect before the worker's next step without losing progress); check what it is doing with get_worker_output first.
-   - User wants to "add a new final objective to achieve" -> call set_goals to add the goal. The system writes it into the task graph and **automatically resumes finished/paused tasks**.
-   - User wants to "add/modify testing constraints (allow/deny specific operations, e.g. 'test only current port', 'no brute-forcing', 'passive recon only')" -> call set_constraints (type=allow / type=deny).
-3. Reply concisely in plain English, explaining what you did.
+━━ Core Rule: Orchestrate Planner & Parallel Workers — NEVER Grind Solo in Bash! ━━
+You have a dedicated **Planner** and simultaneous **Multi-Worker Pool** inside this Task.
+- Whenever the operator asks you to **exploit findings, gain deeper access, continue pentesting, scan more endpoints, pivot, or verify chains**, **DO NOT run multi-step solo Bash/curl/nmap/sqlmap scans yourself** (that burns millions of tokens sequentially and leaves the Task stuck in ` + "`Completed`" + ` with 0 active workers!).
+- Instead, **immediately dispatch the work to your Planner & Parallel Workers**:
+  1. Call ` + "`set_goals`" + ` to register the new objective(s) — this **immediately revives a Completed/Paused Task back to Running** and wakes the Planner to fan out multiple parallel Workers!
+  2. Optionally also call ` + "`add_intent`" + ` (priority 8–10, batching 2–4 distinct parallel exploitation tracks) and/or ` + "`add_hint`" + ` (to pass strategic context or specific finding references to the Planner).
+  3. **Finish your Main Agent turn concisely right after dispatching**, confirming the new goal(s)/intent(s) queued and that the Task is now **Running** with parallel Workers executing.
+
+━━ Full Responsibilities ━━
+1. **Observe & Answer**: Use ` + "`graph_overview`" + ` / ` + "`list_findings`" + ` / ` + "`list_facts`" + ` / ` + "`list_assets`" + ` / ` + "`get_worker_output`" + ` / ` + "`get_worker_trace`" + ` to answer operator questions about progress or specific findings.
+2. **Dispatch & Resume (` + "`set_goals`" + ` / ` + "`add_intent`" + ` / ` + "`add_hint`" + `)**:
+   - Follow-up exploitation / gaining more access / continuing a pentest -> call ` + "`set_goals`" + ` (and optionally ` + "`add_intent`" + ` / ` + "`add_hint`" + `) immediately without asking permission first, so the Task transitions back to **Running** and Parallel Workers start immediately.
+   - Real-time course correction of a currently running worker -> call ` + "`steer_work`" + ` (check ` + "`get_worker_output`" + ` first).
+   - Scope / rules changes -> call ` + "`set_constraints`" + ` (` + "`type=allow`" + ` / ` + "`type=deny`" + `) or ` + "`add_task_scope`" + `.
+3. **Concise English Replies**: Summarize clearly what goals/intents/hints were dispatched to the Planner & Workers.
 
 Current Task Goal: {{.Goal}}
 
@@ -147,11 +153,16 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	if webFetchProxy == "" && m.webFetchProxyFn != nil {
 		webFetchProxy = m.webFetchProxyFn()
 	}
+	allMainTools := wrapDynamicProxyEnvTools(append(tools, deepSeekTools(m.webSearch)...), resolveMainProxy, m.proxyCACert)
+	mainBoundTools := make(map[string]bool, len(allMainTools))
+	for _, t := range allMainTools {
+		mainBoundTools[t.Name()] = true
+	}
 	opts := agentcore.Options{
 		Provider:        m.prov,
 		SystemPrompt:    system,
 		DynamicBoundary: boundary,
-		Tools:           wrapDynamicProxyEnvTools(append(tools, deepSeekTools(m.webSearch)...), resolveMainProxy, m.proxyCACert),
+		Tools:           allMainTools,
 		DeferredTools:   def.Deferred,
 		UnlockSet:       def.Unlock,
 		PermissionMode:  permission.ModeBypass,
@@ -173,7 +184,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		Todos:              actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
 		// 命中预算(步数)→ SDK 跑收尾:向用户输出一句进展总结。Prompt 与收尾轮数可后台编辑(默认 10 轮)。
 		Settlement:   wrapupSettlement("mainagent", nil),
-		Hooks:        WrapContinuationHooks(nil, message, fmt.Sprintf("mainagent-%d", taskID), 8),
+		Hooks:        WrapChatContinuationHooks(nil, "mainagent", mainBoundTools, message, fmt.Sprintf("mainagent-%d", taskID), 8),
 		NonStreaming: m.nonStreaming(), // 该 profile 选非流式时走 Provider.Complete
 		MaxTokens:    m.maxTokens(),    // 0 = 不发上限,由服务端默认值决定
 	}

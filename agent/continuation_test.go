@@ -236,6 +236,17 @@ func TestAutoDelegatesScanToTaskAndSoloPentestRunsExploitationLoop(t *testing.T)
 		t.Fatalf("expected multi-finding website pentest continuation in Auto to enforce Task delegation, got blocked=%v reason=%q", blocked, reason)
 	}
 
+	// MainAgent follow-up inside a Task ("exploit the new findings to gain more access") MUST delegate to Planner & Workers via set_goals/add_intent/add_hint instead of solo Bash!
+	mainBound := map[string]bool{"Bash": true, "set_goals": true, "add_intent": true, "add_hint": true}
+	mainHooks := WrapChatContinuationHooks(nil, "mainagent", mainBound, "Exploit the new findings to gain more access", "mainagent-10", 4)
+	if blocked, reason, _ := mainHooks.PreToolUse(context.Background(), "Bash", []byte(`{"command":"curl -sS https://target"}`)); !blocked || !strings.Contains(reason, "Main Agent Orchestration Guard") {
+		t.Fatalf("expected MainAgent PreToolUse to block solo Bash before set_goals/add_intent, got blocked=%v reason=%q", blocked, reason)
+	}
+	mainHooks.PostToolUse(context.Background(), "set_goals", []byte(`{}`), []byte(`{"ids":[9]}`), false)
+	if blocked, reason, _ := mainHooks.PreToolUse(context.Background(), "Bash", []byte(`{"command":"curl -sS https://target"}`)); !blocked || !strings.Contains(reason, "Task Resumed & Workers Dispatched") {
+		t.Fatalf("expected MainAgent PreToolUse to prevent duplicate solo Bash after set_goals, got blocked=%v reason=%q", blocked, reason)
+	}
+
 	// --- Part B: Explicitly selected `pentest` (Solo Pentest) agent still runs full solo assessment + exploitation ---
 	t1a, t1u := toolTurn("c1", "Bash")
 	t2a, t2u := toolTurn("c2", "Bash")

@@ -549,7 +549,13 @@ function FindingDetailInner() {
           </TabsContent>
         </div>
       </Tabs>
-      <FindingAutoChat findingId={finding.id} findingTitle={title} open={autoChatOpen} onOpenChange={setAutoChatOpen} />
+      <FindingAutoChat
+        findingId={finding.id}
+        findingTitle={title}
+        taskId={finding.task_id ? String(finding.task_id) : undefined}
+        open={autoChatOpen}
+        onOpenChange={setAutoChatOpen}
+      />
       <FindingAutoChat
         findingId={finding.id}
         findingTitle={title}

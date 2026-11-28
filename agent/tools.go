@@ -1814,6 +1814,9 @@ func (t *ToolSet) addHint() actool.CoreTool {
 				case t.notify != nil:
 					t.notify()
 				}
+				if t.resumeTask != nil {
+					t.resumeTask()
+				}
 			}
 
 			if !batch { // 单条：保持原返回
