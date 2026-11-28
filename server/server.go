@@ -393,6 +393,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	search.SetProxyProvider(s.m.ActiveOutboundProxyAddr)
 	s.startLocalSearXNGSupervisor(s.ctx)
 	s.startBountyScannerLoop(s.ctx)
+	s.startColabAutoSetup()
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)

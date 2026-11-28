@@ -2,10 +2,9 @@
 
 import * as React from "react";
 import {
+  AlertTriangleIcon,
   CheckCircle2Icon,
   CloudIcon,
-  CpuIcon,
-  DownloadIcon,
   ExternalLinkIcon,
   Loader2Icon,
   LogOutIcon,
@@ -13,7 +12,6 @@ import {
   RefreshCwIcon,
   SquareIcon,
   TerminalIcon,
-  AlertTriangleIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -74,21 +72,6 @@ export function ColabG4Card({ onProfileReady }: { onProfileReady: () => void }) 
     const timer = window.setInterval(() => void refresh(false), 3000);
     return () => window.clearInterval(timer);
   }, [status?.state, status?.auth_in_progress, refresh]);
-
-  async function handleSetup() {
-    if (busy) return;
-    setBusy("setup");
-    try {
-      await api.colabG4Setup();
-      toast.success("Colab CLI and launcher scripts installed.");
-      await refresh(true);
-    } catch (e) {
-      toast.error((e as Error).message);
-      await refresh(false);
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function handleGoogleSignIn() {
     if (busy) return;
@@ -261,56 +244,12 @@ export function ColabG4Card({ onProfileReady }: { onProfileReady: () => void }) 
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-5">
-        {/* Step 1 & 2: Setup + Sign in with Google */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {/* Step 1: Dependencies */}
-          <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <CpuIcon className="size-4 text-primary" />
-                <span>1. Server Runtime & Colab CLI</span>
-              </div>
-              {status?.cli_installed && status?.scripts_installed ? (
-                <Badge
-                  variant="outline"
-                  className="border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                >
-                  <CheckCircle2Icon className="mr-1 size-3" /> Ready
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="text-muted-foreground">
-                  Not installed
-                </Badge>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Automatically installs <code className="font-mono">google-colab-cli</code> in an isolated environment and
-              downloads the <code className="font-mono">colab-g4-glm53</code> launcher scripts on your server.
-            </p>
-            <Button
-              size="sm"
-              variant={status?.cli_installed && status?.scripts_installed ? "outline" : "default"}
-              disabled={Boolean(busy) || isTransitioning}
-              onClick={() => void handleSetup()}
-            >
-              {busy === "setup" || status?.state === "installing" ? (
-                <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />
-              ) : (
-                <DownloadIcon className="mr-1.5 size-3.5" />
-              )}
-              {status?.cli_installed && status?.scripts_installed
-                ? "Re-check / Update CLI & Scripts"
-                : "Install Colab CLI & Scripts"}
-            </Button>
-          </div>
-
-          {/* Step 2: Sign in with Google */}
-          <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <span>2. Google Colab Account</span>
-              </div>
+      <CardContent className="space-y-4">
+        {/* Google Account Sign-In & Subscription Eligibility */}
+        <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              <span>Google Colab Account</span>
               {status?.authenticated ? (
                 <Badge
                   variant="outline"
@@ -324,98 +263,123 @@ export function ColabG4Card({ onProfileReady }: { onProfileReady: () => void }) 
                   Not signed in
                 </Badge>
               )}
+              {status?.authenticated && !status.has_eligible_subscription && (
+                <Badge
+                  variant="outline"
+                  className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                >
+                  <AlertTriangleIcon className="mr-1 size-3" />
+                  Subscription Required
+                </Badge>
+              )}
             </div>
 
-            {status?.authenticated ? (
-              <div className="space-y-2">
-                {status.usage_summary && (
-                  <p className="rounded bg-background/80 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
-                    {status.usage_summary}
-                  </p>
+            {status?.authenticated && (
+              <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void handleLogout()}>
+                {busy === "logout" ? (
+                  <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />
+                ) : (
+                  <LogOutIcon className="mr-1.5 size-3.5" />
                 )}
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void handleLogout()}>
-                    {busy === "logout" ? (
-                      <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />
-                    ) : (
-                      <LogOutIcon className="mr-1.5 size-3.5" />
-                    )}
-                    Sign Out / Switch Account
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Sign in with your existing Google account (requires Colab Pro / AI Pro / AI Ultra Compute Units).
-                  Clicking the button automatically installs the CLI if needed and opens Google Sign-In.
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    disabled={Boolean(busy) || isTransitioning}
-                    onClick={() => void handleGoogleSignIn()}
-                  >
-                    {busy === "auth_start" ? (
-                      <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />
-                    ) : (
-                      <ExternalLinkIcon className="mr-1.5 size-3.5" />
-                    )}
-                    Sign in with Google
-                  </Button>
-                  {status?.auth_url && (
-                    <Button size="sm" variant="outline" asChild>
-                      <a href={status.auth_url} target="_blank" rel="noopener noreferrer">
-                        Open Sign-In Link Again
-                      </a>
-                    </Button>
-                  )}
-                </div>
-
-                {(status?.auth_in_progress || status?.auth_url) && (
-                  <div className="space-y-2 rounded-md border border-primary/30 bg-background p-3">
-                    <Label htmlFor="colab-oauth-code" className="text-xs font-medium">
-                      Paste the Google authorization code (or redirect URL) from the sign-in tab:
-                    </Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="colab-oauth-code"
-                        value={authCode}
-                        onChange={(e) => setAuthCode(e.target.value)}
-                        placeholder="4/0AeaYSHB..."
-                        className="h-8 font-mono text-xs"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void handleCompleteAuth();
-                          }
-                        }}
-                      />
-                      <Button
-                        size="sm"
-                        className="h-8 shrink-0"
-                        disabled={!authCode.trim() || busy === "auth_complete"}
-                        onClick={() => void handleCompleteAuth()}
-                      >
-                        {busy === "auth_complete" && <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />}
-                        Complete Sign-In
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                {status?.auth_error && (
-                  <p className="text-xs text-destructive">{status.auth_error}</p>
-                )}
-              </div>
+                Switch Account
+              </Button>
             )}
           </div>
+
+          {status?.authenticated ? (
+            <div className="space-y-2">
+              {status.subscription_note && (
+                <div
+                  className={cn(
+                    "flex items-start gap-2 rounded-md border px-3 py-2 text-xs",
+                    status.has_eligible_subscription
+                      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                  )}
+                >
+                  {status.has_eligible_subscription ? (
+                    <CheckCircle2Icon className="mt-0.5 size-3.5 shrink-0" />
+                  ) : (
+                    <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+                  )}
+                  <span>{status.subscription_note}</span>
+                </div>
+              )}
+              {status.usage_summary && (
+                <p className="rounded bg-background/80 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+                  {status.usage_summary}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Sign in with a Google account that has an active <strong>Google AI Pro / Ultra</strong> or{" "}
+                <strong>Colab Compute Units</strong> plan (~10.05 CU/hr).
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={Boolean(busy) || isTransitioning}
+                  onClick={() => void handleGoogleSignIn()}
+                >
+                  {busy === "auth_start" ? (
+                    <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />
+                  ) : (
+                    <ExternalLinkIcon className="mr-1.5 size-3.5" />
+                  )}
+                  Sign in with Google
+                </Button>
+                {status?.auth_url && (
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={status.auth_url} target="_blank" rel="noopener noreferrer">
+                      Open Sign-In Link Again
+                    </a>
+                  </Button>
+                )}
+              </div>
+
+              {(status?.auth_in_progress || status?.auth_url) && (
+                <div className="space-y-2 rounded-md border border-primary/30 bg-background p-3">
+                  <Label htmlFor="colab-oauth-code" className="text-xs font-medium">
+                    Paste the Google authorization code from the sign-in tab:
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="colab-oauth-code"
+                      value={authCode}
+                      onChange={(e) => setAuthCode(e.target.value)}
+                      placeholder="4/0AeaYSHB..."
+                      className="h-8 font-mono text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleCompleteAuth();
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      className="h-8 shrink-0"
+                      disabled={!authCode.trim() || busy === "auth_complete"}
+                      onClick={() => void handleCompleteAuth()}
+                    >
+                      {busy === "auth_complete" && <Loader2Icon className="mr-1.5 size-3.5 animate-spin" />}
+                      Complete Sign-In
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {status?.auth_error && <p className="text-xs text-destructive">{status.auth_error}</p>}
+            </div>
+          )}
         </div>
 
-        {/* Step 3: Launch & Billing Control */}
+        {/* Launch & Manage Colab G4 GPU */}
         <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-medium">3. Launch & Manage Colab G4 GPU</span>
+            <span className="text-sm font-medium">Launch &amp; Manage Colab G4 GPU</span>
             {status?.endpoint_url && isRunning && (
               <code className="rounded bg-background px-2 py-0.5 font-mono text-xs text-emerald-600 dark:text-emerald-400">
                 {status.endpoint_url} · {status.model_name}
@@ -484,7 +448,13 @@ export function ColabG4Card({ onProfileReady }: { onProfileReady: () => void }) 
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              disabled={!status?.authenticated || isTransitioning || isRunning || Boolean(busy)}
+              disabled={
+                !status?.authenticated ||
+                !status?.has_eligible_subscription ||
+                isTransitioning ||
+                isRunning ||
+                Boolean(busy)
+              }
               onClick={() => void handleStart()}
             >
               {busy === "start" || status?.state === "starting" ? (

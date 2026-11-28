@@ -14,6 +14,12 @@ func TestColabG4ExtractOAuthCodeAndStatusAPI(t *testing.T) {
 	if got := extractOAuthCodeFromInput("https://sdk.cloud.google.com/applicationdefaultauthcode.html?code=4%2F0AeaYSHB_url_code&scope=email"); got != "4/0AeaYSHB_url_code" {
 		t.Fatalf("unexpected URL code extraction: %q", got)
 	}
+	if cu, ok := parseColabComputeUnits("Current balance: 2231.96 compute units · Usage rate: 0.00/hr"); !ok || cu < 2231 {
+		t.Fatalf("expected 2231.96 compute units parsed, got %v ok=%v", cu, ok)
+	}
+	if cu, ok := parseColabComputeUnits("Current balance: 0.00 compute units · Usage rate: 0.00/hr"); !ok || cu != 0 {
+		t.Fatalf("expected 0.00 compute units parsed, got %v ok=%v", cu, ok)
+	}
 
 	// 2. Verify GET /api/llm/colab-g4/status returns clean JSON shape
 	s, _, req := trafficEvidenceServer(t)

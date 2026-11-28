@@ -34,6 +34,8 @@ const (
 var (
 	reGoogleOAuthURL = regexp.MustCompile(`https://accounts\.google\.com/o/oauth2/[^\s"'<>]+`)
 	reEmailAddress   = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
+	reComputeBalance = regexp.MustCompile(`(?i)current\s+balance:\s*([0-9]+(?:\.[0-9]+)?)\s*compute\s+units`)
+	reG4BusyRetry    = regexp.MustCompile(`(?i)g4\s+busy\s*\(503\).*retry\s*#?(\d+)`)
 	reANSI           = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 )
 
@@ -44,13 +46,16 @@ type ColabLogEntry struct {
 }
 
 type ColabG4Status struct {
-	CLIInstalled     bool            `json:"cli_installed"`
-	CLIPath          string          `json:"cli_path,omitempty"`
-	ScriptsInstalled bool            `json:"scripts_installed"`
-	Authenticated    bool            `json:"authenticated"`
-	GoogleEmail      string          `json:"google_email,omitempty"`
-	UsageSummary     string          `json:"usage_summary,omitempty"`
-	SessionsSummary  string          `json:"sessions_summary,omitempty"`
+	CLIInstalled            bool            `json:"cli_installed"`
+	CLIPath                 string          `json:"cli_path,omitempty"`
+	ScriptsInstalled        bool            `json:"scripts_installed"`
+	Authenticated           bool            `json:"authenticated"`
+	GoogleEmail             string          `json:"google_email,omitempty"`
+	ComputeUnits            float64         `json:"compute_units"`
+	HasEligibleSubscription bool            `json:"has_eligible_subscription"`
+	SubscriptionNote        string          `json:"subscription_note,omitempty"`
+	UsageSummary            string          `json:"usage_summary,omitempty"`
+	SessionsSummary         string          `json:"sessions_summary,omitempty"`
 	AuthInProgress   bool            `json:"auth_in_progress"`
 	AuthURL          string          `json:"auth_url,omitempty"`
 	AuthError        string          `json:"auth_error,omitempty"`
@@ -86,6 +91,8 @@ type colabG4Runtime struct {
 	authURL      string
 	authError    string
 	googleEmail  string
+	computeUnits float64
+	hasCUData    bool
 	usageSummary string
 	sessionsText string
 	authDoneAt   time.Time
@@ -275,6 +282,40 @@ func firstLinesSummary(s string, maxLines int) string {
 	return strings.Join(out, " · ")
 }
 
+func parseColabComputeUnits(usageText string) (float64, bool) {
+	if m := reComputeBalance.FindStringSubmatch(usageText); len(m) >= 2 {
+		var val float64
+		if _, err := fmt.Sscanf(m[1], "%f", &val); err == nil {
+			return val, true
+		}
+	}
+	return 0, false
+}
+
+// startColabAutoSetup ensures google-colab-cli and the colab-g4-glm53 scripts are
+// provisioned automatically in the background on server startup so users never need
+// a separate manual CLI install button in the Web UI.
+func (s *Server) startColabAutoSetup() {
+	if s == nil || s.ctx == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(8 * time.Second):
+		}
+		if s.findColabCLI() != "" && s.colabScriptsReady() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Minute)
+		defer cancel()
+		if _, err := s.ensureColabDependencies(ctx); err != nil {
+			log.Printf("[colab-g4] background auto-setup deferred: %v", err)
+		}
+	}()
+}
+
 func (s *Server) colabStatusSnapshot(ctx context.Context, probeRemote bool) ColabG4Status {
 	cliPath := s.findColabCLI()
 	scriptsOK := s.colabScriptsReady()
@@ -290,6 +331,8 @@ func (s *Server) colabStatusSnapshot(ctx context.Context, probeRemote bool) Cola
 	authURL := colabRT.authURL
 	authErr := colabRT.authError
 	email := colabRT.googleEmail
+	computeUnits := colabRT.computeUnits
+	hasCUData := colabRT.hasCUData
 	usage := colabRT.usageSummary
 	sessions := colabRT.sessionsText
 	logsCopy := append([]ColabLogEntry(nil), colabRT.logs...)
@@ -310,19 +353,44 @@ func (s *Server) colabStatusSnapshot(ctx context.Context, probeRemote bool) Cola
 		if em, us, se, ok := s.probeColabAuthNonInteractive(ctx, cliPath); ok {
 			authed = true
 			email, usage, sessions = em, us, se
+			cu, cuOK := parseColabComputeUnits(us)
+			computeUnits, hasCUData = cu, cuOK
 			colabRT.mu.Lock()
 			colabRT.googleEmail = em
+			colabRT.computeUnits = cu
+			colabRT.hasCUData = cuOK
 			colabRT.usageSummary = us
 			colabRT.sessionsText = se
 			colabRT.mu.Unlock()
 		} else {
 			authed = false
 			email, usage, sessions = "", "", ""
+			computeUnits, hasCUData = 0, false
 			colabRT.mu.Lock()
 			colabRT.googleEmail = ""
+			colabRT.computeUnits = 0
+			colabRT.hasCUData = false
 			colabRT.usageSummary = ""
 			colabRT.sessionsText = ""
 			colabRT.mu.Unlock()
+		}
+	}
+
+	hasEligibleSub := false
+	subNote := ""
+	if authed {
+		if hasCUData {
+			if computeUnits >= 10.0 {
+				hasEligibleSub = true
+				subNote = fmt.Sprintf("%.2f Compute Units available (~%.1f hrs on Colab G4)", computeUnits, computeUnits/10.05)
+			} else {
+				hasEligibleSub = false
+				subNote = fmt.Sprintf("Only %.2f Compute Units available. A Google AI Pro / Ultra or Colab Compute Units subscription (~10.05 CU/hr) is required to run Colab G4.", computeUnits)
+			}
+		} else {
+			// Usage line unavailable transiently: allow user to try while noting status
+			hasEligibleSub = true
+			subNote = "Signed in (Compute Units balance will refresh automatically)."
 		}
 	}
 
@@ -343,13 +411,16 @@ func (s *Server) colabStatusSnapshot(ctx context.Context, probeRemote bool) Cola
 	}
 
 	return ColabG4Status{
-		CLIInstalled:     cliPath != "",
-		CLIPath:          cliPath,
-		ScriptsInstalled: scriptsOK,
-		Authenticated:    authed,
-		GoogleEmail:      email,
-		UsageSummary:     usage,
-		SessionsSummary:  sessions,
+		CLIInstalled:            cliPath != "",
+		CLIPath:                 cliPath,
+		ScriptsInstalled:        scriptsOK,
+		Authenticated:           authed,
+		GoogleEmail:             email,
+		ComputeUnits:            computeUnits,
+		HasEligibleSubscription: hasEligibleSub,
+		SubscriptionNote:        subNote,
+		UsageSummary:            usage,
+		SessionsSummary:         sessions,
 		AuthInProgress:   authInProg,
 		AuthURL:          authURL,
 		AuthError:        authErr,
@@ -815,6 +886,10 @@ func (s *Server) handleColabG4Start(w http.ResponseWriter, r *http.Request) {
 			low := strings.ToLower(line)
 			newPhase := ""
 			switch {
+			case reG4BusyRetry.MatchString(line):
+				if m := reG4BusyRetry.FindStringSubmatch(line); len(m) >= 2 {
+					newPhase = fmt.Sprintf("Waiting for available Colab G4 GPU slot (Google 503 busy · retry #%s)...", m[1])
+				}
 			case strings.Contains(low, "build") && strings.Contains(low, "maya"):
 				newPhase = "Building Project Maya for RTX PRO 6000 Blackwell (sm_120)..."
 			case strings.Contains(low, "download") || strings.Contains(low, "hf_hub") || strings.Contains(low, "fetching"):

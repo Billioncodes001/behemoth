@@ -1754,6 +1754,9 @@ export const api = {
       scripts_installed: boolean;
       authenticated: boolean;
       google_email?: string;
+      compute_units: number;
+      has_eligible_subscription: boolean;
+      subscription_note?: string;
       usage_summary?: string;
       sessions_summary?: string;
       auth_in_progress: boolean;
