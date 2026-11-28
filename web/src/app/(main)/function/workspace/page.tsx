@@ -19,8 +19,11 @@ import {
   Maximize2Icon,
   RefreshCwIcon,
   SaveIcon,
+  SearchIcon,
+  SparklesIcon,
   Trash2Icon,
   UploadIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -77,7 +80,43 @@ function WorkspaceInner() {
   const [mkdirName, setMkdirName] = React.useState("");
   const [sortCol, setSortCol] = React.useState<"name" | "kind" | "size" | "mtime">("mtime");
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("desc");
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [searching, setSearching] = React.useState(false);
+  const [searchResults, setSearchResults] = React.useState<(WorkspaceEntry & { parent: string })[]>([]);
+  const [searchTruncated, setSearchTruncated] = React.useState(false);
+  const [organizing, setOrganizing] = React.useState(false);
   const uploadRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchTruncated(false);
+      setSearching(false);
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      api
+        .workspaceSearch(q)
+        .then((res) => {
+          if (!alive) return;
+          setSearchResults(res.items ?? []);
+          setSearchTruncated(Boolean(res.truncated));
+        })
+        .catch(() => {
+          if (alive) setSearchResults([]);
+        })
+        .finally(() => {
+          if (alive) setSearching(false);
+        });
+    }, 260);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   const handleSortCol = (col: "name" | "kind" | "size" | "mtime") => {
     if (sortCol === col) {
@@ -244,6 +283,22 @@ function WorkspaceInner() {
       .catch((err) => toast.error(ui("screen.12a4969260f84f", { v0: (err as Error).message })));
   };
 
+  const doOrganize = async () => {
+    if (organizing) return;
+    setOrganizing(true);
+    try {
+      const rep = await api.workspaceOrganize();
+      toast.success(
+        `Workspace organized: ${rep.domains_consolidated} subdomain(s) merged, ${rep.task_files_synced} task file(s) synced, ${rep.tasks_linked} task(s) & ${rep.sessions_linked} session(s) linked, ${rep.bogus_removed} empty/bogus folder(s) cleaned.`,
+      );
+      load(path || "domains");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setOrganizing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       {/* 头部：面包屑 + 操作 */}
@@ -255,7 +310,10 @@ function WorkspaceInner() {
               {i > 0 && <span className="text-muted-foreground">/</span>}
               <button
                 type="button"
-                onClick={() => load(c.path)}
+                onClick={() => {
+                  setSearchQuery("");
+                  load(c.path);
+                }}
                 className={cn(
                   "max-w-[160px] truncate rounded px-1.5 py-0.5 hover:bg-accent",
                   i === crumbs.length - 1 ? "text-foreground font-medium" : "text-muted-foreground",
@@ -266,12 +324,48 @@ function WorkspaceInner() {
             </React.Fragment>
           ))}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-56 sm:w-64">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search files & folders..."
+              className="h-8 pr-7 pl-8 text-xs"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <XIcon className="size-3.5" />
+              </button>
+            )}
+          </div>
           {path !== "domains" && (
-            <Button variant="secondary" size="sm" onClick={() => load("domains")}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setSearchQuery("");
+                load("domains");
+              }}
+            >
               <GlobeIcon className="size-3.5" /> Domain Workspaces
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={organizing}
+            onClick={() => void doOrganize()}
+            title="Safely consolidate subdomain folders, sync task files into domains/<root>/, and clean empty bogus folders without moving active Task or Worker directories"
+          >
+            <SparklesIcon className={cn("size-3.5 text-amber-500", organizing && "animate-spin")} />
+            {organizing ? "Organizing..." : "Auto-Organize"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setMkdirOpen(true)}>
             <FolderPlusIcon /> {ui("screen.84244abc71de03")}
           </Button>
@@ -290,6 +384,99 @@ function WorkspaceInner() {
           <input ref={uploadRef} type="file" multiple className="hidden" onChange={(e) => doUpload(e.target.files)} />
         </div>
       </div>
+
+      {searchQuery.trim() ? (
+        <Card>
+          <CardContent className="p-0">
+            <div className="flex items-center justify-between border-b px-4 py-2 text-xs text-muted-foreground">
+              <span>
+                {searching
+                  ? `Searching workspace for "${searchQuery.trim()}"...`
+                  : `Found ${searchResults.length}${searchTruncated ? "+" : ""} match(es) across workspace for "${searchQuery.trim()}"`}
+              </span>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setSearchQuery("")}>
+                Clear search
+              </Button>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>File / Folder</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead className="w-24 text-right">Size</TableHead>
+                  <TableHead className="w-36">Modified</TableHead>
+                  <TableHead className="w-24 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {searchResults.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                      {searching ? "Searching..." : "No matching files or folders found."}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  searchResults.map((item) => (
+                    <TableRow key={item.path}>
+                      <TableCell>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.dir) {
+                              setSearchQuery("");
+                              load(item.path);
+                            } else {
+                              openFile(item);
+                            }
+                          }}
+                          className="flex items-center gap-2 text-left text-sm font-medium hover:underline"
+                        >
+                          {item.dir ? (
+                            <FolderIcon className="size-4 shrink-0 text-blue-500" />
+                          ) : (
+                            <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="truncate font-mono text-xs">{item.name}</span>
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery("");
+                            load(item.parent);
+                          }}
+                          className="max-w-xs truncate font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          title={item.path}
+                        >
+                          {item.parent || "/"}
+                        </button>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                        {item.dir ? "—" : fmtSize(item.size)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{fmtTime(item.mtime, ui)}</TableCell>
+                      <TableCell className="text-right">
+                        {!item.dir && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            onClick={() => void api.workspaceDownload(item.path)}
+                            title="Download"
+                          >
+                            <DownloadIcon className="size-3.5" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardContent className="p-0">

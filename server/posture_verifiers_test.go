@@ -246,9 +246,9 @@ func TestTaskDeduplicationDomainWorkspaceAndModelParser(t *testing.T) {
 	}
 
 	w2 := httptest.NewRecorder()
-	s.wsList(w2, httptest.NewRequest(http.MethodGet, "/api/workspace/list?path=domains/portal.acme-corp.example", nil))
-	if w2.Code != http.StatusOK || !strings.Contains(w2.Body.String(), "CREDENTIALS.md") || !strings.Contains(w2.Body.String(), "portal-simulation") {
-		t.Fatalf("expected CREDENTIALS.md and portal-simulation in domain workspace, got status=%d body=%s", w2.Code, w2.Body.String())
+	s.wsList(w2, httptest.NewRequest(http.MethodGet, "/api/workspace/list?path=domains/acme-corp.example", nil))
+	if w2.Code != http.StatusOK || !strings.Contains(w2.Body.String(), "CREDENTIALS.md") {
+		t.Fatalf("expected CREDENTIALS.md in consolidated root domain workspace, got status=%d body=%s", w2.Code, w2.Body.String())
 	}
 
 	// 3. Verify multi-provider model catalog parser (OpenAI, Gemini models/ prefix, Ollama)

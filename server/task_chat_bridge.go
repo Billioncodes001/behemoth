@@ -242,6 +242,14 @@ func (s *Server) syncSingleTaskChatUpdates(taskID int64) {
 	if s == nil || s.m == nil || s.m.pg == nil || taskID <= 0 {
 		return
 	}
+	// Mirror any files this Task wrote under `tasks/<id>/domains/...` into the
+	// unified `domains/<root-domain>/` folder whenever a Task finishes/updates.
+	if s.m != nil {
+		if t, ok := s.m.Task(strconv.FormatInt(taskID, 10)); ok && t != nil {
+			dom := extractPrimaryTargetDomain(t.Name + " " + t.Description + " " + t.Goal)
+			s.syncTaskDomainsToWorkspace(t.ID, dom)
+		}
+	}
 	s.syncBountyTrackerFromTaskFindings(taskID)
 
 	taskChatSyncMu.Lock()

@@ -779,6 +779,24 @@ export const api = {
 
   // ---- workspace file manager (workDir) ----
   workspaceList: (path = "") => get<WorkspaceListing>(`/workspace/list?path=${encodeURIComponent(path)}`),
+  workspaceSearch: (q: string, path = "", limit = 80) =>
+    get<{
+      query: string;
+      items: (WorkspaceListing["entries"][number] & { parent: string })[];
+      truncated: boolean;
+    }>(
+      `/workspace/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(path)}&limit=${limit}`,
+    ),
+  workspaceOrganize: () =>
+    post<{
+      ok: boolean;
+      domains_consolidated: number;
+      task_files_synced: number;
+      tasks_linked: number;
+      sessions_linked: number;
+      bogus_removed: number;
+      root_domains: string[];
+    }>(`/workspace/organize`, {}),
   workspaceRead: (path: string) => get<WorkspaceFile>(`/workspace/read?path=${encodeURIComponent(path)}`),
   workspaceWrite: (path: string, content: string) =>
     post<{ ok: boolean; path: string }>(`/workspace/write`, { path, content }),

@@ -394,6 +394,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.startLocalSearXNGSupervisor(s.ctx)
 	s.startBountyScannerLoop(s.ctx)
 	s.startColabAutoSetup()
+	s.runWorkspaceAutoOrganizeOnStartup()
 	log.Printf("[search] Search orchestrator initialized with %d engines", len(s.searchOrchestrator.GetAvailableEngines()))
 
 	// Initialize Browser Automation (Pentagi-inspired)
@@ -1258,6 +1259,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/files/preview", s.taskFilesServe)
 	mux.HandleFunc("GET /api/tasks/{id}/files/archive", s.taskFilesArchive)
 	mux.HandleFunc("GET /api/workspace/list", s.wsList)
+	mux.HandleFunc("GET /api/workspace/search", s.wsSearch)
+	mux.HandleFunc("POST /api/workspace/organize", s.wsOrganize)
 	mux.HandleFunc("GET /api/workspace/read", s.wsRead)
 	mux.HandleFunc("POST /api/workspace/write", s.wsWrite)
 	mux.HandleFunc("POST /api/workspace/mkdir", s.wsMkdir)

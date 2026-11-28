@@ -147,26 +147,22 @@ func baseDomainOf(host string) string {
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
-// extractPrimaryTargetDomain pulls a clean target domain/host (e.g. "tax-database.oirs.ng")
-// out of a prompt, task description, or conversation title.
+// extractPrimaryTargetDomain pulls a clean target domain/host (e.g. "inecnigeria.org")
+// out of a prompt, task description, or conversation title, rejecting bogus numeric
+// tokens (like "1.27m"), platform/bounty hosts, and non-domain file extensions.
 func extractPrimaryTargetDomain(text string) string {
 	if m := reURLDomainExtract.FindStringSubmatch(text); len(m) >= 2 {
 		h := strings.ToLower(strings.TrimSpace(m[1]))
 		if u, err := url.Parse("http://" + h); err == nil && u.Hostname() != "" {
 			h = u.Hostname()
 		}
-		if h != "localhost" && h != "127.0.0.1" && h != "github.com" {
+		if isValidTargetWorkspaceDomain(h) {
 			return h
 		}
 	}
 	for _, m := range reBareDomainExtract.FindAllStringSubmatch(text, 10) {
 		cand := strings.ToLower(strings.TrimSpace(m[1]))
-		parts := strings.Split(cand, ".")
-		tld := parts[len(parts)-1]
-		if len(tld) < 2 || nonDomainExts[tld] {
-			continue
-		}
-		if cand == "localhost" || strings.HasSuffix(cand, ".internal") || cand == "github.com" {
+		if strings.HasSuffix(cand, ".internal") || !isValidTargetWorkspaceDomain(cand) {
 			continue
 		}
 		return cand
@@ -174,25 +170,28 @@ func extractPrimaryTargetDomain(text string) string {
 	return ""
 }
 
-// ensureDomainWorkspaceStructure creates `<workDir>/domains/<domain>/` with standard
-// subfolders (`portal-simulation`, `evidence`) and optionally links it inside sessionDir
-// so target artifacts, CREDENTIALS.md, and simulated HTML portals are organized by domain!
+// ensureDomainWorkspaceStructure creates `<workDir>/domains/<root-domain>/`
+// (collapsing subdomains like api-prod.inecnigeria.org -> inecnigeria.org)
+// and optionally links it inside sessionDir without creating empty stub folders.
 func (s *Server) ensureDomainWorkspaceStructure(domain, sessionID string) {
 	if s == nil || s.m == nil || strings.TrimSpace(s.m.dir) == "" || domain == "" {
 		return
 	}
+	if !isValidTargetWorkspaceDomain(domain) {
+		return
+	}
+	rootDom := baseDomainOf(domain)
 	safeDom := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
 			return r
 		}
 		return -1
-	}, strings.ToLower(strings.TrimSpace(domain)))
+	}, strings.ToLower(strings.TrimSpace(rootDom)))
 	if safeDom == "" || strings.HasPrefix(safeDom, ".") {
 		return
 	}
 	domDir := filepath.Join(s.m.dir, "domains", safeDom)
-	_ = os.MkdirAll(filepath.Join(domDir, "portal-simulation"), 0o755)
-	_ = os.MkdirAll(filepath.Join(domDir, "evidence"), 0o755)
+	_ = os.MkdirAll(domDir, 0o755)
 	credPath := filepath.Join(domDir, "CREDENTIALS.md")
 	if _, err := os.Stat(credPath); os.IsNotExist(err) {
 		header := fmt.Sprintf("# Portal & Account Credentials — `%s`\n\n| Portal Login URL | Username / Email | Password / Token | Role / Access Level | Source (Created / Found) | Login Steps & Verification |\n|---|---|---|---|---|---|\n", safeDom)
