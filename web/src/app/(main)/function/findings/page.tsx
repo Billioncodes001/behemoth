@@ -13,6 +13,7 @@ import {
   FolderOpenIcon,
   GlobeIcon,
   InfoIcon,
+  PauseIcon,
   PlayIcon,
   SearchIcon,
   ShieldAlertIcon,
@@ -58,6 +59,7 @@ import type {
   FindingStats,
   FindingStatus,
   Severity,
+  Task,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -887,36 +889,120 @@ export default function FindingsPage() {
     [launchingChat, resolveTargetTaskId, router],
   );
 
+  const [allTasks, setAllTasks] = React.useState<Task[]>([]);
+  const [pausingTaskId, setPausingTaskId] = React.useState<string | null>(null);
+  const [continueModal, setContinueModal] = React.useState<{
+    website: string;
+    items: Finding[];
+    taskId?: string;
+    taskStatus?: string;
+  } | null>(null);
+  const [continueExtraPrompt, setContinueExtraPrompt] = React.useState("");
+
+  const refreshTasksList = React.useCallback(async () => {
+    try {
+      const res = await api.tasks();
+      setAllTasks(res.tasks);
+    } catch {
+      /* ignore transient task poll errors */
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshTasksList();
+    const timer = window.setInterval(() => void refreshTasksList(), 10000);
+    return () => window.clearInterval(timer);
+  }, [refreshTasksList]);
+
+  const findTaskForWebsite = React.useCallback(
+    (website: string, fallbackTaskId?: string): Task | undefined => {
+      if (fallbackTaskId) {
+        const direct = allTasks.find((t) => String(t.id) === String(fallbackTaskId));
+        if (direct) return direct;
+      }
+      if (!website || website === "Unassigned / General") return undefined;
+      const needle = website.toLowerCase();
+      const matching = allTasks.filter((t) => {
+        const hay = `${t.name || ""} ${t.description || ""} ${t.goal || ""}`.toLowerCase();
+        return hay.includes(needle);
+      });
+      const active = matching.find((t) => !["done", "failed", "timeout"].includes(t.status));
+      return active ?? matching[0];
+    },
+    [allTasks],
+  );
+
+  const pauseWebsiteTask = React.useCallback(
+    async (website: string, taskId: string) => {
+      if (pausingTaskId) return;
+      setPausingTaskId(taskId);
+      try {
+        await api.controlTask(taskId, "pause");
+        toast.success(`Paused Task #${taskId} (${website})`);
+        await refreshTasksList();
+      } catch (err) {
+        toast.error((err as Error).message);
+      } finally {
+        setPausingTaskId(null);
+      }
+    },
+    [pausingTaskId, refreshTasksList],
+  );
+
+  const openContinueWebsiteDialog = React.useCallback(
+    (website: string, siteFindings: Finding[], fallbackTaskId?: string) => {
+      const matched = findTaskForWebsite(website, fallbackTaskId);
+      setContinueExtraPrompt("");
+      setContinueModal({
+        website,
+        items: siteFindings,
+        taskId: matched?.id ?? fallbackTaskId,
+        taskStatus: matched?.status,
+      });
+    },
+    [findTaskForWebsite],
+  );
+
   const continueWebsitePentest = React.useCallback(
-    async (website: string, siteFindings: Finding[]) => {
+    async (website: string, siteFindings: Finding[], extraContext = "", preferredTaskId?: string) => {
       if (launchingChat) return;
       setLaunchingChat(`site-${website}`);
       try {
-        const taskId = await resolveTargetTaskId(website, siteFindings);
-        const topRefs = siteFindings
+        const taskId = preferredTaskId || (await resolveTargetTaskId(website, siteFindings));
+        const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        const prioritized = [...siteFindings]
           .filter((x) => x.finding_id)
+          .sort((a, b) => (sevRank[a.severity] ?? 4) - (sevRank[b.severity] ?? 4));
+        const topRefs = prioritized
           .slice(0, 12)
-          .map((x) => `- @[finding#${x.finding_id}:${x.name || x.vulnclass || "Finding"}] (${x.severity}, ${x.status})`)
+          .map((x) => `- @[finding#${x.finding_id}:${x.name || x.vulnclass || "Finding"}] (${x.severity.toUpperCase()}, ${x.status})`)
           .join("\n");
+        const trimmedExtra = extraContext.trim();
+        const extraBlock = trimmedExtra ? `\n\n### Operator Additional Focus & Instructions:\n${trimmedExtra}\n` : "";
 
         if (taskId) {
           const mainAgentPrompt =
-            `Continue comprehensive multi-agent penetration testing and post-discovery exploitation on **https://${website}**.\n\n` +
-            `Discovered findings so far on ${website}:\n${topRefs || "- None yet"}\n\n` +
-            `Immediately call \`set_goals\` (adding new open follow-up goals so this Task resumes in parallel multi-agent mode) and \`add_hint\` so the Planner fans out concurrent Workers to:\n` +
-            `1. Systematically exploit, chain, and escalate every pending/confirmed finding above (auth bypass, SQLi, XSS, SSRF, BOLA/IDOR, exposed portals, admin/DB access).\n` +
-            `2. Audit remaining uncovered subdomains, ports, APIs, and business logic.\n` +
-            `3. Update verified severities via \`update_finding\` + \`update_finding_report\`, save working PoCs to Patch Monitor via \`save_verified_exploit_to_patch_monitor\`, and store credentials/portal snapshots under \`domains/${website}/\`.`;
+            `Continue comprehensive multi-agent penetration testing and post-discovery exploitation on **https://${website}** (resuming Task #${taskId}).\n\n` +
+            `### Top-Tier Prioritized Findings (Critical & High First):\n${topRefs || "- None yet"}` +
+            extraBlock +
+            `\nImmediately call \`set_goals\` (adding new open exploitation goals so Task #${taskId} flips back to Running in parallel multi-agent mode) and \`add_intent\` / \`add_hint\` so the Planner fans out **multiple parallel Workers** (do NOT grind solo in Main Agent) to:\n` +
+            `1. Prioritize and weaponize the Critical & High findings above into deeper access (portal/admin takeover, DB extraction, auth bypass, RCE, SSRF, BOLA/IDOR chains).\n` +
+            `2. Audit remaining uncovered subdomains, ports, APIs, and business logic in parallel.\n` +
+            `3. Update escalated severities via \`update_finding\` + \`update_finding_report\`, save working PoCs to Patch Monitor via \`save_verified_exploit_to_patch_monitor\`, and store credentials/portal snapshots under \`domains/${website}/\`.`;
           await api.chat(mainAgentPrompt, taskId);
-          toast.success(`Resumed Task #${taskId} in Multi-Agent Main Console`);
+          setContinueModal(null);
+          setContinueExtraPrompt("");
+          void refreshTasksList();
+          toast.success(`Resumed Task #${taskId} with Parallel Workers`);
           router.push(`/function/tasks/detail?id=${encodeURIComponent(taskId)}&tab=sessions`);
           return;
         }
 
         const taskGoal =
           `Comprehensive multi-agent penetration testing and post-discovery exploitation on **https://${website}**.\n\n` +
-          `Previously discovered findings on ${website}:\n${topRefs || "- None yet"}\n\n` +
-          `1. Systematically exploit, chain, and prove maximum impact for every finding above.\n` +
+          `### Top-Tier Prioritized Findings (Critical & High First):\n${topRefs || "- None yet"}` +
+          extraBlock +
+          `\n1. Use parallel Workers to systematically exploit, chain, and escalate the Critical & High findings above into deeper access.\n` +
           `2. Map and test all remaining subdomains, services, APIs, and authenticated/public portals in parallel.\n` +
           `3. Update confirmed severities via \`update_finding\` + \`update_finding_report\`, save working PoCs to Patch Monitor via \`save_verified_exploit_to_patch_monitor\`, and document verified credentials/snapshots under \`domains/${website}/\`.`;
         const created = await api.createTask({
@@ -925,6 +1011,9 @@ export default function FindingsPage() {
           goal: taskGoal,
           planHeartbeatSeconds: 180,
         });
+        setContinueModal(null);
+        setContinueExtraPrompt("");
+        void refreshTasksList();
         toast.success(`Launched Multi-Agent Task #${created.id} for ${website}`);
         router.push(`/function/tasks/detail?id=${encodeURIComponent(created.id)}&tab=sessions`);
       } catch (err) {
@@ -933,7 +1022,7 @@ export default function FindingsPage() {
         setLaunchingChat(null);
       }
     },
-    [launchingChat, resolveTargetTaskId, router],
+    [launchingChat, refreshTasksList, resolveTargetTaskId, router],
   );
 
   const websiteGroups = React.useMemo(() => {
@@ -1366,41 +1455,80 @@ export default function FindingsPage() {
                               </span>
                             );
                           })}
-                          {isRealDomain && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                disabled={Boolean(launchingChat)}
-                                onClick={() => void continueWebsitePentest(wg.website, wg.items)}
-                                title={
-                                  wg.taskId
-                                    ? `Resume Task #${wg.taskId} in Multi-Agent Main Console`
-                                    : "Launch a new Multi-Agent Pentest Task for this website"
-                                }
-                              >
-                                {busySite ? (
-                                  <Spinner data-icon="inline-start" />
-                                ) : (
-                                  <PlayIcon data-icon="inline-start" className="text-emerald-500" />
-                                )}
-                                Continue Pentest
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                asChild
-                                title="Open domain credentials & portal simulations"
-                              >
-                                <Link
-                                  href={`/function/workspace?path=${encodeURIComponent(`domains/${isRealDomain && wg.hosts.length > 0 ? wg.hosts[0] : wg.website}`)}`}
-                                >
-                                  <FolderOpenIcon data-icon="inline-start" />
-                                  Workspace
-                                </Link>
-                              </Button>
-                            </>
-                          )}
+                          {isRealDomain &&
+                            (() => {
+                              const matchedTask = findTaskForWebsite(wg.website, wg.taskId);
+                              const effectiveTaskId = matchedTask?.id ?? wg.taskId;
+                              const isTaskRunning = matchedTask?.status === "running" && !matchedTask.paused;
+                              const isPausing = Boolean(effectiveTaskId && pausingTaskId === effectiveTaskId);
+                              return (
+                                <>
+                                  {isTaskRunning && effectiveTaskId ? (
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        disabled={isPausing}
+                                        onClick={() => void pauseWebsiteTask(wg.website, effectiveTaskId)}
+                                        title={`Pause running Multi-Agent Task #${effectiveTaskId}`}
+                                      >
+                                        {isPausing ? (
+                                          <Spinner data-icon="inline-start" />
+                                        ) : (
+                                          <PauseIcon data-icon="inline-start" className="text-amber-500" />
+                                        )}
+                                        Pause Pentest
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        asChild
+                                        title={`Open live Task #${effectiveTaskId} Sessions`}
+                                      >
+                                        <Link
+                                          href={`/function/tasks/detail?id=${encodeURIComponent(effectiveTaskId)}&tab=sessions`}
+                                        >
+                                          <span className="mr-1.5 inline-block size-2 animate-pulse rounded-full bg-emerald-500" />
+                                          Task #{effectiveTaskId}
+                                        </Link>
+                                      </Button>
+                                    </>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={Boolean(launchingChat)}
+                                      onClick={() => openContinueWebsiteDialog(wg.website, wg.items, effectiveTaskId)}
+                                      title={
+                                        effectiveTaskId
+                                          ? `Resume Task #${effectiveTaskId} with Parallel Workers`
+                                          : "Launch a new Multi-Agent Pentest Task for this website"
+                                      }
+                                    >
+                                      {busySite ? (
+                                        <Spinner data-icon="inline-start" />
+                                      ) : (
+                                        <PlayIcon data-icon="inline-start" className="text-emerald-500" />
+                                      )}
+                                      Continue Pentest
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    asChild
+                                    title="Open domain credentials & portal simulations"
+                                  >
+                                    <Link
+                                      href={`/function/workspace?path=${encodeURIComponent(`domains/${isRealDomain && wg.hosts.length > 0 ? wg.hosts[0] : wg.website}`)}`}
+                                    >
+                                      <FolderOpenIcon data-icon="inline-start" />
+                                      Workspace
+                                    </Link>
+                                  </Button>
+                                </>
+                              );
+                            })()}
                           {wg.taskId && (
                             <Button
                               size="sm"
@@ -1697,6 +1825,103 @@ export default function FindingsPage() {
             <Button onClick={submitDeepen} disabled={deepening || !deepenDescription.trim()}>
               {deepening && <Spinner data-icon="inline-start" />}
               {ui("screen.41337e581d41d9")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(continueModal)}
+        onOpenChange={(open) => {
+          if (!open && !launchingChat) {
+            setContinueModal(null);
+            setContinueExtraPrompt("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlayIcon className="size-4 text-emerald-500" />
+              Continue Multi-Agent Pentest · {continueModal?.website}
+            </DialogTitle>
+            <DialogDescription>
+              {continueModal?.taskId
+                ? `Resumes existing Task #${continueModal.taskId} (${continueModal.taskStatus || "completed"}) and dispatches Planner + Parallel Workers using your top Critical & High findings.`
+                : `Creates a new Multi-Agent Task for ${continueModal?.website} with Planner + Parallel Workers using your top Critical & High findings.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {continueModal && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Prioritized Findings Fed to Parallel Workers
+                </span>
+                <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border bg-muted/30 p-2 text-xs">
+                  {[...continueModal.items]
+                    .filter((x) => x.finding_id)
+                    .sort((a, b) => {
+                      const rank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+                      return (rank[a.severity] ?? 4) - (rank[b.severity] ?? 4);
+                    })
+                    .slice(0, 6)
+                    .map((item) => (
+                      <div key={item.finding_id} className="flex items-center gap-2">
+                        <StatusBadge domain="severity" value={item.severity} dot />
+                        <span className="truncate font-medium">
+                          #{item.finding_id} {item.name || item.vulnclass}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="continue-pentest-extra">Additional Instructions / Focus (Optional)</FieldLabel>
+                  <Textarea
+                    id="continue-pentest-extra"
+                    rows={3}
+                    value={continueExtraPrompt}
+                    onChange={(e) => setContinueExtraPrompt(e.target.value)}
+                    placeholder="Optional: e.g. Focus on gaining admin portal access, chain the top Critical findings into DB extraction, or target a specific subdomain..."
+                    disabled={Boolean(launchingChat)}
+                  />
+                  <FieldDescription>
+                    Leave blank to automatically prioritize exploiting your Critical &amp; High findings with parallel
+                    Workers.
+                  </FieldDescription>
+                </Field>
+              </FieldGroup>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={Boolean(launchingChat)}
+              onClick={() => {
+                setContinueModal(null);
+                setContinueExtraPrompt("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!continueModal || Boolean(launchingChat)}
+              onClick={() =>
+                continueModal &&
+                void continueWebsitePentest(
+                  continueModal.website,
+                  continueModal.items,
+                  continueExtraPrompt,
+                  continueModal.taskId,
+                )
+              }
+            >
+              {launchingChat ? <Spinner data-icon="inline-start" /> : <PlayIcon data-icon="inline-start" />}
+              {continueModal?.taskId ? `Resume Task #${continueModal.taskId}` : "Launch Multi-Agent Task"}
             </Button>
           </DialogFooter>
         </DialogContent>

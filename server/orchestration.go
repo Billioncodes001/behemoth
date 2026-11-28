@@ -363,34 +363,55 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			if strings.TrimSpace(a.Goal) == "" {
 				return actool.Errorf("goal is required"), nil
 			}
-			// Prevent duplicate top-level tasks for the same target domain/host when an
-			// active (non-terminal) task already exists for that target.
+			// Prevent duplicate top-level tasks for the same target domain/host:
+			// prefer an active/paused task first, otherwise reuse and revive the most
+			// recent completed/timed-out task for that domain so all findings, assets,
+			// and parallel workers stay cleanly organized inside ONE unified task.
 			if strings.TrimSpace(a.ParentRef) == "" && !a.ForceNew && s.m != nil {
 				if targetDom := extractPrimaryTargetDomain(a.Description + " " + a.Goal); targetDom != "" {
+					var bestActive, bestTerminal *Task
 					for _, existing := range s.m.List() {
-						st := existing.lifecycleSnapshot()
-						if isTerminalStatus(st.Status) {
+						hay := strings.ToLower(existing.Name + " " + existing.Description + " " + existing.Goal)
+						if !strings.Contains(hay, targetDom) {
 							continue
 						}
-						hay := strings.ToLower(existing.Name + " " + existing.Description + " " + existing.Goal)
-						if strings.Contains(hay, targetDom) {
-							convID := s.linkTaskToConversationFromCtx(ctx, existing.ID, true)
-							hintJSON, _ := json.Marshal(map[string]any{
-								"task_id": existing.ID,
-								"text":    "Additional objective from Chat: " + strings.TrimSpace(a.Goal),
-							})
-							_, _ = s.delegateToTask(ctx, hintJSON, (*agent.ToolSet).AddHintTool)
-							if open, oerr := existing.Store.HasOpenGoal(); oerr == nil && !open {
-								s.ensureOpenGoalAndReviveTask(existing, strings.TrimSpace(a.Goal))
-							} else if existing.Paused {
-								_, _ = s.admitPausedTask(existing)
+						st := existing.lifecycleSnapshot()
+						if !isTerminalStatus(st.Status) {
+							if bestActive == nil || existing.CreatedAt > bestActive.CreatedAt {
+								bestActive = existing
 							}
-							extra := ""
-							if convID > 0 {
-								extra = fmt.Sprintf("\ntask_url: /function/tasks/detail?id=%s\nlive_chat_updates: linked to Conversation #%d (do NOT scan solo in Chat; reply to the user with [Task #%s](/function/tasks/detail?id=%s) and let them know live updates will post back here automatically)", existing.ID, convID, existing.ID, existing.ID)
+						} else {
+							if bestTerminal == nil || existing.CreatedAt > bestTerminal.CreatedAt {
+								bestTerminal = existing
 							}
-							return actool.Text(fmt.Sprintf("reused existing active task: %s (target %s already has an active task; objective appended as hint instead of creating a duplicate task)%s", existing.ID, targetDom, extra)), nil
 						}
+					}
+					existing := bestActive
+					reusedState := "active"
+					if existing == nil {
+						existing = bestTerminal
+						reusedState = "completed (revived to running)"
+					}
+					if existing != nil {
+						convID := s.linkTaskToConversationFromCtx(ctx, existing.ID, true)
+						hintJSON, _ := json.Marshal(map[string]any{
+							"task_id": existing.ID,
+							"text":    "Additional objective from Chat: " + strings.TrimSpace(a.Goal),
+						})
+						_, _ = s.delegateToTask(ctx, hintJSON, (*agent.ToolSet).AddHintTool)
+						st := existing.lifecycleSnapshot()
+						if isTerminalStatus(st.Status) {
+							s.ensureOpenGoalAndReviveTask(existing, strings.TrimSpace(a.Goal))
+						} else if open, oerr := existing.Store.HasOpenGoal(); oerr == nil && !open {
+							s.ensureOpenGoalAndReviveTask(existing, strings.TrimSpace(a.Goal))
+						} else if existing.Paused {
+							_, _ = s.admitPausedTask(existing)
+						}
+						extra := ""
+						if convID > 0 {
+							extra = fmt.Sprintf("\ntask_url: /function/tasks/detail?id=%s\nlive_chat_updates: linked to Conversation #%d (do NOT scan solo in Chat; reply to the user with [Task #%s](/function/tasks/detail?id=%s) and let them know live updates will post back here automatically)", existing.ID, convID, existing.ID, existing.ID)
+						}
+						return actool.Text(fmt.Sprintf("reused existing %s task: %s (target %s already has Task #%s; objective appended and parallel workers resumed instead of creating a duplicate task)%s", reusedState, existing.ID, targetDom, existing.ID, extra)), nil
 					}
 				}
 			}
@@ -1783,7 +1804,7 @@ func (s *Server) syncDiscoveredSkillsVisibility() {
 // follow-up exploitation prompts in Task Main Agent dispatch Planner & Parallel
 // Workers instead of grinding solo in Bash.
 func (s *Server) seedAutoTaskDelegationV2() {
-	const flag = "auto_and_mainagent_orchestration_v5"
+	const flag = "auto_and_mainagent_orchestration_v6"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

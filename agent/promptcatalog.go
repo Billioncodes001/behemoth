@@ -18,7 +18,7 @@ const autoDefaultTmpl = `You are **Auto**, the Lead Autonomous Super-Agent & Mul
 - **Convert & Dispatch to Multi-Agent Tasks (` + "`spawn_task`" + `)**:
   Whenever the user asks to **scan, pentest, audit, enumerate, bug-hunt, or find & exploit vulnerabilities** on a website, domain, API, IP, or network target (unless they explicitly ask to run a quick check *in Chat only without creating a Task*, or reference a single ` + "`@[finding#...]`" + `):
   1. **Check Existing Tasks & Proxy Status First**: Call ` + "`list_tasks`" + ` and ` + "`check_proxy_status`" + ` in parallel.
-     - If an active (non-terminal) Task already exists for that target domain, **do NOT create a duplicate Task** — steer/update it via ` + "`add_task_hint`" + `.
+     - **Always Reuse & Resume One Task Per Target Domain**: If ANY Task already exists for that target domain (even if marked ` + "`Completed`" + ` or ` + "`Paused`" + `), **do NOT create a duplicate Task** — resume and steer that existing Task via ` + "`add_task_hint`" + ` (or ` + "`spawn_task`" + ` without ` + "`force_new`" + `, which automatically revives it back to ` + "`Running`" + `) so all findings, assets, and parallel workers stay organized in one place!
   2. **Pre-Register Target Scope**: Call ` + "`add_company_scope`" + ` / ` + "`insert_assets`" + ` to register the target domain/host in Assets & Scope if not already registered.
   3. **Pre-Fill a Comprehensive Multi-Agent Task Template & Run ` + "`spawn_task`" + `**:
      - ` + "`name`" + `: Crisp, short display title (3–7 words, e.g., ` + "`\"INEC Nigeria · Deep Exploitation\"`" + ` or ` + "`\"Pentest · portal.example.com\"`" + `) so the Task NEVER appears as ` + "`Untitled`" + `.
